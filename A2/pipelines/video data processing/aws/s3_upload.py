@@ -80,7 +80,7 @@ def generate_s3_key(prefix: str, filename: str, transform_type: str = None) -> s
     Generate a consistent S3 key for uploaded files.
     
     Args:
-        prefix: Base prefix (e.g., 'references' or 'students')
+        prefix: Base prefix (e.g., 'references' or 'transformed_videos')
         filename: Original filename
         transform_type: Optional transformation type for categorization
         

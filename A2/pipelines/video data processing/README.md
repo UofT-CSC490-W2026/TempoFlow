@@ -66,16 +66,31 @@ Prompts for AWS credentials, then streams video pairs and runs the scoring model
 
 **Body Boundary Protection:** Rotation and translation are automatically clamped using MediaPipe pose detection to ensure the dancer remains fully visible in frame.
 
+## Video ID Scheme
+
+Each reference video is assigned a sequential ID (`R001`, `R002`, …). Transformed videos inherit their parent reference ID and append a transform index (`R001_T001`, `R001_T002`, …).
+
+| Video | Example Filename |
+|-------|------------------|
+| Reference #1 | `R001_dance_reference.mp4` |
+| Scale 0.8× of Ref #1 | `R001_T001_dance_spatial_scale_0.8.mp4` |
+| Rotation 10° of Ref #1 | `R001_T002_dance_spatial_rotation_10.mp4` |
+| Combined of Ref #1 | `R001_T011_dance_combined.mp4` |
+| Reference #2 | `R002_hiphop_reference.mp4` |
+| Scale 0.8× of Ref #2 | `R002_T001_hiphop_spatial_scale_0.8.mp4` |
+
+This makes it easy to determine which transformed video corresponds to which reference at a glance.
+
 ## Output Structure
 
 ```
 output/
 ├── references/
-│   └── video_reference.mp4
-├── students/
-│   ├── video_spatial_scale_0.8.mp4
-│   ├── video_spatial_rotation_10.mp4
-│   ├── video_combined.mp4
+│   └── R001_video_reference.mp4
+├── transformed_videos/
+│   ├── R001_T001_video_spatial_scale_0.8.mp4
+│   ├── R001_T002_video_spatial_rotation_10.mp4
+│   ├── R001_T011_video_combined.mp4
 │   └── ...
 └── test_cases.json
 ```
@@ -86,9 +101,9 @@ output/
 {
   "test_cases": [
     {
-      "test_id": "dance_spatial_scale_0.8",
-      "ref_s3_key": "references/dance_reference.mp4",
-      "student_s3_key": "students/dance_spatial_scale_0.8.mp4",
+      "test_id": "R001_T001_dance_spatial_scale_0.8",
+      "ref_s3_key": "references/R001_dance_reference.mp4",
+      "transformed_video_s3_key": "transformed_videos/R001_T001_dance_spatial_scale_0.8.mp4",
       "transformation_type": "spatial_scale",
       "param_value": 0.8,
       "expected_score_min": 0.90,

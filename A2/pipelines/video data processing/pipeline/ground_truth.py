@@ -11,7 +11,7 @@ from datetime import datetime
 
 def create_test_case(test_id: str,
                      ref_key: str,
-                     student_key: str,
+                     transformed_video_key: str,
                      transformation_type: str,
                      param_value: float,
                      expected_score_range: Tuple[float, float],
@@ -22,7 +22,7 @@ def create_test_case(test_id: str,
     Args:
         test_id: Unique identifier for this test case
         ref_key: S3 key or path for reference video
-        student_key: S3 key or path for student video
+        transformed_video_key: S3 key or path for transformed video
         transformation_type: Type of transformation applied
         param_value: Value of the transformation parameter
         expected_score_range: (min, max) expected score
@@ -34,7 +34,7 @@ def create_test_case(test_id: str,
     test_case = {
         "test_id": test_id,
         "ref_s3_key": ref_key,
-        "student_s3_key": student_key,
+        "transformed_video_s3_key": transformed_video_key,
         "transformation_type": transformation_type,
         "param_value": param_value,
         "expected_score_min": expected_score_range[0],
