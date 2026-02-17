@@ -1,2 +1,8 @@
 venv/*
 venv
+dataset/*
+data/*
+dataset
+data
+archive.zip
+archive(1).zip
