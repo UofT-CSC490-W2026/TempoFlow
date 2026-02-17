@@ -13,7 +13,7 @@ def apply_temporal_offset(frames: List[np.ndarray],
     """
     Apply temporal offset by trimming the start of the video.
     
-    This simulates synchronization drift between reference and student videos.
+    This simulates synchronization drift between reference and transformed videos.
     
     Args:
         frames: List of video frames

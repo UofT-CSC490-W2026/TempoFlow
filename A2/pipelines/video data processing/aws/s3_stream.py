@@ -111,28 +111,28 @@ def list_videos_in_bucket(s3_client, bucket: str, prefix: str = "",
 
 def get_video_pairs_for_validation(s3_client, bucket: str,
                                    ref_prefix: str = "references",
-                                   student_prefix: str = "students") -> List[Tuple[str, str]]:
+                                   transformed_video_prefix: str = "transformed_videos") -> List[Tuple[str, str]]:
     """
-    Get pairs of reference and student videos for validation.
+    Get pairs of reference and transformed videos for validation.
     
     Args:
         s3_client: boto3 S3 client
         bucket: S3 bucket name
         ref_prefix: Prefix for reference videos
-        student_prefix: Prefix for student videos
+        transformed_video_prefix: Prefix for transformed videos
         
     Returns:
-        List of (ref_key, student_key) tuples
+        List of (ref_key, transformed_video_key) tuples
     """
     ref_videos = list_videos_in_bucket(s3_client, bucket, ref_prefix)
-    student_videos = list_videos_in_bucket(s3_client, bucket, student_prefix)
+    transformed_videos = list_videos_in_bucket(s3_client, bucket, transformed_video_prefix)
     
     # Match by base filename (without transform suffix)
     pairs = []
     for ref_key in ref_videos:
         ref_name = os.path.splitext(os.path.basename(ref_key))[0]
-        for student_key in student_videos:
-            if ref_name in student_key:
-                pairs.append((ref_key, student_key))
+        for transformed_video_key in transformed_videos:
+            if ref_name in transformed_video_key:
+                pairs.append((ref_key, transformed_video_key))
     
     return pairs

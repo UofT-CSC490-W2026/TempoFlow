@@ -99,16 +99,20 @@ def generate(input_dir: str, output_dir: str, to_s3: bool):
         output_path = Path(output_dir)
         output_path.mkdir(parents=True, exist_ok=True)
         (output_path / 'references').mkdir(exist_ok=True)
-        (output_path / 'students').mkdir(exist_ok=True)
+        (output_path / 'transformed_videos').mkdir(exist_ok=True)
         click.echo(f"Output directory: {output_dir}")
     
     test_cases = []
+    ref_counter = 0
     
     # Process each video
     for video_path in tqdm(video_files, desc="Processing videos"):
         video_name = Path(video_path).stem
+        ref_counter += 1
+        ref_id = f"R{ref_counter:03d}"
+        transform_counter = 0
         
-        click.echo(f"\n--- Processing: {video_name} ---")
+        click.echo(f"\n--- Processing: {video_name} (ID: {ref_id}) ---")
         
         try:
             # Find a high-motion clip (3-5 seconds)
@@ -121,7 +125,7 @@ def generate(input_dir: str, output_dir: str, to_s3: bool):
             click.echo(f"  Extracted {len(ref_frames)} frames at {fps:.1f} fps")
             
             # Save/upload reference
-            ref_filename = f"{video_name}_reference.mp4"
+            ref_filename = f"{ref_id}_{video_name}_reference.mp4"
             if to_s3:
                 ref_bytes = encode_video_to_bytes(ref_frames, fps)
                 ref_key = generate_s3_key("references", ref_filename)
@@ -155,40 +159,42 @@ def generate(input_dir: str, output_dir: str, to_s3: bool):
             ]
             
             for transform_type, param_value in transformations:
-                student_filename = f"{video_name}_{transform_type}_{param_value}.mp4"
+                transform_counter += 1
+                transform_id = f"{ref_id}_T{transform_counter:03d}"
+                transformed_video_filename = f"{transform_id}_{video_name}_{transform_type}_{param_value}.mp4"
                 
                 # Apply transformation
                 if transform_type == "spatial_scale":
-                    student_frames = apply_scale(ref_frames, param_value)
+                    transformed_video_frames = apply_scale(ref_frames, param_value)
                 elif transform_type == "spatial_rotation":
-                    student_frames, _ = apply_rotation(ref_frames, param_value)
+                    transformed_video_frames, _ = apply_rotation(ref_frames, param_value)
                 elif transform_type == "spatial_translation_x":
-                    student_frames, _ = apply_translation(ref_frames, param_value, 0)
+                    transformed_video_frames, _ = apply_translation(ref_frames, param_value, 0)
                 elif transform_type == "spatial_translation_y":
-                    student_frames, _ = apply_translation(ref_frames, 0, param_value)
+                    transformed_video_frames, _ = apply_translation(ref_frames, 0, param_value)
                 elif transform_type == "morphological_aspect":
-                    student_frames = apply_aspect_ratio(ref_frames, param_value)
+                    transformed_video_frames = apply_aspect_ratio(ref_frames, param_value)
                 elif transform_type == "temporal_offset":
-                    student_frames, _ = apply_temporal_offset(ref_frames, param_value, fps)
+                    transformed_video_frames, _ = apply_temporal_offset(ref_frames, param_value, fps)
                 else:
                     continue
                 
-                # Save/upload student video
+                # Save/upload transformed video
                 if to_s3:
-                    student_bytes = encode_video_to_bytes(student_frames, fps)
-                    student_key = generate_s3_key("students", student_filename, transform_type)
-                    upload_video_bytes(s3_client, student_bytes, bucket_name, student_key)
+                    transformed_video_bytes = encode_video_to_bytes(transformed_video_frames, fps)
+                    transformed_video_key = generate_s3_key("transformed_videos", transformed_video_filename, transform_type)
+                    upload_video_bytes(s3_client, transformed_video_bytes, bucket_name, transformed_video_key)
                 else:
-                    student_path = output_path / 'students' / student_filename
-                    write_video_frames(student_frames, str(student_path), fps)
-                    student_key = f"students/{student_filename}"
+                    transformed_video_path = output_path / 'transformed_videos' / transformed_video_filename
+                    write_video_frames(transformed_video_frames, str(transformed_video_path), fps)
+                    transformed_video_key = f"transformed_videos/{transformed_video_filename}"
                 
                 # Create test case
                 expected_range = get_expected_score_range(transform_type, param_value)
                 test_case = create_test_case(
-                    test_id=f"{video_name}_{transform_type}_{param_value}",
+                    test_id=f"{transform_id}_{video_name}_{transform_type}_{param_value}",
                     ref_key=ref_key,
-                    student_key=student_key,
+                    transformed_video_key=transformed_video_key,
                     transformation_type=transform_type,
                     param_value=param_value,
                     expected_score_range=expected_range
@@ -203,7 +209,7 @@ def generate(input_dir: str, output_dir: str, to_s3: bool):
                 "aspect_ratio": random.uniform(0.95, 1.05)
             }
             
-            student_frames, actual_params = apply_combined(
+            transformed_video_frames, actual_params = apply_combined(
                 ref_frames,
                 scale=combined_params["scale"],
                 rotation=combined_params["rotation"],
@@ -211,20 +217,22 @@ def generate(input_dir: str, output_dir: str, to_s3: bool):
                 aspect_ratio=combined_params["aspect_ratio"]
             )
             
-            combined_filename = f"{video_name}_combined.mp4"
+            transform_counter += 1
+            transform_id = f"{ref_id}_T{transform_counter:03d}"
+            combined_filename = f"{transform_id}_{video_name}_combined.mp4"
             if to_s3:
-                student_bytes = encode_video_to_bytes(student_frames, fps)
-                student_key = generate_s3_key("students", combined_filename, "combined")
-                upload_video_bytes(s3_client, student_bytes, bucket_name, student_key)
+                transformed_video_bytes = encode_video_to_bytes(transformed_video_frames, fps)
+                transformed_video_key = generate_s3_key("transformed_videos", combined_filename, "combined")
+                upload_video_bytes(s3_client, transformed_video_bytes, bucket_name, transformed_video_key)
             else:
-                student_path = output_path / 'students' / combined_filename
-                write_video_frames(student_frames, str(student_path), fps)
-                student_key = f"students/{combined_filename}"
+                transformed_video_path = output_path / 'transformed_videos' / combined_filename
+                write_video_frames(transformed_video_frames, str(transformed_video_path), fps)
+                transformed_video_key = f"transformed_videos/{combined_filename}"
             
             test_case = create_test_case(
-                test_id=f"{video_name}_combined",
+                test_id=f"{transform_id}_{video_name}_combined",
                 ref_key=ref_key,
-                student_key=student_key,
+                transformed_video_key=transformed_video_key,
                 transformation_type="combined",
                 param_value=0,
                 expected_score_range=get_expected_score_range("combined"),
@@ -238,20 +246,22 @@ def generate(input_dir: str, output_dir: str, to_s3: bool):
                 if negative_result:
                     neg_frames, neg_source, neg_fps = negative_result
                     
-                    neg_filename = f"{video_name}_negative.mp4"
+                    transform_counter += 1
+                    transform_id = f"{ref_id}_T{transform_counter:03d}"
+                    neg_filename = f"{transform_id}_{video_name}_negative.mp4"
                     if to_s3:
                         neg_bytes = encode_video_to_bytes(neg_frames, neg_fps)
-                        neg_key = generate_s3_key("students", neg_filename, "negative")
+                        neg_key = generate_s3_key("transformed_videos", neg_filename, "negative")
                         upload_video_bytes(s3_client, neg_bytes, bucket_name, neg_key)
                     else:
-                        neg_path = output_path / 'students' / neg_filename
+                        neg_path = output_path / 'transformed_videos' / neg_filename
                         write_video_frames(neg_frames, str(neg_path), neg_fps)
-                        neg_key = f"students/{neg_filename}"
+                        neg_key = f"transformed_videos/{neg_filename}"
                     
                     test_case = create_test_case(
-                        test_id=f"{video_name}_negative",
+                        test_id=f"{transform_id}_{video_name}_negative",
                         ref_key=ref_key,
-                        student_key=neg_key,
+                        transformed_video_key=neg_key,
                         transformation_type="negative",
                         param_value=0,
                         expected_score_range=get_expected_score_for_negative(),
@@ -327,19 +337,19 @@ def stream():
     click.echo(f"Found {len(pairs)} video pair(s)")
     
     # Process each pair
-    for ref_key, student_key in tqdm(pairs, desc="Processing pairs"):
+    for ref_key, transformed_video_key in tqdm(pairs, desc="Processing pairs"):
         click.echo(f"\nReference: {ref_key}")
-        click.echo(f"Student: {student_key}")
+        click.echo(f"Transformed video: {transformed_video_key}")
         
         try:
             # Generate presigned URLs
             ref_url = generate_presigned_url(s3_client, bucket_name, ref_key)
-            student_url = generate_presigned_url(s3_client, bucket_name, student_key)
+            transformed_video_url = generate_presigned_url(s3_client, bucket_name, transformed_video_key)
             
             # TODO: Run the model when implemented
             click.echo("  Running model...")
             try:
-                score = run_model(ref_url, student_url)
+                score = run_model(ref_url, transformed_video_url)
                 click.echo(f"  Score: {score:.2%}")
             except NotImplementedError:
                 click.echo("  [Model not yet implemented - skipping scoring]")
