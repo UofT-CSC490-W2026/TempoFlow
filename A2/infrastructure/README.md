@@ -159,7 +159,16 @@ What it does:
 
 ### 6) Diff / tests / synth (safe checks)
 
-Run anytime before deploy.
+Run before deploy (recommended), especially for PR/demo/final submission.
+
+Recommended order:
+
+1. `npm run test`
+2. `STAGE=<env> npx cdk diff`
+3. `STAGE=<env> npx cdk synth`
+4. `STAGE=<env> npx cdk deploy`
+
+Use `<env>` as `dev` or `prod`.
 
 ```bash
 cd /Users/yehyunlee/Documents/Repositories/TempoFlow/A2/infrastructure
@@ -178,6 +187,59 @@ What each does:
 ## Part 3 integration commands (copy-paste)
 
 First set bucket variables from CloudFormation outputs.
+
+### Quick copy-paste (end-to-end)
+
+Use this when you want minimal typing. It resolves bucket names automatically.
+
+```bash
+# 0) Ensure AWS auth comes from profile (avoids stale key env vars)
+export AWS_PROFILE=tempo-sandbox
+export AWS_DEFAULT_REGION=us-east-1
+unset AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY AWS_SESSION_TOKEN
+aws sts get-caller-identity --profile "$AWS_PROFILE"
+
+# 1) Choose environment
+STACK=TempoFlow-Infra-dev
+# STACK=TempoFlow-Infra-prod
+
+# 2) Resolve bucket names from CloudFormation outputs
+VIDEO_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='ValidationVideoBucketName'].OutputValue" --output text)
+AUDIO_BUCKET=$(aws cloudformation describe-stacks --stack-name "$STACK" --query "Stacks[0].Outputs[?OutputKey=='AudioValidationBucketName'].OutputValue" --output text)
+echo "Using VIDEO_BUCKET=$VIDEO_BUCKET"
+echo "Using AUDIO_BUCKET=$AUDIO_BUCKET"
+
+# 3) Video pipeline (S3 upload mode)
+cd "/Users/yehyunlee/Documents/Repositories/TempoFlow/A2/pipelines/video data processing"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python main.py generate --input ./input --to-s3
+
+# NOTE: when prompted in the video script, paste VIDEO_BUCKET value shown above
+
+# 4) Audio pipeline (verify datasets on S3)
+cd "/Users/yehyunlee/Documents/Repositories/TempoFlow/A2/pipelines/Audio data processing"
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+python get_audio_files.py --mode aws --s3-bucket "$AUDIO_BUCKET" --aws-region "$AWS_DEFAULT_REGION"
+
+# 5) Audio pipeline (generate validation outputs in S3)
+python generate_validation_data.py --mode aws --num-pairs 100 --s3-bucket "$AUDIO_BUCKET" --s3-output-prefix output/run1/ --aws-region "$AWS_DEFAULT_REGION"
+```
+
+When to run this block:
+
+- Reuse as many times as needed when generating new validation data batches.
+- Re-run bucket-resolve lines whenever you switch `dev/prod` or re-create stacks.
+
+What each section does:
+
+- Step 2: maps infra outputs to shell vars so you avoid manual copy mistakes.
+- Step 3: generates and uploads video validation set.
+- Step 4: checks audio datasets are present in S3.
+- Step 5: generates audio validation pairs + manifest in S3.
 
 ### A) Load bucket names into shell variables
 
