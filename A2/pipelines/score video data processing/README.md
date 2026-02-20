@@ -42,7 +42,7 @@ AIST_Dances/
 │   ├── gBR_sBM_c01_d05_mBR0_ch01.mp4
 │   └── ...
 └── test_cases.json
-
+```
 
 ## Project Structure
 
@@ -55,12 +55,7 @@ AIST_Dances/
 │   │                                    1.2k dataset
 │   ├── filtered_comparison_list.csv   # Filtered csv of the 1.2k dataset
 │   └── refined_2M_all_video_url.csv   # Original csv of the AIST dataset
-├── aws/
-│   ├── credentials.py         # AWS validation
-│   ├── s3_upload.py           # S3 uploads
-│   └── s3_stream.py           # Presigned URLs
-└── model/
-    └── scoreModel.py          # Model (TODO)
+
 ```
 
 ## Requirements
