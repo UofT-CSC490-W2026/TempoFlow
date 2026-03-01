@@ -113,6 +113,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Download FineWeb-Edu 100BT dataset shards")
     parser.add_argument("-n", "--num-files", type=int, default=-1, help="Number of shards to download (default: -1), -1 = disable")
     parser.add_argument("-w", "--num-workers", type=int, default=4, help="Number of parallel download workers (default: 4)")
+    parser.add_argument("--modal", action="store_true", help="enable Modal-specific path configuration")
     args = parser.parse_args()
 
     num = MAX_SHARD + 1 if args.num_files == -1 else min(args.num_files, MAX_SHARD + 1)

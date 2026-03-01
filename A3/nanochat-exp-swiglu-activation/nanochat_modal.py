@@ -142,14 +142,13 @@ image = (
         uv_project_dir="./nanochat", 
         extra_options="--extra gpu"
     )
-    .run_commands(
-        "bash -c 'source .venv/bin/activate'"
-    )
+    # .run_commands(
+    #     "bash -c 'source .venv/bin/activate'"
+    # )
     # Environment variables
     .env({
         "OMP_NUM_THREADS": "1",
-        "NANOCHAT_BASE_DIR": "/data/.cache/nanochat",
-        "HF_HOME": "/data/.cache/huggingface",
+        "NANOCHAT_MODAL": "1",
     })
 )
 
@@ -160,6 +159,9 @@ image = (
 def _python(module: str, args: list | None = None, *, cwd: str = "/root/nanochat") -> None:
     """Run `python -m {module} [args]` -- for non-distributed scripts."""
     args = args or []
+    # Always add --modal to ensure persistent paths are used on Modal
+    if "--modal" not in args:
+        args.append("--modal")
     cmd = f"cd {cwd} && python -m {module} {' '.join(args)}"
     _run(cmd)
 
@@ -177,6 +179,9 @@ def _torchrun(module: str, args: list | None = None, *, nproc: int) -> None:
     The -- separates torchrun's own flags from the script's argument parser.
     """
     args = args or []
+    # Always add --modal to ensure persistent paths are used on Modal
+    if "--modal" not in args:
+        args.append("--modal")
     args_str = (" -- " + " ".join(args)) if args else ""
     cmd = (
         f"cd /root/nanochat && "
@@ -323,6 +328,7 @@ def stage_pretrain(
     depth: int = DEPTH,
     device_batch_size: int = DEVICE_BATCH_SIZE,
     wandb_run: str = WANDB_RUN,
+    extra: str = "",
 ) -> None:
     """
     Pretrain the base GPT model on FineWeb-EDU from random initialization.
@@ -363,14 +369,18 @@ def stage_pretrain(
 
     # speedrun.sh: torchrun --standalone --nproc_per_node=$NPROC_PER_NODE
     #              -m scripts.base_train -- --depth=24 --device-batch-size=16 --run=...
+    train_args = [
+        f"--depth={depth}",
+        f"--device-batch-size={device_batch_size}",
+        f"--run={wandb_run}",
+        "--save-every=1000",    # checkpoint every 1k steps for resilience
+    ]
+    if extra:
+        train_args.extend(extra.split())
+
     _torchrun(
         "scripts.base_train",
-        [
-            f"--depth={depth}",
-            f"--device-batch-size={device_batch_size}",
-            f"--run={wandb_run}",
-            "--save-every=1000",    # checkpoint every 1k steps for resilience
-        ],
+        train_args,
         nproc=_N_PRETRAIN_GPUS,
     )
 

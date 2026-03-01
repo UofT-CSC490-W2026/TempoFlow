@@ -49,12 +49,24 @@ logger = logging.getLogger(__name__)
 
 def get_base_dir():
     # co-locate nanochat intermediates with other cached data in ~/.cache (by default)
+    # 1. Manual override via environment variable
     if os.environ.get("NANOCHAT_BASE_DIR"):
-        nanochat_dir = os.environ.get("NANOCHAT_BASE_DIR")
+        return os.environ.get("NANOCHAT_BASE_DIR")
+    
+    # 2. Check for Modal environment via flag or environment variable
+    is_modal = os.environ.get("NANOCHAT_MODAL") == "1"
+    if not is_modal:
+        import sys
+        is_modal = "--modal" in sys.argv
+
+    if is_modal:
+        nanochat_dir = "/vol/nanochat_cache"
     else:
+        # 3. Default to home directory cache
         home_dir = os.path.expanduser("~")
         cache_dir = os.path.join(home_dir, ".cache")
         nanochat_dir = os.path.join(cache_dir, "nanochat")
+        
     os.makedirs(nanochat_dir, exist_ok=True)
     return nanochat_dir
 

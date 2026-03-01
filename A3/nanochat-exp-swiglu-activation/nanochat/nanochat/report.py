@@ -411,6 +411,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Generate or reset nanochat training reports.")
     parser.add_argument("command", nargs="?", default="generate", choices=["generate", "reset"], help="Operation to perform (default: generate)")
+    parser.add_argument('--modal', action='store_true', help='enable Modal-specific path configuration')
     args = parser.parse_args()
     if args.command == "generate":
         get_report().generate()
