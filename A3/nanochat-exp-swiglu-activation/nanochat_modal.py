@@ -304,12 +304,12 @@ def stage_tokenizer() -> None:
     else:
         print("Training tokenizer on 2B characters...")
         # speedrun.sh: python -m scripts.tok_train --max-chars=2000000000
-        _python("scripts.tok_train", ["--max-chars=2000000000"])
+        _python.remote("scripts.tok_train", "--max-chars=2000000000")
         volume.commit()
 
     # speedrun.sh: python -m scripts.tok_eval
     print("Evaluating tokenizer compression ratio...")
-    _python("scripts.tok_eval")
+    _python.remote("scripts.tok_eval")
     print("Tokenizer ready.")
 
 
@@ -359,7 +359,7 @@ def stage_pretrain(
     # speedrun.sh: python -m nanochat.report reset
     # Resets the markdown report file and writes system info + run timestamp.
     print("Resetting training report...")
-    _python("nanochat.report", ["reset"])
+    _python.remote("nanochat.report", "reset")
 
     print(
         f"Starting pretraining: depth={depth}, "
@@ -378,9 +378,9 @@ def stage_pretrain(
     if extra:
         train_args.extend(extra.split())
 
-    _torchrun(
+    _torchrun.remote(
         "scripts.base_train",
-        train_args,
+        " ".join(train_args),
         nproc=_N_PRETRAIN_GPUS,
     )
 
@@ -432,13 +432,13 @@ def stage_post_pretrain_eval() -> None:
         _run(f"unzip -q {zip_path} -d {NANOCHAT_CACHE} && rm {zip_path}")
         volume.commit()
 
-    # speedrun.sh: torchrun ... -m scripts.base_loss
+    # scripts.base_loss is integrated into scripts.base_eval
     print("Computing bits-per-byte on train/val data...")
-    _torchrun("scripts.base_loss", nproc=_N_PRETRAIN_GPUS)
+    _torchrun.remote("scripts.base_eval", "--eval bpb", nproc=_N_PRETRAIN_GPUS)
 
-    # speedrun.sh: torchrun ... -m scripts.base_eval
+    # scripts.base_eval CORE metric
     print("Running CORE evaluation (22 benchmarks, ~20-40 min)...")
-    _torchrun("scripts.base_eval", nproc=_N_PRETRAIN_GPUS)
+    _torchrun.remote("scripts.base_eval", "--eval core", nproc=_N_PRETRAIN_GPUS)
 
     volume.commit()
     print("Post-pretrain eval complete.")
@@ -495,16 +495,16 @@ def stage_sft(wandb_run: str = WANDB_RUN) -> None:
 
     # speedrun.sh: torchrun ... -m scripts.chat_sft -- --run=$WANDB_RUN
     print("Running SFT...")
-    _torchrun(
+    _torchrun.remote(
         "scripts.chat_sft",
-        [f"--run={wandb_run}"],
+        f"--run={wandb_run}",
         nproc=_N_FINETUNE_GPUS,
     )
 
     # speedrun.sh: torchrun ... -m scripts.chat_eval -- -i sft
     # -i sft tells chat_eval to load the SFT checkpoint (not base or rl)
     print("Evaluating SFT checkpoint on task benchmarks...")
-    _torchrun("scripts.chat_eval", ["-i", "sft"], nproc=_N_FINETUNE_GPUS)
+    _torchrun.remote("scripts.chat_eval", "--i sft", nproc=_N_FINETUNE_GPUS)
 
     volume.commit()
     print("SFT complete.")
@@ -569,7 +569,7 @@ def main(picochat: bool = False) -> None:
     # Stage 0: Data
     # speedrun.sh: python -m nanochat.dataset -n 240
     print("[0/5] Downloading FineWeb-EDU shards...")
-    stage_data.remote(num_shards=num_shards)
+    _python.remote("nanochat.dataset", f"-n {num_shards}")
 
     # Stage 1: Tokenizer
     # speedrun.sh: python -m scripts.tok_train && python -m scripts.tok_eval
@@ -633,26 +633,19 @@ def quick_test() -> None:
 
     # 1. Download a handful of shards to get data on the volume
     print("Downloading 8 shards for quick test...")
-    _python("nanochat.dataset", ["-n 8"])
+    _python.remote("nanochat.dataset", "-n 8")
     volume.commit()
 
     # 2. Train tokenizer on 500M chars instead of 2B (much faster)
     print("Training tokenizer (500M chars)...")
-    _python("scripts.tok_train", ["--max-chars=500000000"])
-    _python("scripts.tok_eval")
+    _python.remote("scripts.tok_train", "--max-chars=500000000")
+    _python.remote("scripts.tok_eval")
 
     # 3. Quick pretrain: d12, skip CORE metric (slow), skip intermediate saves
     print("Pretraining d12 (no CORE metric, no intermediate saves)...")
-    _torchrun(
+    _torchrun.remote(
         "scripts.base_train",
-        [
-            "--depth=12",
-            "--device-batch-size=32",
-            "--run=dummy",
-            "--core-metric-every=999999",   # skip CORE during training (it's slow)
-            "--sample-every=-1",            # skip intermediate samples
-            "--save-every=-1",              # skip intermediate checkpoints
-        ],
+        "--depth=12 --device-batch-size=32 --run=dummy --core-metric-every=999999 --sample-every=-1 --save-every=-1",
         nproc=nproc,
     )
 
@@ -660,9 +653,14 @@ def quick_test() -> None:
     print("Quick SFT...")
     identity_dest = os.path.join(NANOCHAT_CACHE, "identity_conversations.jsonl")
     _curl(IDENTITY_JSONL_URL, identity_dest)
-    _torchrun("scripts.chat_sft", ["--run=dummy"], nproc=nproc)
+    _torchrun.remote("scripts.chat_sft", "--run=dummy", nproc=nproc)
 
     # 5. Chat sample to confirm inference works
+    print("Chat sample...")
+    _python.remote("scripts.chat_cli", '-p "Hello, who are you?" --i sft')
+
+    volume.commit()
+    print("\nQuick test passed! Ready for the full speedrun.")
     print("Chat sample...")
     _python("scripts.chat_cli", ['-p "Hello, who are you?"', "-i sft"])
 
