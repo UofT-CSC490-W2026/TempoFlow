@@ -509,9 +509,26 @@ def stage_sft(wandb_run: str = WANDB_RUN) -> None:
     volume.commit()
     print("SFT complete.")
 
+
 # =============================================================================
 # FULL SPEEDRUN PIPELINE (main entrypoint)
 # =============================================================================
+
+@app.function(
+    image=image,
+    secrets=[secret],
+    volumes={VOLUME_MOUNT: volume},
+    timeout=600,
+)
+def stage_part3_eval(
+    model_tag: str = "pico-part3",
+    step1: int = 1000,
+    step2: int = 2000,
+):
+    """Run the custom Part 3 evaluation on Modal."""
+    _setup_cache()
+    args = [f"--model-tag={model_tag}", f"--step1={step1}", f"--step2={step2}"]
+    _python("scripts.part3_eval", args)
 
 @app.local_entrypoint()
 def main(picochat: bool = False) -> None:
