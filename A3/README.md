@@ -1,11 +1,11 @@
 # CSC490 Assignment A3: Nanochat Pre-training Instructions
 
-This guide provides commands for running the Part 3 Context Extension experiments either locally (on a Mac with MPS) or on Modal (GPU/H100).
+This guide provides commands for running the Part 3 Context Extension experiments either locally (on a Mac with MPS) or on Modal (GPU/H100). These instructions apply to **both** experimental branches: `nanochat-exp-alibi-attention` and `nanochat-exp-swiglu-activation`.
 
 ---
 
 ## 1. Local Execution (Mac/CPU/MPS)
-Use these commands if you are running on your own machine. All commands should be run from the `nanochat` directory within the experimental branch folder (e.g., `nanochat-exp-alibi-attention/nanochat`).
+Use these commands if you are running on your own machine. All commands should be run from the `nanochat` directory within your chosen experimental branch folder.
 
 ### Setup
 ```bash
@@ -14,6 +14,7 @@ pip install rustbpe datasets fastapi psutil python-dotenv regex scipy tabulate t
 
 ### Training
 **Phase 1: Short Context (512 tokens)**
+*Note: Use a unique `--model-tag` for each branch (e.g., `pico-alibi` or `pico-swiglu`).*
 ```bash
 python -m scripts.base_train \
     --depth=12 \
@@ -43,7 +44,7 @@ python -m scripts.part3_eval --model-tag=pico-part3 --step1=1000 --step2=2000
 ---
 
 ## 2. Modal Execution (Remote GPU)
-Use these commands if you want to use Modal credits. All commands should be run from the experimental branch root (e.g., `nanochat-exp-alibi-attention/`).
+Use these commands if you want to use Modal credits. All commands should be run from the experimental branch root (e.g., `nanochat-exp-alibi-attention/` or `nanochat-exp-swiglu-activation/`).
 
 ### Setup
 ```bash
@@ -57,7 +58,7 @@ modal secret create nanochat-secrets \
     HF_TOKEN="your_hf_token"
 ```
 
-### Data & Tokenizer (Run once)
+### Data & Tokenizer (Run once per branch)
 ```bash
 # Download 40 shards (~10GB)
 modal run nanochat_modal.py::stage_data --num-shards=40
@@ -68,6 +69,7 @@ modal run nanochat_modal.py::stage_tokenizer
 
 ### Training
 **Phase 1: Short Context (512 tokens)**
+*Note: If running both branches, change `--model-tag` in the `--extra` string to avoid overwriting files on the persistent volume.*
 ```bash
 modal run nanochat_modal.py::stage_pretrain \
     --depth=12 \
@@ -85,9 +87,38 @@ modal run nanochat_modal.py::stage_pretrain \
     --extra="--max-seq-len=2048 --resume-from-step=1000 --num-iterations=2000 --model-tag=pico-part3"
 ```
 
+### Inference & Custom Commands
+You can run any script in the repo on Modal using the exposed `_python` helper. 
+
+**Note for Base Models:** Since these models are pretrained but not yet instruction-tuned (SFT), you must use the `-i base` flag and should expect "text completion" behavior rather than a chat-like response.
+
+#### 1. Single Prompt (Fast)
+```bash
+modal run nanochat_modal.py::_python \
+    --module scripts.chat_cli \
+    --args "-i base -p \"The capital of France is\" --model-tag pico-part3 --step 1000"
+```
+
+#### 2. Interactive Mode
+This allows you to type multiple prompts in a row.
+```bash
+modal run nanochat_modal.py::_python \
+    --module scripts.chat_cli \
+    --args "-i base --model-tag pico-part3 --step 1000"
+```
+
+#### 3. Run Part 3 Evaluation
+Compare the context handling of two different checkpoints:
+```bash
+modal run nanochat_modal.py::_python \
+    --module scripts.part3_eval \
+    --args "--model-tag pico-part3 --step1 1000 --step2 2000"
+```
+
 ---
 
 ## Important Notes
-- **Persistence:** On Modal, all data (shards, tokenizer, checkpoints) is saved to the `/vol` persistent volume.
+- **Branch Specificity:** You must run these commands from the specific branch directory you want to test.
+- **Persistence:** On Modal, all data (shards, tokenizer, checkpoints) is saved to the `/vol` persistent volume. **If you use the same `--model-tag` across different branches, they will overwrite each other.**
 - **`--modal` flag:** The scripts automatically detect if they are running on Modal and adjust their paths accordingly. You do not need to manually change paths in the code.
 - **WandB:** If you don't want to use Weights & Biases, set `--run=dummy` (Local) or `--wandb-run=dummy` (Modal).
