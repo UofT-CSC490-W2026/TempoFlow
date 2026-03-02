@@ -42,19 +42,19 @@ from modal import App, Image as ModalImage, Volume, Secret
 #   d24  ~768M params   3 hr on 8xH100     
 #   d26  ~1B params     6 hr on 8xH100 
 #   d32  ~1.9B params   41 hr on 8xH100
-DEPTH = 24
+DEPTH = 12
 
 # ── Data shards ───────────────────────────────────────────────────────────────
 # FineWeb-EDU is split into 1822 parquet shards, each ~250M chars / ~100MB.
 # 240 shards is enough for d24. Use 450 for d26 and 800 for d32.
-NUM_SHARDS = 240
+NUM_SHARDS = 40
 
 # ── GPU configuration ─────────────────────────────────────────────────────────
 # "H100:8" = 8 H100s, the reference configuration for the speedrun leaderboard.
 # "H100:4" = 4 H100s, half the speed, same cost per GPU-hour.
 # "A100:8" = 8 A100 80GBs, ~10-20% slower than H100s but sometimes cheaper.
 # Single GPU works too — code auto-compensates with gradient accumulation.
-GPU_PRETRAIN = "H100:8"
+GPU_PRETRAIN = "H100:4"
 GPU_FINETUNE = "H100:4"   # SFT and RL don't need all 8 GPUs
 
 # ── Device batch size ─────────────────────────────────────────────────────────
@@ -65,11 +65,11 @@ GPU_FINETUNE = "H100:4"   # SFT and RL don't need all 8 GPUs
 #   H100 80GB: 32 fits for d24, 16 for d26, 8 for d32
 #   A100 80GB: same as H100
 #   A100 40GB: use 16 for d24
-DEVICE_BATCH_SIZE = 16    # d24 at 16 is safe; 32 may OOM on some H100 configs
+DEVICE_BATCH_SIZE = 32    # d24 at 16 is safe; 32 may OOM on some H100 configs
 
 # ── WandB ─────────────────────────────────────────────────────────────────────
 # Set to "dummy" to disable WandB logging
-WANDB_RUN = "dummy"
+WANDB_RUN = "picochat-alibi-attention"
 
 # ── Volume mount path ──────────────────────────────────────────────────────────
 # All cached data (shards, tokenizer, checkpoints, eval bundle) lives here
