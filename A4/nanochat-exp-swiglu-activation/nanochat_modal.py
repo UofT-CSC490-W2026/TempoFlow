@@ -56,7 +56,7 @@ NUM_SHARDS = 240
 # "A100:8" = 8 A100 80GBs, ~10-20% slower than H100s but sometimes cheaper.
 # Single GPU works too — code auto-compensates with gradient accumulation.
 GPU_PRETRAIN = "H100:8"
-GPU_FINETUNE = "H100:4"   # SFT and RL don't need all 8 GPUs
+GPU_FINETUNE = "H100:8"   # SFT and RL don't need all 8 GPUs
 
 # ── Device batch size ─────────────────────────────────────────────────────────
 # Sequences per GPU per forward pass. Reduce if you hit OOM.
@@ -609,6 +609,113 @@ def stage_chat_sample(identity: str = "base", prompt: str | None = None, model_t
         args.extend(["-s", str(step)])
     print(f"Starting chat_cli with identity={identity} ...")
     _python("scripts.chat_cli", args)
+
+
+@app.function(
+    image=image,
+    secrets=[secret],
+    volumes={VOLUME_MOUNT: volume},
+    gpu="H100:1",
+    timeout=60 * 60,
+)
+def stage_eval(
+    identity: str = "sft",
+    task_name: str = "GSM8K",
+    model_tag: str | None = None,
+    step: int | None = None,
+    batch_size: int = 4,
+    num_samples: int = 8,
+    max_problems: int | None = None,
+) -> None:
+    """Run scripts.chat_eval against a checkpoint on the Modal volume."""
+    _setup_cache()
+    args = ["-i", identity, "-a", task_name, "-b", str(batch_size), "-n", str(num_samples)]
+    if model_tag:
+        args.extend(["-g", model_tag])
+    if step is not None:
+        args.extend(["-s", str(step)])
+    if max_problems is not None:
+        args.extend(["-x", str(max_problems)])
+    print(f"Starting chat_eval with identity={identity}, task={task_name} ...")
+    _torchrun("scripts.chat_eval", args, nproc=1)
+
+
+# =============================================================================
+# STAGE 7: REINFORCEMENT LEARNING (RL)
+# =============================================================================
+
+@app.function(
+    image=image,
+    secrets=[secret],
+    volumes={VOLUME_MOUNT: volume},
+    gpu=GPU_FINETUNE,
+    timeout=60 * 60 * 3,
+)
+def stage_rl(
+    run: str = "rl-default",
+    model_tag: str | None = None,
+    save_tag: str | None = None,
+    model_step: int | None = None,
+    resume: bool = False,
+    resume_step: int | None = None,
+    wandb_run_id: str | None = None,
+    wandb_resume: str | None = None,
+    reward_environment: str = "baseline",
+    reward_answer_format: bool = False,
+    reward_depth_alignment: bool = False,
+    answer_format_bonus: float = 0.2,
+    answer_format_penalty: float = -0.2,
+    answer_format_length_penalty: float = -0.05,
+    answer_format_unresolved_penalty: float = -0.1,
+    answer_format_max_length: int = 220,
+    depth_bonus: float = 0.2,
+    depth_mild_bonus: float = 0.1,
+    depth_penalty: float = -0.15,
+) -> None:
+    """Run scripts.chat_rl with optional reward shaping flags."""
+    _setup_cache()
+
+    if wandb_run_id:
+        os.environ["WANDB_RUN_ID"] = wandb_run_id
+    if wandb_resume:
+        os.environ["WANDB_RESUME"] = wandb_resume
+
+    args: list[str] = [f"--run={run}", f"--reward-environment={reward_environment}"]
+    if model_tag:
+        args.extend(["--model-tag", model_tag])
+    if save_tag:
+        args.extend(["--save-tag", save_tag])
+    if model_step is not None:
+        args.extend(["--model-step", str(model_step)])
+    if resume:
+        args.append("--resume")
+        if resume_step is not None:
+            args.extend(["--resume-step", str(resume_step)])
+
+    # Reward toggles
+    if reward_answer_format:
+        args.append("--reward-answer-format")
+    if reward_depth_alignment:
+        args.append("--reward-depth-alignment")
+
+    # Reward coefficients (always pass so CLI stays in sync)
+    args.extend(
+        [
+            f"--answer-format-bonus={answer_format_bonus}",
+            f"--answer-format-penalty={answer_format_penalty}",
+            f"--answer-format-length-penalty={answer_format_length_penalty}",
+            f"--answer-format-unresolved-penalty={answer_format_unresolved_penalty}",
+            f"--answer-format-max-length={answer_format_max_length}",
+            f"--depth-bonus={depth_bonus}",
+            f"--depth-mild-bonus={depth_mild_bonus}",
+            f"--depth-penalty={depth_penalty}",
+        ]
+    )
+
+    print("Starting chat_rl ...")
+    _torchrun("scripts.chat_rl", args, nproc=_N_FINETUNE_GPUS)
+    volume.commit()
+    print("RL run complete.")
 
 
 # =============================================================================

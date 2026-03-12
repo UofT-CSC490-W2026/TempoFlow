@@ -25,9 +25,9 @@ import torch.distributed as dist
 from contextlib import nullcontext
 
 from nanochat.common import compute_init, compute_cleanup, print0, get_base_dir, DummyWandb, autodetect_device_type
-from nanochat.checkpoint_manager import save_checkpoint, load_model
+from nanochat.checkpoint_manager import save_checkpoint, load_model, find_last_step
 from nanochat.engine import Engine
-from tasks.gsm8k import GSM8K
+from tasks.gsm8k import GSM8K, RewardConfig
 
 # -----------------------------------------------------------------------------
 # CLI arguments
@@ -39,7 +39,10 @@ parser.add_argument("--device-type", type=str, default="", help="cuda|cpu|mps (e
 parser.add_argument("--dtype", type=str, default="bfloat16", help="float32|bfloat16")
 # Model loading
 parser.add_argument("--model-tag", type=str, default=None, help="model tag to load from")
+parser.add_argument("--save-tag", type=str, default=None, help="RL checkpoint tag to save to (defaults to --model-tag)")
 parser.add_argument("--model-step", type=int, default=None, help="model step to load from")
+parser.add_argument("--resume", action="store_true", help="Resume RL training from chatrl checkpoints for the provided --model-tag")
+parser.add_argument("--resume-step", type=int, default=None, help="Specific RL checkpoint step to resume from (default: latest available)")
 # Training horizon
 parser.add_argument("--num-epochs", type=int, default=1, help="number of epochs over GSM8K")
 # Batch sizes / sampling
@@ -61,9 +64,35 @@ parser.add_argument("--eval-every", type=int, default=60, help="evaluate pass@k 
 parser.add_argument("--eval-examples", type=int, default=400, help="number of examples for pass@k evaluation")
 parser.add_argument("--save-every", type=int, default=60, help="save checkpoint every N steps")
 parser.add_argument("--modal", action="store_true", help="enable Modal-specific path configuration")
+# Reward shaping / environments
+parser.add_argument("--reward-answer-format", action="store_true", help="Enable formatting reward shaping (bonus for #### answer, penalties for rambles)")
+parser.add_argument("--reward-depth-alignment", action="store_true", help="Enable step-depth reward shaping (bonus when reasoning depth matches question complexity)")
+parser.add_argument("--answer-format-bonus", type=float, default=0.2, help="Bonus applied when final answer formatting is correct")
+parser.add_argument("--answer-format-penalty", type=float, default=-0.2, help="Penalty applied when answer formatting is wrong and base reward is zero")
+parser.add_argument("--answer-format-length-penalty", type=float, default=-0.05, help="Penalty applied to overlong completions when incorrect")
+parser.add_argument("--answer-format-unresolved-penalty", type=float, default=-0.1, help="Penalty applied when unresolved calculator calls remain")
+parser.add_argument("--answer-format-max-length", type=int, default=220, help="Maximum characters before length penalty triggers")
+parser.add_argument("--depth-bonus", type=float, default=0.2, help="Bonus when reasoning depth matches question complexity")
+parser.add_argument("--depth-mild-bonus", type=float, default=0.1, help="Smaller bonus when slightly off but still correct")
+parser.add_argument("--depth-penalty", type=float, default=-0.15, help="Penalty for large depth mismatch when answer is wrong")
+parser.add_argument("--reward-environment", type=str, default="baseline", help="Label for this reward setup (logged via wandb config)")
 args = parser.parse_args()
 user_config = vars(args).copy()
 # -----------------------------------------------------------------------------
+
+if args.resume and not args.model_tag:
+    parser.error("--resume requires --model-tag so the RL checkpoint directory can be located")
+
+save_tag = args.save_tag or args.model_tag
+
+resume_step = None
+if args.resume:
+    base_dir = get_base_dir()
+    checkpoint_dir = os.path.join(base_dir, "chatrl_checkpoints", save_tag)
+    resume_step = args.resume_step
+    if resume_step is None:
+        resume_step = find_last_step(checkpoint_dir)
+    print0(f"Resuming RL from checkpoint step {resume_step} (tag={save_tag})")
 
 # Init compute/precision
 device_type = autodetect_device_type() if args.device_type == "" else args.device_type
@@ -77,16 +106,35 @@ use_dummy_wandb = args.run == "dummy" or not master_process
 wandb_run = DummyWandb() if use_dummy_wandb else wandb.init(project="nanochat-rl", name=args.run, config=user_config)
 
 # Init model and tokenizer
-model, tokenizer, meta = load_model("sft", device, phase="eval", model_tag=args.model_tag, step=args.model_step)
+model_source = "rl" if args.resume else "sft"
+model_step = resume_step if args.resume else args.model_step
+model, tokenizer, meta = load_model(model_source, device, phase="eval", model_tag=args.model_tag, step=model_step)
 engine = Engine(model, tokenizer) # for sampling rollouts
 
 # -----------------------------------------------------------------------------
 # Rollout / sampling generator loop that yields batches of examples for training
 
-train_task = GSM8K(subset="main", split="train")
+reward_cfg = RewardConfig()
+if args.reward_answer_format:
+    reward_cfg.answer_format = {
+        "bonus": args.answer_format_bonus,
+        "penalty": args.answer_format_penalty,
+        "length_penalty": args.answer_format_length_penalty,
+        "unresolved_penalty": args.answer_format_unresolved_penalty,
+        "max_tokens": args.answer_format_max_length,
+    }
+if args.reward_depth_alignment:
+    reward_cfg.depth_alignment = {
+        "bonus": args.depth_bonus,
+        "mild_bonus": args.depth_mild_bonus,
+        "penalty": args.depth_penalty,
+    }
+
+train_task = GSM8K(subset="main", split="train", reward_config=reward_cfg)
 val_task = GSM8K(subset="main", split="test")
 num_steps = (len(train_task) // args.examples_per_step) * args.num_epochs
 print0(f"Calculated number of steps: {num_steps}")
+start_step = resume_step if (args.resume and resume_step is not None) else 0
 
 @torch.no_grad()
 def get_batch():
@@ -226,7 +274,7 @@ print0(f"Calculated examples per rank: {examples_per_rank}")
 
 # Kick off the training loop
 batch_iterator = get_batch()
-for step in range(num_steps):
+for step in range(start_step, num_steps):
 
     # Evaluate the model once in a while and log to wandb
     if step % args.eval_every == 0:
@@ -317,7 +365,7 @@ for step in range(num_steps):
     if master_process and ((step > 0 and step % args.save_every == 0) or step == num_steps - 1):
         base_dir = get_base_dir()
         depth = model.config.n_layer
-        output_dirname = args.model_tag if args.model_tag else f"d{depth}" # base the model tag on the depth of the base model
+        output_dirname = save_tag if save_tag else f"d{depth}" # base the model tag on the depth of the base model
         checkpoint_dir = os.path.join(base_dir, "chatrl_checkpoints", output_dirname)
         model_config_kwargs = model.config.__dict__ # slightly naughty, abusing the simplicity of GPTConfig, TODO nicer
         save_checkpoint(
