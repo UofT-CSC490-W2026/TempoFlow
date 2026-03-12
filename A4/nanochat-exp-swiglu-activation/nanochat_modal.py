@@ -56,7 +56,7 @@ NUM_SHARDS = 240
 # "A100:8" = 8 A100 80GBs, ~10-20% slower than H100s but sometimes cheaper.
 # Single GPU works too — code auto-compensates with gradient accumulation.
 GPU_PRETRAIN = "H100:8"
-GPU_FINETUNE = "H100:8"   # SFT and RL don't need all 8 GPUs
+GPU_FINETUNE = "H100:4"   # SFT and RL don't need all 8 GPUs
 
 # ── Device batch size ─────────────────────────────────────────────────────────
 # Sequences per GPU per forward pass. Reduce if you hit OOM.
