@@ -15,6 +15,8 @@ Notice that GSM8K uses tool calls inside << >> tags.
 """
 
 import re
+from dataclasses import dataclass
+from typing import Any, Dict
 from datasets import load_dataset
 from tasks.common import Task
 
@@ -34,13 +36,20 @@ def extract_answer(completion):
     return None
 
 
+@dataclass
+class RewardConfig:
+    answer_format: Dict[str, float] | None = None
+    depth_alignment: Dict[str, float] | None = None
+
+
 class GSM8K(Task):
 
-    def __init__(self, subset, split, **kwargs):
+    def __init__(self, subset, split, reward_config: RewardConfig | None = None, **kwargs):
         super().__init__(**kwargs)
         assert subset in ["main", "socratic"], "GSM8K subset must be main|socratic"
         assert split in ["train", "test"], "GSM8K split must be train|test"
         self.ds = load_dataset("openai/gsm8k", subset, split=split).shuffle(seed=42)
+        self.reward_config = reward_config or RewardConfig()
 
     @property
     def eval_type(self):
@@ -108,10 +117,79 @@ class GSM8K(Task):
         return is_correct
 
     def reward(self, conversation, assistant_response):
-        """
-        Used during RL. To keep things simple, just re-use the evaluation above.
-        Later this could be made more complex (e.g. format matching etc.)
-        """
-        is_correct = self.evaluate(conversation, assistant_response)
-        is_correct_float = float(is_correct)
-        return is_correct_float
+        """Return base correctness reward with optional shaping components."""
+        base_reward = float(self.evaluate(conversation, assistant_response))
+        shaped = 0.0
+
+        if self.reward_config.answer_format:
+            shaped += self._format_reward_bonus(assistant_response, base_reward)
+        if self.reward_config.depth_alignment:
+            shaped += self._depth_alignment_bonus(conversation, assistant_response, base_reward)
+
+        return base_reward + shaped
+
+    # ------------------------------------------------------------------
+    # Reward helpers
+
+    def _format_reward_bonus(self, completion: str, base_reward: float) -> float:
+        cfg = self.reward_config.answer_format or {}
+        bonus = cfg.get("bonus", 0.2)
+        penalty = cfg.get("penalty", -0.2)
+        length_pen = cfg.get("length_penalty", -0.05)
+        unresolved_pen = cfg.get("unresolved_penalty", -0.1)
+        max_length = int(cfg.get("max_tokens", 220))
+
+        completion = completion.strip()
+        answer = extract_answer(completion)
+        ends_with_marker = False
+        if answer is not None:
+            ends_with_marker = completion.rstrip().endswith(f"#### {answer}")
+        unresolved_calc = "[CALC" in completion or "<<" in completion
+
+        reward_delta = 0.0
+        if ends_with_marker and not unresolved_calc:
+            reward_delta += bonus
+        elif base_reward == 0.0:
+            reward_delta += penalty
+
+        if unresolved_calc and base_reward == 0.0:
+            reward_delta += unresolved_pen
+
+        if len(completion) > max_length and base_reward == 0.0:
+            reward_delta += length_pen
+
+        return reward_delta
+
+    def _depth_alignment_bonus(self, conversation: Dict[str, Any], completion: str, base_reward: float) -> float:
+        cfg = self.reward_config.depth_alignment or {}
+        bonus = cfg.get("bonus", 0.2)
+        mild_bonus = cfg.get("mild_bonus", 0.1)
+        penalty = cfg.get("penalty", -0.15)
+
+        question = conversation["messages"][0]["content"]
+        target_steps = self._estimate_question_steps(question)
+        completion_steps = self._estimate_completion_steps(completion)
+        diff = abs(completion_steps - target_steps)
+
+        if diff <= 1:
+            return bonus
+        if diff == 2 and base_reward == 1.0:
+            return mild_bonus
+        if diff >= 3 and base_reward == 0.0:
+            return penalty
+        return 0.0
+
+    @staticmethod
+    def _estimate_question_steps(question: str) -> int:
+        numbers = len(re.findall(r"\d+", question))
+        math_keywords = len(re.findall(r"(total|each|per|difference|product|sum|twice|triple)", question.lower()))
+        estimate = max(1, min(6, (numbers // 2) + (math_keywords // 2) + 1))
+        return estimate
+
+    @staticmethod
+    def _estimate_completion_steps(completion: str) -> int:
+        calc_calls = completion.count("[CALC") + completion.count("<<")
+        equations = len(re.findall(r"=", completion))
+        line_blocks = len([line for line in completion.splitlines() if line.strip()])
+        estimate = max(calc_calls, equations, line_blocks // 2)
+        return max(1, min(8, estimate))
