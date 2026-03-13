@@ -1,13 +1,8 @@
 import json
-import pandas as pd
-import matplotlib.pyplot as plt
 import re
-import numpy as np
-from collections import Counter
 
-# 1. Load Data
-with open('gsm8k_results.json', 'r') as f:
-    data = json.load(f)
+import matplotlib.pyplot as plt
+import pandas as pd
 
 FINAL_ANSWER_RE = re.compile(r"####\s*(-?\d[\d,]*(?:\.\d+)?)")
 CALC_CALL_RE = re.compile(r"\[CALC\]", re.IGNORECASE)
@@ -15,11 +10,27 @@ ARITH_EXPR_RE = re.compile(r"^[\d\.\+\-\*\/\(\)\s,]+$")
 TRAILING_OP_RE = re.compile(r"[\+\-\*\/=]$")
 ARROW_LINE_RE = re.compile(r"\[CALC\]\s*([^\n\r]*?)\s*->\s*([^\n\r]+)", re.IGNORECASE)
 
+RUN_INPUTS = [
+    ("baseline.json", "baseline_rl"),
+    ("reward_a (1).json", "baseline_plus_reward_a"),
+    ("reward_b (1).json", "baseline_plus_reward_b"),
+]
+
+CATEGORY_ORDER = [
+    "Correct",
+    "Formatting failure",
+    "Incomplete / unresolved calc",
+    "Shallow reasoning",
+    "Overlong / padded reasoning",
+    "Arithmetic-consistency anomaly",
+    "Wrong answer other",
+]
+
 
 def count_equation_signals(text):
     """Proxy for reasoning depth in reference question."""
-    explicit_equations = len(re.findall(r'\d+\s*[\+\-\*/]\s*\d+\s*=', text))
-    fallback_equals = text.count('=')
+    explicit_equations = len(re.findall(r"\d+\s*[\+\-\*/]\s*\d+\s*=", text))
+    fallback_equals = text.count("=")
     return max(explicit_equations, fallback_equals)
 
 
@@ -36,7 +47,6 @@ def has_formatting_failure(completion):
 def has_incomplete_calc(completion):
     calc_calls = len(CALC_CALL_RE.findall(completion))
     arrow_count = completion.count("->")
-
     if calc_calls > arrow_count:
         return True
     if completion.count("[") != completion.count("]"):
@@ -49,7 +59,6 @@ def has_incomplete_calc(completion):
     # A [CALC] marker appears but no arrow before line break/end.
     if re.search(r"\[CALC\](?![^\n\r]{0,120}->)", completion, flags=re.IGNORECASE):
         return True
-
     return False
 
 
@@ -105,146 +114,112 @@ def categorize_error(is_correct, completion, ref_depth, pred_calc_calls, pred_st
     return "Wrong answer other"
 
 
-results = []
-for item in data:
-    idx = item.get('index')
-    q = str(item.get('question', ''))
-    a = str(item.get('completion', ''))
-    corr = bool(item.get('is_correct', False))
+def build_rows(raw_data, run_name):
+    rows = []
+    for item in raw_data:
+        idx = item.get("index")
+        q = str(item.get("question", ""))
+        a = str(item.get("completion", ""))
+        corr = bool(item.get("is_correct", False))
 
-    q_eq_count = count_equation_signals(q)
-    a_steps = len(CALC_CALL_RE.findall(a))
-    pred_step_count = count_steps(a)
-    error_category = categorize_error(
-        corr,
-        a,
-        ref_depth=q_eq_count,
-        pred_calc_calls=a_steps,
-        pred_step_count=pred_step_count,
-    )
+        q_eq_count = count_equation_signals(q)
+        a_steps = len(CALC_CALL_RE.findall(a))
+        pred_step_count = count_steps(a)
+        error_category = categorize_error(
+            corr,
+            a,
+            ref_depth=q_eq_count,
+            pred_calc_calls=a_steps,
+            pred_step_count=pred_step_count,
+        )
 
-    results.append({
-        'index': idx,
-        'question': q,
-        'completion': a,
-        'q_equations': q_eq_count,
-        'a_steps': a_steps,
-        'pred_step_count': pred_step_count,
-        'is_correct': corr,
-        'error_category': error_category,
-    })
+        rows.append(
+            {
+                "run": run_name,
+                "index": idx,
+                "question": q,
+                "completion": a,
+                "q_equations": q_eq_count,
+                "a_steps": a_steps,
+                "pred_step_count": pred_step_count,
+                "is_correct": corr,
+                "error_category": error_category,
+            }
+        )
+    return rows
 
-df = pd.DataFrame(results)
 
-# 2. Setup Figure (2x2 Grid)
-fig, axes = plt.subplots(2, 2, figsize=(20, 14))
-ax1, ax2, ax3, ax4 = axes.flatten()
+# 1) Load and combine all runs with explicit run labels.
+all_rows = []
+for file_name, run_name in RUN_INPUTS:
+    with open(file_name, "r", encoding="utf-8") as f:
+        raw = json.load(f)
+    all_rows.extend(build_rows(raw, run_name))
 
-def plot_robust_bars(axis, groupby_col, title, xlabel):
-    stats = {}
-    for _, row in df.iterrows():
-        val = row[groupby_col]
-        res = row['is_correct']
-        if val not in stats: stats[val] = {True: 0, False: 0}
-        stats[val][res] += 1
-    
-    sorted_keys = sorted(stats.keys())
-    correct = [stats[k][True] for k in sorted_keys]
-    incorrect = [stats[k][False] for k in sorted_keys]
-    totals = [c + i for c, i in zip(correct, incorrect)]
-    
-    axis.bar(sorted_keys, correct, color='#27ae60', label='Correct', alpha=0.8)
-    axis.bar(sorted_keys, incorrect, bottom=correct, color='#c0392b', label='Incorrect', alpha=0.8)
-    
-    for i, k in enumerate(sorted_keys):
-        acc = (correct[i] / totals[i] * 100) if totals[i] > 0 else 0
-        axis.text(k, totals[i] + 0.5, f"{acc:.1f}%\n(n={totals[i]})", 
-                  ha='center', fontweight='bold', fontsize=9)
-    
-    axis.set_title(title, fontweight='bold', fontsize=13)
-    axis.set_xlabel(xlabel)
-    axis.set_ylabel('Number of Problems')
-    axis.legend()
+df = pd.DataFrame(all_rows)
 
-# --- Plot 1: Model Effort ---
-plot_robust_bars(ax1, 'a_steps', 'Accuracy by Answer Steps', 'Number of [CALC] steps')
-
-# --- Plot 2: Question Complexity ---
-plot_robust_bars(ax2, 'q_equations', 'Accuracy by Question Complexity', 'Number of Equations in Q')
-
-# --- Plot 3: Alignment Scatter ---
-jitter = 0.15
-q_jitter = df['q_equations'] + np.random.uniform(-jitter, jitter, len(df))
-a_jitter = df['a_steps'] + np.random.uniform(-jitter, jitter, len(df))
-
-ax3.scatter(q_jitter[df['is_correct'] == True], a_jitter[df['is_correct'] == True], 
-            color='#27ae60', alpha=0.4, label='Correct', edgecolors='white', linewidth=0.3)
-ax3.scatter(q_jitter[df['is_correct'] == False], a_jitter[df['is_correct'] == False], 
-            color='#c0392b', alpha=0.4, label='Incorrect', edgecolors='white', linewidth=0.3)
-
-coord_stats = df.groupby(['q_equations', 'a_steps'])['is_correct'].agg(['mean']).reset_index()
-for _, row in coord_stats.iterrows():
-    ax3.text(row['q_equations'], row['a_steps'] + 0.2, f"{row['mean']*100:.0f}%", 
-             ha='center', fontsize=8, fontweight='bold', bbox=dict(facecolor='white', alpha=0.7, edgecolor='none'))
-
-max_val = max(df['q_equations'].max(), df['a_steps'].max())
-ax3.plot([0, max_val], [0, max_val], 'k--', alpha=0.3, label='1:1 Alignment')
-ax3.set_title('Complexity vs. Effort Alignment', fontweight='bold', fontsize=13)
-ax3.set_xlabel('Equations in Question')
-ax3.set_ylabel('Steps in Answer')
-ax3.legend()
-
-# --- Plot 4: Error Category Distribution ---
-category_order = [
-    "Correct",
-    "Formatting failure",
-    "Incomplete / unresolved calc",
-    "Shallow reasoning",
-    "Overlong / padded reasoning",
-    "Arithmetic-consistency anomaly",
-    "Wrong answer other",
-]
-counts = Counter(df["error_category"])
-values = [counts.get(cat, 0) for cat in category_order]
-total = sum(values) if values else 1
-colors = ["#27ae60"] + ["#c0392b"] * (len(category_order) - 1)
-
-bars = ax4.bar(range(len(category_order)), values, color=colors, alpha=0.85)
-ax4.set_xticks(range(len(category_order)))
-ax4.set_xticklabels(category_order, rotation=25, ha='right')
-ax4.set_ylabel("Number of Problems")
-ax4.set_title("Error Category Distribution", fontweight='bold', fontsize=13)
-
-for bar, v in zip(bars, values):
-    pct = 100.0 * v / total
-    ax4.text(
-        bar.get_x() + bar.get_width() / 2,
-        bar.get_height() + 0.8,
-        f"{v}\n({pct:.1f}%)",
-        ha="center",
-        va="bottom",
-        fontsize=9,
-        fontweight="bold",
-    )
-
-plt.tight_layout()
-plt.savefig('gsm8k_visualizaion_4plots.png')
-print("Saved to gsm8k_visualizaion_4plots.png")
-
-# 3. Export per-sample audit artifacts
-audit_csv_path = 'gsm8k_results_with_categories.csv'
-audit_json_path = 'gsm8k_results_with_categories.json'
+# 2) Export combined per-sample audit artifacts.
+audit_csv_path = "gsm8k_results_with_categories_by_run.csv"
+audit_json_path = "gsm8k_results_with_categories_by_run.json"
 df.to_csv(audit_csv_path, index=False)
-df.to_json(audit_json_path, orient='records', indent=2)
+df.to_json(audit_json_path, orient="records", indent=2)
 print(f"Saved audit CSV to {audit_csv_path}")
 print(f"Saved audit JSON to {audit_json_path}")
 
-# 4. Print general dataset stats
+# 3) Print general stats (overall + per run).
 total_questions = len(df)
-num_correct = int(df['is_correct'].sum())
+num_correct = int(df["is_correct"].sum())
 num_incorrect = total_questions - num_correct
 accuracy = (num_correct / total_questions * 100.0) if total_questions else 0.0
-print(f"Total questions: {total_questions}")
-print(f"Correct questions: {num_correct}")
-print(f"Incorrect questions: {num_incorrect}")
-print(f"Accuracy: {accuracy:.2f}%")
+print(f"Overall total questions: {total_questions}")
+print(f"Overall correct questions: {num_correct}")
+print(f"Overall incorrect questions: {num_incorrect}")
+print(f"Overall accuracy: {accuracy:.2f}%")
+
+for run_name, run_df in df.groupby("run"):
+    run_total = len(run_df)
+    run_correct = int(run_df["is_correct"].sum())
+    run_incorrect = run_total - run_correct
+    run_acc = (run_correct / run_total * 100.0) if run_total else 0.0
+    print(f"[{run_name}] total={run_total}, correct={run_correct}, incorrect={run_incorrect}, accuracy={run_acc:.2f}%")
+
+# 4) Comparison error distribution chart (counts by run x category).
+pivot_counts = (
+    df.groupby(["error_category", "run"])
+    .size()
+    .unstack(fill_value=0)
+    .reindex(CATEGORY_ORDER)
+)
+
+runs = [run_name for _, run_name in RUN_INPUTS]
+x = list(range(len(CATEGORY_ORDER)))
+width = 0.24
+
+fig, ax = plt.subplots(figsize=(18, 8))
+colors = ["#1f77b4", "#ff7f0e", "#9467bd"]
+
+for i, run_name in enumerate(runs):
+    vals = [int(pivot_counts.loc[cat, run_name]) for cat in CATEGORY_ORDER]
+    x_shifted = [xi + (i - 1) * width for xi in x]
+    bars = ax.bar(x_shifted, vals, width=width, label=run_name, color=colors[i], alpha=0.85)
+    for bar, v in zip(bars, vals):
+        ax.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 3,
+            str(v),
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+
+ax.set_xticks(x)
+ax.set_xticklabels(CATEGORY_ORDER, rotation=25, ha="right")
+ax.set_ylabel("Number of Questions")
+ax.set_title("GSM8K Error Category Distribution Comparison by Run", fontweight="bold", fontsize=14)
+ax.legend(title="Run")
+ax.grid(axis="y", alpha=0.2)
+
+plt.tight_layout()
+comparison_plot_path = "gsm8k_error_distribution_comparison.png"
+plt.savefig(comparison_plot_path)
+print(f"Saved comparison chart to {comparison_plot_path}")
