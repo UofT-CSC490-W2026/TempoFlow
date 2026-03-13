@@ -11,7 +11,7 @@ torchrun --nproc_per_node=8 -m scripts.chat_eval -- -a ARC-Easy
 import argparse
 from functools import partial
 from contextlib import nullcontext
-import json
+
 import torch
 import torch.distributed as dist
 
@@ -34,14 +34,15 @@ def run_generative_eval(task_object, tokenizer, model, engine, num_samples, max_
     device = model.get_device()
 
     num_problems = len(task_object) if max_problems is None else min(len(task_object), max_problems)
-    review_records = []
 
     # Run the evaluation
     num_passed, total = 0, 0
     for i in range(ddp_rank, num_problems, ddp_world_size):
         conversation = task_object[i]
+
+        # Tokenize the prompt
         encoded_prompt = tokenizer.render_for_completion(conversation)
-        
+        # Get the completions
         results, _ = engine.generate_batch(
             encoded_prompt,
             num_samples=num_samples,
@@ -49,67 +50,32 @@ def run_generative_eval(task_object, tokenizer, model, engine, num_samples, max_
             temperature=temperature,
             top_k=top_k,
         )
-        
+        # Decode the completions as text
         prefix_length = len(encoded_prompt)
         completions = [tokenizer.decode(result_tokens[prefix_length:]) for result_tokens in results]
+        # Evaluate success criteria
         outcomes = [task_object.evaluate(conversation, completion) for completion in completions]
         passed = any(outcomes)
-        raw_messages = conversation['messages']
-        # Extract only the text from the user parts
-        question_parts = []
-        for msg in raw_messages:
-            if isinstance(msg['content'], list):
-                for part in msg['content']:
-                    if part.get('type') == 'text':
-                        question_parts.append(part.get('text', ''))
-            else:
-                question_parts.append(msg['content'])
-        #these are used to generate more readable questions and responses
-        question_text = " ".join(question_parts).strip()
-        clean_completion = completions[0].replace('<|python_start|>', '[CALC] ') \
-                                         .replace('<|python_end|>', '') \
-                                         .replace('<|output_start|>', ' -> ') \
-                                         .replace('<|output_end|>', '') \
-                                         .replace('<|assistant_end|>', '')
-        review_records.append({
-            "index": i,
-            "question": question_text,
-            "completion": clean_completion, 
-            "is_correct": outcomes[0]
-        })
 
+        # Keep stats
         total += 1
         num_passed += int(passed)
+
+        # Logging (overwrite the same line in the console)
         print(f"\r\033[KRank {ddp_rank} | {num_passed}/{total} ({100*num_passed/total:.2f}%)", end='', flush=True)
 
+    # Finish the in-place progress line with a newline before final summary
     print()
 
-    # --- NEW: Print a review section for your analysis ---
-    
-    if ddp_rank == 0:
-        output_path = "/vol/nanochat_cache/report/gsm8k_eda_results.json" #or wherever you want to put it on modal
-        
-        # We save the entire list of records
-        with open(output_path, "w") as f:
-            json.dump(review_records, f, indent=4)
-        
-        print(f"\n[FILE SAVED] All results written to {output_path}")
-        print(f"Total problems captured: {len(review_records)}")
-        
-        # Keep a small "Preview" in the console so you know it worked
-        print("\n" + "="*15 + " PREVIEW (First 3) " + "="*15)
-        for rec in review_records[:3]:
-            status = "✅" if rec['is_correct'] else "❌"
-            print(f"{status} Prob {rec['index']}: {rec['question'][:100]}...")
-        # this is for if you wanted to just see a couple
-        # print("\n" + "="*20 + " ERROR REVIEW " + "="*20)
-        # for rec in review_records[:20]: # Pulling from the stored list
-        #     status = "✅ CORRECT" if rec['is_correct'] else "❌ INCORRECT"
-        #     # Use rec[...] to access the specific data for each individual problem
-        #     print(f"\n[{status}] Problem {rec['index']}:")
-        #     print(f"Q: {rec['question']}")
-        #     print(f"A: {rec['completion']}")
-        #     print("-" * 50)
+    # Aggregate results across all ranks
+    if ddp:
+        num_passed_tensor = torch.tensor([num_passed], dtype=torch.long, device=device)
+        total_tensor = torch.tensor([total], dtype=torch.long, device=device)
+        dist.all_reduce(num_passed_tensor, op=dist.ReduceOp.SUM)
+        dist.all_reduce(total_tensor, op=dist.ReduceOp.SUM)
+        num_passed = num_passed_tensor.item()
+        total = total_tensor.item()
+
     print0("=" * 50)
     print0(f"Final: {num_passed}/{total} ({100*num_passed/total:.2f}%)")
 
