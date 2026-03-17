@@ -1,7 +1,12 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  /* config options here */
+  turbopack: {
+    resolveAlias: {
+      // Prevent @mediapipe/pose from being bundled (we use tfjs runtime instead)
+      '@mediapipe/pose': './src/lib/empty.ts',
+    },
+  },
 };
 
 export default nextConfig;

@@ -1,29 +1,31 @@
 "use client";
 
+import { useState } from 'react';
 import Link from 'next/link';
 
+import { deleteSessionMetadata, getSessions, TempoFlowSession } from '../../lib/sessionStorage';
+import { deleteSessionVideos } from '../../lib/videoStorage';
+
 export default function DashboardPage() {
-  // Sample data - in real app this would come from API
-  const sessions = [
-    {
-      id: 1,
-      videoName: "BTS - Butter Practice",
-      uploadDate: "2 hours ago",
-      score: 85,
-      status: "analyzed"
-    },
-    {
-      id: 2,
-      videoName: "BLACKPINK - How You Like That",
-      uploadDate: "1 day ago",
-      score: 92,
-      status: "analyzing"
-    },
-  ];
+  const [sessions, setSessions] = useState<TempoFlowSession[]>(() => getSessions());
+
+  const handleDelete = async (sessionId: string) => {
+    await deleteSessionVideos(sessionId);
+    deleteSessionMetadata(sessionId);
+    setSessions(getSessions());
+  };
+
+  const formatUpdatedAt = (value: string) => {
+    return new Intl.DateTimeFormat(undefined, {
+      month: 'short',
+      day: 'numeric',
+      hour: 'numeric',
+      minute: '2-digit',
+    }).format(new Date(value));
+  };
 
   return (
     <div className="min-h-screen bg-white">
-      {/* Header */}
       <div className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-md border-b border-gray-100 z-10">
         <div className="flex items-center justify-between px-6 py-4">
           <Link href="/" className="text-2xl font-bold text-gray-900">
@@ -38,61 +40,75 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="px-6 py-24 max-w-4xl mx-auto">
-        {/* Page Title */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Your Dances</h1>
-          <p className="text-gray-600">Track your progress and improve</p>
+          <p className="text-gray-600">Track local sessions, revisit analysis, and keep iterating quickly.</p>
         </div>
 
-        {/* Sessions List */}
-        <div className="space-y-4">
-          {sessions.map((session) => (
-            <div
-              key={session.id}
-              className="bg-gray-50 rounded-3xl p-6 hover:bg-gray-100 transition-all cursor-pointer active:scale-[0.98]"
-            >
-              <div className="flex items-center justify-between gap-4">
-                {/* Video Icon & Info */}
-                <div className="flex items-center gap-4 flex-1 min-w-0">
-                  <div className="w-12 h-12 bg-gradient-to-br from-purple-500 to-pink-500 rounded-2xl flex items-center justify-center flex-shrink-0">
-                    <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                  </div>
-                  
-                  <div className="flex-1 min-w-0">
-                    <h3 className="font-semibold text-gray-900 truncate">{session.videoName}</h3>
-                    <p className="text-sm text-gray-500">{session.uploadDate}</p>
-                  </div>
-                </div>
+        {sessions.length > 0 ? (
+          <div className="space-y-4">
+            {sessions.map((session) => (
+              <div
+                key={session.id}
+                className="rounded-3xl border border-gray-200 bg-gray-50 p-6 transition-all hover:border-gray-300 hover:bg-white"
+              >
+                <div className="flex flex-col gap-5 md:flex-row md:items-center md:justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="flex h-12 w-12 flex-shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-purple-500 to-pink-500">
+                      <svg className="w-6 h-6 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                    </div>
 
-                {/* Score/Status */}
-                <div className="flex items-center gap-3">
-                  {session.status === "analyzed" ? (
-                    <div className="text-right">
-                      <div className="text-2xl font-bold text-gray-900">{session.score}</div>
-                      <div className="text-xs text-gray-500">Score</div>
+                    <div className="min-w-0">
+                      <h3 className="truncate font-semibold text-gray-900">
+                        {session.practiceName}
+                      </h3>
+                      <p className="text-sm text-gray-500">
+                        Ref: {session.referenceName}
+                      </p>
+                      <p className="mt-1 text-xs text-gray-500">
+                        Updated {formatUpdatedAt(session.updatedAt)} · Storage {session.storageMode} · Analysis {session.analysisMode}
+                      </p>
                     </div>
-                  ) : (
-                    <div className="px-3 py-1 bg-yellow-100 text-yellow-700 rounded-full text-xs font-medium">
-                      Analyzing...
-                    </div>
-                  )}
-                  
-                  <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                  </svg>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-3">
+                    {session.status === 'analyzed' && session.analysis ? (
+                      <div className="rounded-2xl bg-white px-4 py-3 text-right shadow-sm">
+                        <div className="text-2xl font-bold text-gray-900">{session.analysis.scores.overall}</div>
+                        <div className="text-xs text-gray-500">Overall score</div>
+                      </div>
+                    ) : session.status === 'error' ? (
+                      <div className="rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700">
+                        Needs retry
+                      </div>
+                    ) : (
+                      <div className="rounded-full bg-yellow-100 px-3 py-1 text-xs font-medium text-yellow-700">
+                        Analyzing
+                      </div>
+                    )}
+
+                    <Link
+                      href={`/analysis?session=${session.id}`}
+                      className="rounded-full bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-gray-800"
+                    >
+                      Open
+                    </Link>
+                    <button
+                      onClick={() => handleDelete(session.id)}
+                      className="rounded-full bg-gray-100 px-4 py-2 text-sm font-medium text-gray-700 transition-all hover:bg-gray-200"
+                    >
+                      Delete
+                    </button>
+                  </div>
                 </div>
               </div>
-            </div>
-          ))}
-        </div>
-
-        {/* Empty State */}
-        {sessions.length === 0 && (
+            ))}
+          </div>
+        ) : (
           <div className="text-center py-16">
             <div className="w-20 h-20 mx-auto bg-gray-100 rounded-3xl flex items-center justify-center mb-4">
               <svg className="w-10 h-10 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
