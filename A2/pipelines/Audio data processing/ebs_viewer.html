@@ -248,6 +248,88 @@
     cursor: pointer; transition: all 0.15s;
   }
   .dl-btn:hover { background: var(--border); }
+
+  /* ===== Practice Mode ===== */
+  .practice-panel { display: none; margin-bottom: 12px; }
+  .practice-panel.visible { display: block; }
+
+  .practice-header {
+    display: flex; align-items: center; justify-content: space-between;
+    margin-bottom: 10px; flex-wrap: wrap; gap: 8px;
+  }
+  .practice-title { font-size: 15px; font-weight: 700; }
+  .practice-title .pnum { color: var(--accent2); }
+  .speed-badge {
+    display: inline-block; background: var(--accent); color: white;
+    font-size: 10px; font-weight: 700; padding: 2px 8px; border-radius: 4px;
+    margin-left: 6px; vertical-align: middle;
+  }
+  .practice-note {
+    font-size: 11px; color: var(--text2); margin-top: 2px;
+  }
+
+  .move-timeline {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 20px; margin-bottom: 12px;
+  }
+  .move-tl-label {
+    font-size: 11px; font-weight: 600; color: var(--text2); margin-bottom: 8px;
+    text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .move-tl-track {
+    position: relative; height: 56px; background: var(--bg);
+    border-radius: 8px; overflow: hidden; cursor: pointer;
+  }
+  .move-block {
+    position: absolute; top: 2px; bottom: 2px;
+    background: var(--seg-inactive); border-radius: 4px;
+    display: flex; align-items: center; justify-content: center; flex-direction: column;
+    font-size: 11px; font-weight: 600; color: #fff6; overflow: hidden;
+    border: 1px solid transparent; cursor: pointer; transition: background 0.15s;
+  }
+  .move-block:hover { background: #334155; }
+  .move-block.active { background: var(--seg-active); color: #fffc; border-color: var(--accent2); z-index: 2; }
+  .move-block.done { background: #22c55e33; border-color: #22c55e44; color: #22c55ecc; }
+  .move-block.transition-move { border-top: 2px solid var(--orange); }
+  .move-block .mv-n { font-size: 11px; font-weight: 700; }
+  .move-block .mv-s { font-size: 8px; opacity: 0.7; color: var(--orange); }
+  .move-playhead {
+    position: absolute; top: 0; bottom: 0; width: 2px; background: #fff;
+    z-index: 5; pointer-events: none; box-shadow: 0 0 6px #fff8;
+    transition: left 0.05s linear;
+  }
+
+  .move-list {
+    background: var(--surface); border: 1px solid var(--border); border-radius: 12px;
+    padding: 12px; margin-bottom: 12px;
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 6px;
+  }
+  .move-chip {
+    background: var(--surface2); border: 1px solid var(--border); border-radius: 8px;
+    padding: 8px 10px; cursor: pointer; transition: all 0.15s; text-align: center;
+  }
+  .move-chip:hover { background: var(--border); }
+  .move-chip.active { background: var(--accent); border-color: var(--accent); }
+  .move-chip.done { border-color: #22c55e44; }
+  .move-chip.done .mv-cn::after { content: ' \2713'; color: var(--green); font-size: 10px; }
+  .move-chip.transition-move { border-color: var(--orange); }
+  .move-chip .mv-cn { font-size: 12px; font-weight: 700; }
+  .move-chip .mv-ct { font-size: 10px; color: #fff9; margin-top: 2px; font-family: 'SF Mono', monospace; }
+  .move-chip .mv-cl { font-size: 9px; color: var(--orange); margin-top: 1px; }
+
+  .seg-chip { position: relative; }
+  .seg-practice-btn {
+    display: block; margin: 4px auto 0; font-size: 10px; color: var(--accent2);
+    opacity: 0; transition: opacity 0.15s; cursor: pointer; background: none; border: none;
+    padding: 2px 8px; border-radius: 4px; font-family: inherit;
+  }
+  .seg-chip:hover .seg-practice-btn { opacity: 1; }
+  .seg-practice-btn:hover { background: var(--accent); color: white; opacity: 1 !important; }
+
+  #btn-practice {
+    font-size: 11px; font-weight: 600; padding: 0 12px;
+    white-space: nowrap; width: auto;
+  }
 </style>
 </head>
 <body>
@@ -338,12 +420,13 @@
     </div>
   </div>
 
-  <div class="transport">
+  <div class="transport" id="main-transport">
     <div class="transport-row">
       <button class="transport-btn" id="btn-prev" title="Previous segment">&#9664;&#9664;</button>
       <button class="transport-btn play-btn" id="btn-play" title="Play / Pause">&#9654;</button>
       <button class="transport-btn" id="btn-next" title="Next segment">&#9654;&#9654;</button>
       <button class="transport-btn" id="btn-slow" title="Toggle 0.5x speed" style="font-size:11px;font-weight:700">1x</button>
+      <button class="transport-btn" id="btn-practice" title="Practice current segment" style="font-size:11px;font-weight:600;width:auto;padding:0 12px">Practice</button>
       <div class="transport-info">
         <div class="current-segment" id="seg-label">Segment <span>—</span></div>
         <div class="bpm-info" id="bpm-info"></div>
@@ -352,7 +435,7 @@
     </div>
   </div>
 
-  <div class="timeline">
+  <div class="timeline" id="main-timeline">
     <div class="timeline-track" id="timeline-track">
       <div class="timeline-playhead" id="playhead"></div>
     </div>
@@ -360,6 +443,49 @@
   </div>
 
   <div class="segment-list" id="segment-list"></div>
+
+  <!-- ===== PRACTICE MODE PANEL ===== -->
+  <div class="practice-panel" id="practice-panel">
+    <div class="practice-header">
+      <div>
+        <span class="practice-title">
+          Practice: Segment <span class="pnum" id="practice-seg-num">0</span>
+          <span class="speed-badge">0.5x</span>
+        </span>
+        <div class="practice-note">Last move = transition to next segment</div>
+      </div>
+      <div style="display:flex;align-items:center;gap:12px">
+        <div class="pause-mode-toggle">
+          <label for="chk-pause-move">Pause at move end</label>
+          <input type="checkbox" class="toggle-switch" id="chk-pause-move" checked>
+        </div>
+        <button class="back-btn" id="btn-exit-practice">&larr; Back to Overview</button>
+      </div>
+    </div>
+
+    <div class="transport">
+      <div class="transport-row">
+        <button class="transport-btn" id="btn-prev-move" title="Previous move">&#9664;&#9664;</button>
+        <button class="transport-btn play-btn" id="btn-play-practice" title="Play / Pause">&#9654;</button>
+        <button class="transport-btn" id="btn-next-move" title="Next move">&#9654;&#9654;</button>
+        <button class="transport-btn" id="btn-loop-practice" title="Loop segment" style="font-size:11px;font-weight:700;background:var(--accent);border-color:var(--accent)">Loop</button>
+        <div class="transport-info">
+          <div class="current-segment" id="move-label">Move <span>&mdash;</span></div>
+          <div class="bpm-info" id="practice-bpm-info"></div>
+        </div>
+        <div class="time-code" id="practice-time">0:00.0</div>
+      </div>
+    </div>
+
+    <div class="move-timeline">
+      <div class="move-tl-label">Move Breakdown</div>
+      <div class="move-tl-track" id="move-timeline-track">
+        <div class="move-playhead" id="move-playhead"></div>
+      </div>
+    </div>
+
+    <div class="move-list" id="move-list"></div>
+  </div>
 
   <div class="download-row">
     <button class="dl-btn" id="btn-dl-json">Download EBS JSON</button>
@@ -380,7 +506,15 @@ let lastBeatIdx = -1;
 let animId = null;
 let refLoaded = false, userLoaded = false, jsonLoaded = false;
 let refFile = null, userFile = null;
-let pauseAtEnd = true;          // toggle
+let pauseAtEnd = true;
+
+// Practice mode state
+let practiceMode = false;
+let practiceSegIdx = -1;
+let practiceMoves = [];
+let currentMoveIdx = -1;
+let practiceLoop = true;
+let pauseAtMoveEnd = true;
 
 // Elements
 const vidRef  = document.getElementById('vid-ref');
@@ -489,6 +623,7 @@ document.getElementById('btn-launch').addEventListener('click', () => {
 });
 
 document.getElementById('btn-back').addEventListener('click', () => {
+  if (practiceMode) closePracticeMode();
   pausePlayback();
   document.getElementById('viewer').classList.remove('visible');
   document.getElementById('setup-screen').style.display = 'block';
@@ -558,8 +693,12 @@ function buildSegmentList() {
     const chip = document.createElement('div');
     chip.className = 'seg-chip'; chip.dataset.idx = i;
     chip.innerHTML = `<div class="seg-num">Seg ${i}</div>
-      <div class="seg-time">${fmtTime(seg.shared_start_sec)} – ${fmtTime(seg.shared_end_sec)}</div>`;
+      <div class="seg-time">${fmtTime(seg.shared_start_sec)} – ${fmtTime(seg.shared_end_sec)}</div>
+      <button class="seg-practice-btn" data-idx="${i}">&#9654; Practice</button>`;
     chip.addEventListener('click', () => seekToSegment(i));
+    chip.querySelector('.seg-practice-btn').addEventListener('click', (e) => {
+      e.stopPropagation(); openPracticeMode(i);
+    });
     list.appendChild(chip);
   });
 }
@@ -593,12 +732,14 @@ function startPlayback() {
   vidRef.play(); vidUser.play();
   isPlaying = true;
   document.getElementById('btn-play').innerHTML = '&#9646;&#9646;';
+  document.getElementById('btn-play-practice').innerHTML = '&#9646;&#9646;';
   tick();
 }
 function pausePlayback() {
   vidRef.pause(); vidUser.pause();
   isPlaying = false;
   document.getElementById('btn-play').innerHTML = '&#9654;';
+  document.getElementById('btn-play-practice').innerHTML = '&#9654;';
   cancelAnimationFrame(animId);
 }
 
@@ -615,6 +756,8 @@ function getSharedTime() { return vidRef.currentTime - ALIGN.clip_1_start_sec; }
 
 function updateUI() {
   const st = getSharedTime();
+
+  if (practiceMode) { updatePracticeUI(st); return; }
 
   // Playhead
   document.getElementById('playhead').style.left = (st / SHARED_LEN * 100) + '%';
@@ -687,6 +830,8 @@ function markSegDone(idx) {
 function showPauseOverlay(segIdx) {
   document.getElementById('pause-seg-num-ref').textContent  = `Seg ${segIdx}`;
   document.getElementById('pause-seg-num-user').textContent = `Seg ${segIdx}`;
+  document.getElementById('pause-overlay-ref').querySelector('.seg-done-label').textContent = 'Segment complete';
+  document.getElementById('pause-overlay-user').querySelector('.seg-done-label').textContent = 'Segment complete';
   document.getElementById('pause-overlay-ref').classList.add('visible');
   document.getElementById('pause-overlay-user').classList.add('visible');
 }
@@ -731,9 +876,15 @@ document.getElementById('btn-slow').addEventListener('click', () => {
 
 document.addEventListener('keydown', e => {
   if (e.target.tagName === 'INPUT') return;
-  if (e.code === 'Space')      { e.preventDefault(); togglePlay(); }
-  if (e.code === 'ArrowLeft')  { e.preventDefault(); document.getElementById('btn-prev').click(); }
-  if (e.code === 'ArrowRight') { e.preventDefault(); document.getElementById('btn-next').click(); }
+  if (e.code === 'Space') { e.preventDefault(); togglePlay(); }
+  if (e.code === 'Escape' && practiceMode) { e.preventDefault(); closePracticeMode(); return; }
+  if (practiceMode) {
+    if (e.code === 'ArrowLeft')  { e.preventDefault(); seekToPrevMove(); }
+    if (e.code === 'ArrowRight') { e.preventDefault(); seekToNextMove(); }
+  } else {
+    if (e.code === 'ArrowLeft')  { e.preventDefault(); document.getElementById('btn-prev').click(); }
+    if (e.code === 'ArrowRight') { e.preventDefault(); document.getElementById('btn-next').click(); }
+  }
 });
 
 document.getElementById('btn-dl-json').addEventListener('click', () => {
@@ -741,6 +892,264 @@ document.getElementById('btn-dl-json').addEventListener('click', () => {
   const blob = new Blob([JSON.stringify(EBS, null, 2)], { type: 'application/json' });
   const a = document.createElement('a'); a.href = URL.createObjectURL(blob);
   a.download = 'ebs_segments.json'; a.click();
+});
+
+// ========================================================================
+// Practice Mode
+// ========================================================================
+
+function buildMoves(segIdx) {
+  const seg = SEGS[segIdx];
+  if (!seg.beat_idx_range) return [];
+  const [bStart, bEnd] = seg.beat_idx_range;
+  if (bEnd <= bStart) return [];
+  const moves = [];
+  const total = bEnd - bStart;
+  for (let i = bStart; i < bEnd; i++) {
+    if (i + 1 >= BEATS.length) break;
+    const num = i - bStart + 1;
+    moves.push({
+      idx: num - 1,
+      num,
+      startSec: BEATS[i],
+      endSec: BEATS[i + 1],
+      isTransition: num === total,
+    });
+  }
+  return moves;
+}
+
+function openPracticeMode(segIdx) {
+  if (segIdx < 0 || segIdx >= SEGS.length) return;
+  const moves = buildMoves(segIdx);
+  if (moves.length === 0) return;
+
+  pausePlayback();
+  practiceMode = true;
+  practiceSegIdx = segIdx;
+  practiceMoves = moves;
+  currentMoveIdx = -1;
+
+  document.getElementById('main-transport').style.display = 'none';
+  document.getElementById('main-timeline').style.display = 'none';
+  document.getElementById('segment-list').style.display = 'none';
+  document.querySelector('.download-row').style.display = 'none';
+  document.getElementById('practice-panel').classList.add('visible');
+
+  document.getElementById('practice-seg-num').textContent = segIdx;
+
+  vidRef.playbackRate = 0.5;
+  vidUser.playbackRate = 0.5;
+  const slowBtn = document.getElementById('btn-slow');
+  slowBtn.textContent = '0.5x';
+  slowBtn.style.background = 'var(--accent)';
+  slowBtn.style.borderColor = 'var(--accent)';
+
+  buildMoveTimeline();
+  buildMoveList();
+
+  const seg = SEGS[segIdx];
+  const dur = seg.shared_end_sec - seg.shared_start_sec;
+  document.getElementById('practice-bpm-info').textContent =
+    `${moves.length} moves \u00b7 ${dur.toFixed(1)}s segment \u00b7 plays ${(dur / 0.5).toFixed(1)}s at 0.5x`;
+
+  seekToShared(moves[0].startSec);
+  updateMoveHighlights();
+}
+
+function closePracticeMode() {
+  if (!practiceMode) return;
+  pausePlayback();
+  practiceMode = false;
+
+  document.getElementById('practice-panel').classList.remove('visible');
+  document.getElementById('main-transport').style.display = '';
+  document.getElementById('main-timeline').style.display = '';
+  document.getElementById('segment-list').style.display = '';
+  document.querySelector('.download-row').style.display = '';
+
+  clearMoveUI();
+  practiceSegIdx = -1;
+  practiceMoves = [];
+  currentMoveIdx = -1;
+}
+
+function buildMoveTimeline() {
+  const track = document.getElementById('move-timeline-track');
+  track.querySelectorAll('.move-block').forEach(e => e.remove());
+
+  const seg = SEGS[practiceSegIdx];
+  const segStart = seg.shared_start_sec;
+  const segDur = seg.shared_end_sec - segStart;
+  if (segDur <= 0) return;
+
+  practiceMoves.forEach((mv, i) => {
+    const el = document.createElement('div');
+    el.className = 'move-block' + (mv.isTransition ? ' transition-move' : '');
+    el.dataset.idx = i;
+    el.style.left  = ((mv.startSec - segStart) / segDur * 100) + '%';
+    el.style.width = ((mv.endSec - mv.startSec) / segDur * 100) + '%';
+    el.innerHTML = `<div class="mv-n">Move ${mv.num}</div>` +
+      (mv.isTransition ? '<div class="mv-s">Transition</div>' : '');
+    el.addEventListener('click', e => { e.stopPropagation(); seekToMove(i); });
+    track.appendChild(el);
+  });
+
+  track.onclick = e => {
+    if (e.target.closest('.move-block')) return;
+    const rect = track.getBoundingClientRect();
+    const seg = SEGS[practiceSegIdx];
+    const sStart = seg.shared_start_sec;
+    const sDur = seg.shared_end_sec - sStart;
+    seekToShared(sStart + (e.clientX - rect.left) / rect.width * sDur);
+  };
+}
+
+function buildMoveList() {
+  const list = document.getElementById('move-list');
+  list.innerHTML = '';
+  practiceMoves.forEach((mv, i) => {
+    const chip = document.createElement('div');
+    chip.className = 'move-chip' + (mv.isTransition ? ' transition-move' : '');
+    chip.dataset.idx = i;
+    chip.innerHTML =
+      `<div class="mv-cn">Move ${mv.num}</div>` +
+      `<div class="mv-ct">${fmtTime(mv.startSec)} \u2013 ${fmtTime(mv.endSec)}</div>` +
+      (mv.isTransition ? '<div class="mv-cl">Transition</div>' : '');
+    chip.addEventListener('click', () => seekToMove(i));
+    list.appendChild(chip);
+  });
+}
+
+function clearMoveUI() {
+  document.getElementById('move-timeline-track').querySelectorAll('.move-block').forEach(e => e.remove());
+  document.getElementById('move-list').innerHTML = '';
+}
+
+function seekToMove(idx) {
+  idx = Math.max(0, Math.min(idx, practiceMoves.length - 1));
+  hidePauseOverlay();
+  seekToShared(practiceMoves[idx].startSec);
+}
+
+function seekToPrevMove() {
+  const idx = currentMoveIdx > 0 ? currentMoveIdx - 1 : 0;
+  seekToMove(idx);
+}
+
+function seekToNextMove() {
+  if (currentMoveIdx + 1 < practiceMoves.length) seekToMove(currentMoveIdx + 1);
+  else if (currentMoveIdx < 0 && practiceMoves.length) seekToMove(0);
+}
+
+function updatePracticeUI(st) {
+  const seg = SEGS[practiceSegIdx];
+  const segStart = seg.shared_start_sec;
+  const segEnd = seg.shared_end_sec;
+  const segDur = segEnd - segStart;
+
+  document.getElementById('practice-time').textContent = fmtTime(st);
+  document.getElementById('ref-time').textContent = fmtTimeFull(vidRef.currentTime);
+  document.getElementById('user-time').textContent = fmtTimeFull(vidUser.currentTime);
+
+  if (segDur > 0) {
+    const pct = Math.max(0, Math.min(100, (st - segStart) / segDur * 100));
+    document.getElementById('move-playhead').style.left = pct + '%';
+  }
+
+  let newMoveIdx = -1;
+  for (let i = 0; i < practiceMoves.length; i++) {
+    if (st >= practiceMoves[i].startSec - 0.01 && st < practiceMoves[i].endSec) {
+      newMoveIdx = i; break;
+    }
+  }
+
+  if (newMoveIdx !== currentMoveIdx) {
+    if (pauseAtMoveEnd && isPlaying && currentMoveIdx >= 0) {
+      markMoveDone(currentMoveIdx);
+      showMovePauseOverlay(currentMoveIdx);
+      pausePlayback();
+      seekToShared(practiceMoves[currentMoveIdx].endSec);
+      currentMoveIdx = newMoveIdx;
+      updateMoveHighlights();
+      return;
+    }
+    currentMoveIdx = newMoveIdx;
+    updateMoveHighlights();
+  }
+
+  if (isPlaying && st >= segEnd - 0.02) {
+    if (practiceLoop) {
+      seekToShared(segStart);
+      currentMoveIdx = -1;
+    } else {
+      pausePlayback();
+    }
+  }
+
+  let closestBeat = -1;
+  for (let i = 0; i < BEATS.length; i++) {
+    if (Math.abs(st - BEATS[i]) < 0.06) { closestBeat = i; break; }
+  }
+  if (closestBeat >= 0 && closestBeat !== lastBeatIdx) {
+    lastBeatIdx = closestBeat;
+    flashBeat();
+  }
+}
+
+function updateMoveHighlights() {
+  document.querySelectorAll('.move-block').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.idx) === currentMoveIdx);
+  });
+  document.querySelectorAll('.move-chip').forEach(el => {
+    el.classList.toggle('active', parseInt(el.dataset.idx) === currentMoveIdx);
+  });
+  const lbl = document.getElementById('move-label');
+  if (currentMoveIdx >= 0) {
+    const mv = practiceMoves[currentMoveIdx];
+    const extra = mv.isTransition ? ' (Transition)' : '';
+    lbl.innerHTML = `Move <span>${mv.num}</span> / ${practiceMoves.length}${extra}`;
+  } else {
+    lbl.innerHTML = 'Move <span>\u2014</span>';
+  }
+}
+
+function markMoveDone(idx) {
+  document.querySelectorAll(`.move-block[data-idx="${idx}"]`).forEach(e => e.classList.add('done'));
+  document.querySelectorAll(`.move-chip[data-idx="${idx}"]`).forEach(e => e.classList.add('done'));
+}
+
+function showMovePauseOverlay(moveIdx) {
+  const mv = practiceMoves[moveIdx];
+  const label = mv.isTransition ? `Move ${mv.num} (Transition)` : `Move ${mv.num}`;
+  document.getElementById('pause-seg-num-ref').textContent = label;
+  document.getElementById('pause-seg-num-user').textContent = label;
+  document.getElementById('pause-overlay-ref').querySelector('.seg-done-label').textContent = 'Move complete';
+  document.getElementById('pause-overlay-user').querySelector('.seg-done-label').textContent = 'Move complete';
+  document.getElementById('pause-overlay-ref').classList.add('visible');
+  document.getElementById('pause-overlay-user').classList.add('visible');
+}
+
+// Practice mode button handlers
+document.getElementById('btn-practice').addEventListener('click', () => {
+  if (currentSegIdx >= 0) openPracticeMode(currentSegIdx);
+  else if (SEGS && SEGS.length > 0) openPracticeMode(0);
+});
+
+document.getElementById('btn-exit-practice').addEventListener('click', closePracticeMode);
+document.getElementById('btn-play-practice').addEventListener('click', togglePlay);
+document.getElementById('btn-prev-move').addEventListener('click', seekToPrevMove);
+document.getElementById('btn-next-move').addEventListener('click', seekToNextMove);
+
+document.getElementById('btn-loop-practice').addEventListener('click', () => {
+  practiceLoop = !practiceLoop;
+  const btn = document.getElementById('btn-loop-practice');
+  btn.style.background = practiceLoop ? 'var(--accent)' : '';
+  btn.style.borderColor = practiceLoop ? 'var(--accent)' : '';
+});
+
+document.getElementById('chk-pause-move').addEventListener('change', e => {
+  pauseAtMoveEnd = e.target.checked;
 });
 
 // ========================================================================
