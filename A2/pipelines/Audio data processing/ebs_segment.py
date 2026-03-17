@@ -557,28 +557,45 @@ def run_ebs_pipeline(
         bpm,
     )
 
-        # ---- extrapolate beats to cover the tail of the shared window ----------
-    # We do NOT prepend synthetic beats before the first detected beat.
-    # Any audio before the first estimated count-1 is kept as intro segment 0.
+    # ---- extrapolate beats to cover the full shared window -----------------
+    # librosa's beat tracker often misses beats near the signal boundaries.
+    # If the beat grid is regular (low CV) we extrapolate using the median
+    # interval so that segments can span the entire shared window.
+    n_extra_bwd = 0  # track how many beats prepended (shifts indices)
+
     if len(beats_sec) >= 2:
         med_ivl = confidence_info["median_interval_sec"]
         n_detected = len(beats_sec)
 
-        # Extrapolate forward only
+        # Extrapolate forward
         extra_fwd: list[float] = []
         t = float(beats_sec[-1]) + med_ivl
         while t <= shared_len_sec:
             extra_fwd.append(round(t, ROUNDING_PRECISION))
             t += med_ivl
 
-        if extra_fwd:
+        # Extrapolate backward (before first detected beat)
+        extra_bwd: list[float] = []
+        t = float(beats_sec[0]) - med_ivl
+        while t >= 0:
+            extra_bwd.append(round(t, ROUNDING_PRECISION))
+            t -= med_ivl
+        extra_bwd.reverse()
+
+        if extra_fwd or extra_bwd:
+            n_extra_bwd = len(extra_bwd)
             beats_sec = np.array(
-                [round(float(b), ROUNDING_PRECISION) for b in beats_sec] + extra_fwd
+                extra_bwd
+                + [round(float(b), ROUNDING_PRECISION) for b in beats_sec]
+                + extra_fwd
             )
             logger.info(
-                "Extrapolated %d beats forward → %d total (was %d detected)",
-                len(extra_fwd), len(beats_sec), n_detected,
+                "Extrapolated %d beats backward + %d forward → %d total "
+                "(was %d detected)",
+                n_extra_bwd, len(extra_fwd),
+                len(beats_sec), n_detected,
             )
+            # Update count in confidence_info for the artifact
             confidence_info["num_beats_detected"] = n_detected
             confidence_info["num_beats"] = int(len(beats_sec))
 
@@ -594,78 +611,43 @@ def run_ebs_pipeline(
         # Phase estimation uses the *detected* beat frames (with onset data).
         # After backward extrapolation the array is shifted by n_extra_bwd,
         # so we adjust the phase index accordingly.
-        # raw_phase = estimate_downbeat_phase(
-        #     onset_env, beat_frames, BEATS_PER_SEGMENT
-        # )
-        # downbeat_phase = (raw_phase + n_extra_bwd) % BEATS_PER_SEGMENT
-        # first_regular = downbeat_phase + BEATS_PER_SEGMENT
-        # logger.info(
-        #     "Adjusted downbeat phase: raw=%d, bwd_offset=%d, adjusted=%d, "
-        #     "first_regular_idx=%d",
-        #     raw_phase, n_extra_bwd, downbeat_phase, first_regular,
-        # )
-        downbeat_phase = estimate_downbeat_phase(
+        raw_phase = estimate_downbeat_phase(
             onset_env, beat_frames, BEATS_PER_SEGMENT
         )
+        downbeat_phase = (raw_phase + n_extra_bwd) % BEATS_PER_SEGMENT
+        first_regular = downbeat_phase + BEATS_PER_SEGMENT
         logger.info(
-            "Estimated downbeat phase: %d",
-            downbeat_phase,
+            "Adjusted downbeat phase: raw=%d, bwd_offset=%d, adjusted=%d, "
+            "first_regular_idx=%d",
+            raw_phase, n_extra_bwd, downbeat_phase, first_regular,
         )
-        # if first_regular < len(beats_sec):
-        #     # Intro segment: [0.0, beat[phase + 8])
-        #     intro_seg: dict = {
-        #         "seg_id": 0,
-        #         "beat_idx_range": [0, int(first_regular)],
-        #         "shared_start_sec": 0.0,
-        #         "shared_end_sec": round(
-        #             float(beats_sec[first_regular]), ROUNDING_PRECISION
-        #         ),
-        #     }
-        #     # Regular 8-beat segments starting from the second downbeat
-        #     rest = segment_by_beats(
-        #         beats_sec,
-        #         beats_per_seg=BEATS_PER_SEGMENT,
-        #         start_idx=first_regular,
-        #     )
-        #     # Renumber: intro is 0, rest continue from 1
-        #     for seg in rest:
-        #         seg["seg_id"] += 1
-        #     segments = [intro_seg] + rest
-        # else:
-        #     # Not enough beats after phase for a regular segment;
-        #     # fall back to simple segmentation with seg 0 starting at 0.0
-        #     segments = segment_by_beats(beats_sec)
-        #     if segments:
-        #         segments[0]["shared_start_sec"] = 0.0
-        if downbeat_phase < len(beats_sec):
-            # Segment 0: everything before the first estimated count-1
+
+        if first_regular < len(beats_sec):
+            # Intro segment: [0.0, beat[phase + 8])
             intro_seg: dict = {
                 "seg_id": 0,
-                "beat_idx_range": [0, int(downbeat_phase)] if downbeat_phase > 0 else [0, 0],
+                "beat_idx_range": [0, int(first_regular)],
                 "shared_start_sec": 0.0,
                 "shared_end_sec": round(
-                    float(beats_sec[downbeat_phase]), ROUNDING_PRECISION
+                    float(beats_sec[first_regular]), ROUNDING_PRECISION
                 ),
             }
-
-            # Regular 8-beat segments start exactly at the first estimated count-1
+            # Regular 8-beat segments starting from the second downbeat
             rest = segment_by_beats(
                 beats_sec,
                 beats_per_seg=BEATS_PER_SEGMENT,
-                start_idx=downbeat_phase,
+                start_idx=first_regular,
             )
-
+            # Renumber: intro is 0, rest continue from 1
             for seg in rest:
                 seg["seg_id"] += 1
-
             segments = [intro_seg] + rest
-
-            # If the first count-1 is already at time 0, segment 0 is empty.
-            # Drop it to avoid a zero-length intro segment.
-            if intro_seg["shared_end_sec"] <= 0.0:
-                segments = rest
         else:
-            segments = []
+            # Not enough beats after phase for a regular segment;
+            # fall back to simple segmentation with seg 0 starting at 0.0
+            segments = segment_by_beats(beats_sec)
+            if segments:
+                segments[0]["shared_start_sec"] = 0.0
 
         segmentation_mode = "eight_beat"
         beats_shared: list[float] = [
