@@ -15,9 +15,32 @@ import {
   TempoFlowSession,
   updateSession,
 } from '../../lib/sessionStorage';
-import { getSessionVideo } from '../../lib/videoStorage';
+import { getSessionVideo, storeSessionVideo } from '../../lib/videoStorage';
 
 const PoseOverlay = dynamic(() => import('../../components/PoseOverlay'), { ssr: false });
+const DEFAULT_SAM3_MAX_VIDEO_MB = 40;
+const DEFAULT_SAM3_MAX_DURATION_SEC = 12;
+
+function getSam3MaxVideoMb() {
+  const value = Number.parseInt(process.env.NEXT_PUBLIC_SAM3_MAX_VIDEO_MB ?? `${DEFAULT_SAM3_MAX_VIDEO_MB}`, 10);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SAM3_MAX_VIDEO_MB;
+}
+
+function getSam3MaxDurationSec() {
+  const value = Number.parseFloat(process.env.NEXT_PUBLIC_SAM3_MAX_DURATION_SEC ?? `${DEFAULT_SAM3_MAX_DURATION_SEC}`);
+  return Number.isFinite(value) && value > 0 ? value : DEFAULT_SAM3_MAX_DURATION_SEC;
+}
+
+async function readErrorMessage(response: Response) {
+  const contentType = response.headers.get('content-type') ?? '';
+  if (contentType.includes('application/json')) {
+    const data = (await response.json()) as { error?: string };
+    return data.error || 'SAM 3 processing failed.';
+  }
+
+  const text = await response.text();
+  return text || 'SAM 3 processing failed.';
+}
 
 function AnalysisPageContent() {
   const searchParams = useSearchParams();
@@ -26,6 +49,8 @@ function AnalysisPageContent() {
   const [duration, setDuration] = useState(0);
   const [referenceVideoUrl, setReferenceVideoUrl] = useState<string | null>(null);
   const [userVideoUrl, setUserVideoUrl] = useState<string | null>(null);
+  const [sam3ReferenceUrl, setSam3ReferenceUrl] = useState<string | null>(null);
+  const [sam3PracticeUrl, setSam3PracticeUrl] = useState<string | null>(null);
   const [session, setSession] = useState<TempoFlowSession | null>(null);
   const [loadingSession, setLoadingSession] = useState(true);
   const [analysisStatus, setAnalysisStatus] = useState('Loading your local session...');
@@ -51,6 +76,8 @@ function AnalysisPageContent() {
 
     let referenceUrlToCleanup: string | null = null;
     let practiceUrlToCleanup: string | null = null;
+    let sam3ReferenceUrlToCleanup: string | null = null;
+    let sam3PracticeUrlToCleanup: string | null = null;
 
     const loadSession = async () => {
       try {
@@ -61,9 +88,11 @@ function AnalysisPageContent() {
           return;
         }
 
-        const [referenceFile, practiceFile] = await Promise.all([
+        const [referenceFile, practiceFile, sam3ReferenceFile, sam3PracticeFile] = await Promise.all([
           getSessionVideo(sessionId, 'reference'),
           getSessionVideo(sessionId, 'practice'),
+          getSessionVideo(sessionId, 'reference-sam3'),
+          getSessionVideo(sessionId, 'practice-sam3'),
         ]);
 
         if (!referenceFile || !practiceFile) {
@@ -78,6 +107,20 @@ function AnalysisPageContent() {
         practiceUrlToCleanup = URL.createObjectURL(practiceFile);
         setReferenceVideoUrl(referenceUrlToCleanup);
         setUserVideoUrl(practiceUrlToCleanup);
+
+        if (sam3ReferenceFile) {
+          sam3ReferenceUrlToCleanup = URL.createObjectURL(sam3ReferenceFile);
+          setSam3ReferenceUrl(sam3ReferenceUrlToCleanup);
+        } else {
+          setSam3ReferenceUrl(null);
+        }
+
+        if (sam3PracticeFile) {
+          sam3PracticeUrlToCleanup = URL.createObjectURL(sam3PracticeFile);
+          setSam3PracticeUrl(sam3PracticeUrlToCleanup);
+        } else {
+          setSam3PracticeUrl(null);
+        }
       } catch (error) {
         console.error('Failed to load local session:', error);
         setPageError('Failed to load the saved session from this device.');
@@ -91,6 +134,8 @@ function AnalysisPageContent() {
     return () => {
       if (referenceUrlToCleanup?.startsWith('blob:')) URL.revokeObjectURL(referenceUrlToCleanup);
       if (practiceUrlToCleanup?.startsWith('blob:')) URL.revokeObjectURL(practiceUrlToCleanup);
+      if (sam3ReferenceUrlToCleanup?.startsWith('blob:')) URL.revokeObjectURL(sam3ReferenceUrlToCleanup);
+      if (sam3PracticeUrlToCleanup?.startsWith('blob:')) URL.revokeObjectURL(sam3PracticeUrlToCleanup);
     };
   }, [searchParams]);
 
@@ -346,18 +391,25 @@ function AnalysisPageContent() {
   const scores = summary?.scores;
   const worstSegment = summary?.segments.slice().sort((a, b) => a.score - b.score)[0];
   const sam3Result = session?.sam3Result;
+  const sam3Ready = Boolean(sam3ReferenceUrl && sam3PracticeUrl && sam3Result);
+  const sam3StateLabel = sam3Processing ? 'Processing on Modal GPU' : sam3Error ? 'Failed' : sam3Ready ? 'Ready' : 'Idle';
   const referenceDisplayUrl =
-    overlayMethod === 'sam3-experimental' && sam3Result?.referenceVideoUrl
-      ? sam3Result.referenceVideoUrl
+    overlayMethod === 'sam3-experimental' && sam3ReferenceUrl
+      ? sam3ReferenceUrl
       : referenceVideoUrl;
   const practiceDisplayUrl =
-    overlayMethod === 'sam3-experimental' && sam3Result?.practiceVideoUrl
-      ? sam3Result.practiceVideoUrl
+    overlayMethod === 'sam3-experimental' && sam3PracticeUrl
+      ? sam3PracticeUrl
       : userVideoUrl;
 
   const generateSam3Video = async (kind: 'reference' | 'practice', sourceUrl: string, fileName: string) => {
     const sourceResponse = await fetch(sourceUrl);
     const blob = await sourceResponse.blob();
+    const maxVideoBytes = getSam3MaxVideoMb() * 1024 * 1024;
+
+    if (blob.size > maxVideoBytes) {
+      throw new Error(`Keep SAM 3 clips under ${getSam3MaxVideoMb()} MB for fast processing.`);
+    }
 
     const body = new FormData();
     body.append('video', new File([blob], fileName, { type: blob.type || 'video/webm' }));
@@ -368,15 +420,17 @@ function AnalysisPageContent() {
       body,
     });
 
-    const data = await response.json();
     if (!response.ok) {
-      throw new Error(data.error || 'SAM 3 processing failed.');
+      throw new Error(await readErrorMessage(response));
     }
 
+    const outputBlob = await response.blob();
+    const prompt = response.headers.get('x-sam3-prompt') || 'person';
+
     return {
-      provider: 'fal' as const,
-      prompt: data.prompt as string,
-      videoUrl: data.videoUrl as string,
+      provider: 'modal' as const,
+      prompt,
+      file: new File([outputBlob], `${kind}-sam3.mp4`, { type: outputBlob.type || 'video/mp4' }),
     };
   };
 
@@ -386,9 +440,16 @@ function AnalysisPageContent() {
     }
 
     try {
+      const maxDurationSec = getSam3MaxDurationSec();
+      const referenceDuration = referenceVideoRef.current?.duration ?? 0;
+      const practiceDuration = userVideoRef.current?.duration ?? 0;
+      if (referenceDuration > maxDurationSec || practiceDuration > maxDurationSec) {
+        throw new Error(`Keep each clip under ${maxDurationSec} seconds for fast SAM 3 mode.`);
+      }
+
       setSam3Processing(true);
       setSam3Error(null);
-      setSam3Status('Generating SAM 3 overlay for the reference clip...');
+      setSam3Status('Queued reference clip on Modal...');
 
       const referenceResult = await generateSam3Video(
         'reference',
@@ -396,25 +457,40 @@ function AnalysisPageContent() {
         session.referenceName || 'reference.mp4',
       );
 
-      setSam3Status('Generating SAM 3 overlay for the practice clip...');
+      setSam3Status('Queued practice clip on Modal...');
       const practiceResult = await generateSam3Video(
         'practice',
         userVideoUrl,
         session.practiceName || 'practice.mp4',
       );
 
+      await Promise.all([
+        storeSessionVideo(session.id, 'reference-sam3', referenceResult.file),
+        storeSessionVideo(session.id, 'practice-sam3', practiceResult.file),
+      ]);
+
+      const nextReferenceUrl = URL.createObjectURL(referenceResult.file);
+      const nextPracticeUrl = URL.createObjectURL(practiceResult.file);
+
       const updatedSession = updateSession(session.id, {
         sam3Result: {
-          provider: 'fal',
+          provider: 'modal',
           prompt: practiceResult.prompt || referenceResult.prompt,
-          referenceVideoUrl: referenceResult.videoUrl,
-          practiceVideoUrl: practiceResult.videoUrl,
           generatedAt: new Date().toISOString(),
         },
       });
 
       setSession(updatedSession ?? session);
-      setSam3Status('SAM 3 overlays are ready.');
+      setSam3ReferenceUrl((currentUrl) => {
+        if (currentUrl?.startsWith('blob:')) URL.revokeObjectURL(currentUrl);
+        return nextReferenceUrl;
+      });
+      setSam3PracticeUrl((currentUrl) => {
+        if (currentUrl?.startsWith('blob:')) URL.revokeObjectURL(currentUrl);
+        return nextPracticeUrl;
+      });
+      setOverlayMethod('sam3-experimental');
+      setSam3Status('Segmented videos are ready.');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'SAM 3 overlay generation failed.';
       setSam3Error(message);
@@ -460,7 +536,7 @@ function AnalysisPageContent() {
             <div>
               <h2 className="text-lg font-semibold text-gray-900">Overlay method</h2>
               <p className="text-sm text-gray-600">
-                Switch between the current local pose-fill overlay and an experimental denser mask mode inspired by SAM 3.
+                Switch between the current local pose-fill overlay and a Modal-hosted SAM 3 segmentation pass.
               </p>
             </div>
             <div className="flex flex-wrap gap-2">
@@ -487,7 +563,7 @@ function AnalysisPageContent() {
             </div>
           </div>
           <p className="mt-3 text-xs text-gray-500">
-            SAM 3 can detect, segment, and track objects in images and videos using prompts. The real hosted video path here uses a backend proxy so the app stays local-first while avoiding on-device heavyweight model execution. See{' '}
+            SAM 3 can detect, segment, and track objects in images and videos using prompts. TempoFlow sends short clips to a Modal GPU worker, then stores the segmented results back on this device so the app stays local-first after generation. See{' '}
             <a
               href="https://ai.meta.com/research/sam3/"
               target="_blank"
@@ -498,12 +574,12 @@ function AnalysisPageContent() {
             </a>
             {' '}and{' '}
             <a
-              href="https://fal.ai/models/fal-ai/sam-3/video/api"
+              href="https://modal.com/"
               target="_blank"
               rel="noreferrer"
               className="underline underline-offset-2"
             >
-              fal.ai&apos;s SAM 3 video API
+              Modal
             </a>
             .
           </p>
@@ -513,18 +589,31 @@ function AnalysisPageContent() {
                 <div>
                   <p className="text-sm font-semibold text-purple-700">SAM 3 experimental video segmentation</p>
                   <p className="text-sm text-gray-700">
-                    {sam3Result?.referenceVideoUrl && sam3Result?.practiceVideoUrl
-                      ? `Ready. Prompt used: "${sam3Result.prompt}".`
-                      : 'Generate segmented videos for both panels using a hosted SAM 3 backend.'}
+                    {sam3Ready
+                      ? `Ready. Prompt used: "${sam3Result?.prompt}".`
+                      : `Generate segmented videos for both panels on Modal. Fast mode works best for clips under ${getSam3MaxDurationSec()} seconds and ${getSam3MaxVideoMb()} MB.`}
                   </p>
                 </div>
-                <button
-                  onClick={handleGenerateSam3}
-                  disabled={sam3Processing || !referenceVideoUrl || !userVideoUrl}
-                  className="rounded-full bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
-                >
-                  {sam3Processing ? 'Processing...' : sam3Result?.referenceVideoUrl ? 'Regenerate SAM 3 Videos' : 'Generate SAM 3 Videos'}
-                </button>
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-white px-3 py-1 text-xs font-medium text-purple-700">
+                    {sam3StateLabel}
+                  </span>
+                  <button
+                    onClick={handleGenerateSam3}
+                    disabled={sam3Processing || !referenceVideoUrl || !userVideoUrl}
+                    className="rounded-full bg-purple-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-50"
+                  >
+                    {sam3Processing ? 'Processing...' : sam3Ready ? 'Regenerate SAM 3 Videos' : 'Generate SAM 3 Videos'}
+                  </button>
+                  {sam3Error && !sam3Processing ? (
+                    <button
+                      onClick={handleGenerateSam3}
+                      className="rounded-full bg-white px-4 py-2 text-sm font-medium text-purple-700 transition-all hover:bg-purple-100"
+                    >
+                      Retry
+                    </button>
+                  ) : null}
+                </div>
               </div>
               {(sam3Processing || sam3Status) && (
                 <p className="mt-3 text-sm text-gray-700">{sam3Status}</p>
@@ -567,6 +656,11 @@ function AnalysisPageContent() {
             <div className="space-y-3">
               <p className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Reference</p>
               <div className="relative aspect-video bg-gray-900 rounded-3xl overflow-hidden group">
+                {overlayMethod === 'sam3-experimental' && sam3Ready ? (
+                  <div className="absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white">
+                    Modal SAM 3 output
+                  </div>
+                ) : null}
                 <video
                   ref={referenceVideoRef}
                   src={referenceDisplayUrl ?? undefined}
@@ -578,7 +672,7 @@ function AnalysisPageContent() {
                   onLoadedMetadata={handleLoadedMetadata}
                   onError={(error) => console.error('Reference video error:', error)}
                 />
-                {overlayMethod !== 'sam3-experimental' || !sam3Result?.referenceVideoUrl ? (
+                {overlayMethod !== 'sam3-experimental' || !sam3ReferenceUrl ? (
                   <PoseOverlay
                     videoRef={referenceVideoRef}
                     color="#00FF00"
@@ -591,6 +685,11 @@ function AnalysisPageContent() {
             <div className="space-y-3">
               <p className="text-sm font-semibold text-gray-400 uppercase tracking-wider">Your Practice</p>
               <div className="relative aspect-video bg-gray-900 rounded-3xl overflow-hidden group">
+                {overlayMethod === 'sam3-experimental' && sam3Ready ? (
+                  <div className="absolute left-3 top-3 z-10 rounded-full bg-black/60 px-3 py-1 text-xs font-medium text-white">
+                    Modal SAM 3 output
+                  </div>
+                ) : null}
                 <video
                   ref={userVideoRef}
                   src={practiceDisplayUrl ?? undefined}
@@ -602,7 +701,7 @@ function AnalysisPageContent() {
                   onLoadedMetadata={handleLoadedMetadata}
                   onError={(error) => console.error('User video error:', error)}
                 />
-                {overlayMethod !== 'sam3-experimental' || !sam3Result?.practiceVideoUrl ? (
+                {overlayMethod !== 'sam3-experimental' || !sam3PracticeUrl ? (
                   <PoseOverlay
                     videoRef={userVideoRef}
                     color="#FF0000"
