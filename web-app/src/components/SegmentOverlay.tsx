@@ -204,7 +204,8 @@ const SegmentOverlay: React.FC<SegmentOverlayProps> = ({
 
         setStatus('Creating inference session…');
         const session = await ort.InferenceSession.create(MODEL_PATH, {
-          executionProviders: ['webgpu', 'wasm'],
+          // WASM-only is far more stable; WebGPU frequently crashes with OOB in some setups.
+          executionProviders: ['wasm'],
           graphOptimizationLevel: 'all',
         });
 

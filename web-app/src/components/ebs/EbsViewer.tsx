@@ -1,9 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import { useEbsViewer } from "./useEbsViewer";
 import type { EbsData } from "./types";
+import PoseOverlay from "../PoseOverlay";
+import SegmentOverlay from "../SegmentOverlay";
+import { PrecomputedFrameOverlay } from "../PrecomputedFrameOverlay";
+import { generateMoveNetOverlayFrames } from "../../lib/movenetOverlayGenerator";
+import { generateYoloOverlayFrames } from "../../lib/yoloOverlayGenerator";
+import { buildOverlayKey, getSessionOverlay, storeSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
 
 type FileDropProps = {
   label: string;
@@ -20,6 +26,7 @@ type ManualViewerProps = {
 
 type SessionViewerProps = {
   mode: "session";
+  sessionId?: string;
   referenceVideoUrl: string;
   userVideoUrl: string;
   ebsData: EbsData;
@@ -131,6 +138,160 @@ export function EbsViewer(props: EbsViewerProps) {
   const sessionPracticeName = sessionProps?.practiceName ?? null;
   const sessionBackLabel = sessionProps?.backLabel ?? "Back";
   const sessionFooterSlot = sessionProps?.footerSlot ?? null;
+  const sessionId = sessionProps?.sessionId ?? null;
+  const [overlayMode, setOverlayMode] = useState<"precomputed" | "live">("precomputed");
+  const [showMoveNet, setShowMoveNet] = useState(false);
+  const [showYolo, setShowYolo] = useState(false);
+  const [overlayMethod, setOverlayMethod] = useState<"pose-fill" | "sam3-experimental" | "sam3-roboflow">("pose-fill");
+  const [overlayBusy, setOverlayBusy] = useState(false);
+  const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
+  const [refPoseArtifact, setRefPoseArtifact] = useState<OverlayArtifact | null>(null);
+  const [refYoloArtifact, setRefYoloArtifact] = useState<OverlayArtifact | null>(null);
+  const [userPoseArtifact, setUserPoseArtifact] = useState<OverlayArtifact | null>(null);
+  const [userYoloArtifact, setUserYoloArtifact] = useState<OverlayArtifact | null>(null);
+  const OVERLAY_FPS = 30;
+  const missingPrecomputed =
+    overlayMode === "precomputed" &&
+    ((showYolo && (!refYoloArtifact || !userYoloArtifact)) || (showMoveNet && (!refPoseArtifact || !userPoseArtifact)));
+
+  const loadCachedOverlays = useCallback(async () => {
+    if (!sessionId) return;
+    const variant = overlayMethod;
+    const [rp, ry, up, uy] = await Promise.all([
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "reference", fps: OVERLAY_FPS, variant })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "practice", fps: OVERLAY_FPS, variant })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS })),
+    ]);
+    setRefPoseArtifact(rp);
+    setRefYoloArtifact(ry);
+    setUserPoseArtifact(up);
+    setUserYoloArtifact(uy);
+  }, [overlayMethod, sessionId]);
+
+  useEffect(() => {
+    void loadCachedOverlays();
+  }, [loadCachedOverlays]);
+
+  const generateOverlays = useCallback(
+    async (which: "movenet" | "yolo") => {
+      if (!sessionId || !activeReferenceVideoUrl || !activeUserVideoUrl) return;
+      if (overlayBusy) return;
+      setOverlayBusy(true);
+      setOverlayStatus(null);
+
+      try {
+        if (which === "yolo") {
+          setOverlayStatus("Generating YOLO overlays…");
+          // Generate sequentially because onnxruntime-web sessions cannot run concurrently.
+          const refFrames = await generateYoloOverlayFrames({
+            videoUrl: activeReferenceVideoUrl,
+            color: "#38bdf8",
+            onProgress: (c, t) => setOverlayStatus(`YOLO (reference) ${c}/${t}`),
+          });
+          const userFrames = await generateYoloOverlayFrames({
+            videoUrl: activeUserVideoUrl,
+            color: "#22c55e",
+            onProgress: (c, t) => setOverlayStatus(`YOLO (user) ${c}/${t}`),
+          });
+
+          const refArtifact: OverlayArtifact = {
+            version: 1,
+            type: "yolo",
+            side: "reference",
+            fps: OVERLAY_FPS,
+            width: refVideo.current?.videoWidth || 640,
+            height: refVideo.current?.videoHeight || 480,
+            frameCount: refFrames.length,
+            createdAt: new Date().toISOString(),
+            frames: refFrames,
+          };
+          const userArtifact: OverlayArtifact = {
+            version: 1,
+            type: "yolo",
+            side: "practice",
+            fps: OVERLAY_FPS,
+            width: userVideo.current?.videoWidth || 640,
+            height: userVideo.current?.videoHeight || 480,
+            frameCount: userFrames.length,
+            createdAt: new Date().toISOString(),
+            frames: userFrames,
+          };
+
+          await Promise.all([
+            storeSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS }), refArtifact),
+            storeSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS }), userArtifact),
+          ]);
+
+          setRefYoloArtifact(refArtifact);
+          setUserYoloArtifact(userArtifact);
+          setOverlayStatus("YOLO overlays ready.");
+        } else {
+          setOverlayStatus("Generating MoveNet overlays…");
+          const variant = overlayMethod;
+          // Generate sequentially to avoid contention and keep UI progress readable.
+          const ref = await generateMoveNetOverlayFrames({
+            videoUrl: activeReferenceVideoUrl,
+            color: "#2563eb",
+            fps: OVERLAY_FPS,
+            onProgress: (c, t) => setOverlayStatus(`MoveNet (reference) ${c}/${t}`),
+          });
+          const user = await generateMoveNetOverlayFrames({
+            videoUrl: activeUserVideoUrl,
+            color: "#10b981",
+            fps: OVERLAY_FPS,
+            onProgress: (c, t) => setOverlayStatus(`MoveNet (user) ${c}/${t}`),
+          });
+
+          const refArtifact: OverlayArtifact = {
+            version: 1,
+            type: "movenet",
+            side: "reference",
+            fps: ref.fps,
+            width: ref.width,
+            height: ref.height,
+            frameCount: ref.frames.length,
+            createdAt: new Date().toISOString(),
+            frames: ref.frames,
+            meta: { variant },
+          };
+          const userArtifact: OverlayArtifact = {
+            version: 1,
+            type: "movenet",
+            side: "practice",
+            fps: user.fps,
+            width: user.width,
+            height: user.height,
+            frameCount: user.frames.length,
+            createdAt: new Date().toISOString(),
+            frames: user.frames,
+            meta: { variant },
+          };
+
+          await Promise.all([
+            storeSessionOverlay(
+              buildOverlayKey({ sessionId, type: "movenet", side: "reference", fps: OVERLAY_FPS, variant }),
+              refArtifact,
+            ),
+            storeSessionOverlay(
+              buildOverlayKey({ sessionId, type: "movenet", side: "practice", fps: OVERLAY_FPS, variant }),
+              userArtifact,
+            ),
+          ]);
+
+          setRefPoseArtifact(refArtifact);
+          setUserPoseArtifact(userArtifact);
+          setOverlayStatus("MoveNet overlays ready.");
+        }
+      } catch (error) {
+        const message = error instanceof Error ? error.message : "Overlay generation failed.";
+        setOverlayStatus(`Error: ${message}`);
+      } finally {
+        setOverlayBusy(false);
+      }
+    },
+    [activeReferenceVideoUrl, activeUserVideoUrl, overlayBusy, overlayMethod, sessionId, refVideo, userVideo],
+  );
 
   useEffect(() => {
     if (sessionMode) return;
@@ -405,6 +566,62 @@ export function EbsViewer(props: EbsViewerProps) {
             <button className="ebs-back-btn" onClick={handleBack}>
               {sessionMode ? sessionBackLabel : "Load New Videos"}
             </button>
+            {sessionMode ? (
+              <div className="flex flex-wrap items-center gap-2 justify-end">
+                <select
+                  value={overlayMode}
+                  onChange={(e) => setOverlayMode(e.target.value as "precomputed" | "live")}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                  aria-label="Overlay mode"
+                >
+                  <option value="precomputed">Precomputed</option>
+                  <option value="live">Live</option>
+                </select>
+                <button
+                  onClick={() => setShowMoveNet((v) => !v)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                    showMoveNet ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                  }`}
+                >
+                  MoveNet
+                </button>
+                <button
+                  onClick={() => setShowYolo((v) => !v)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                    showYolo ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                  }`}
+                >
+                  YOLO
+                </button>
+                <select
+                  value={overlayMethod}
+                  onChange={(e) =>
+                    setOverlayMethod(e.target.value as "pose-fill" | "sam3-experimental" | "sam3-roboflow")
+                  }
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                  disabled={!showMoveNet || overlayMode !== "live"}
+                  aria-label="Pose overlay style"
+                >
+                  <option value="pose-fill">Pose fill</option>
+                  <option value="sam3-experimental">SAM3-style</option>
+                  <option value="sam3-roboflow">Roboflow SAM3</option>
+                </select>
+                <button
+                  onClick={() => void generateOverlays("movenet")}
+                  disabled={overlayBusy || !showMoveNet}
+                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                >
+                  Gen MoveNet
+                </button>
+                <button
+                  onClick={() => void generateOverlays("yolo")}
+                  disabled={overlayBusy || !showYolo}
+                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                >
+                  Gen YOLO
+                </button>
+              </div>
+            ) : null}
             {hasSegments ? (
               <div className="ebs-toggle">
                 <label htmlFor="chk-pause">Pause at segment end</label>
@@ -420,6 +637,17 @@ export function EbsViewer(props: EbsViewerProps) {
               <div className="ebs-inline-note">Aligned videos loaded. No playable segments were detected.</div>
             )}
           </div>
+          {overlayStatus ? (
+            <div className="mb-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-2 text-xs text-slate-700">
+              {overlayStatus}
+            </div>
+          ) : null}
+          {sessionMode && missingPrecomputed ? (
+            <div className="mb-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+              Precomputed overlays are enabled, but frames haven’t been generated yet. Click <b>Gen MoveNet</b> /{" "}
+              <b>Gen YOLO</b> once, then playback will be synced (no realtime lag).
+            </div>
+          ) : null}
 
           <div className="videos">
             <div className="video-panel">
@@ -427,7 +655,35 @@ export function EbsViewer(props: EbsViewerProps) {
                 Reference (Clip 1)
                 <span className="time-display">{fmtTimeFull(state.refTime)}</span>
               </div>
-              <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
+              <div className="relative">
+                <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
+                {sessionMode && showYolo ? (
+                  overlayMode === "precomputed" ? (
+                    refYoloArtifact ? (
+                      <PrecomputedFrameOverlay
+                        videoRef={refVideo}
+                        frames={refYoloArtifact.frames}
+                        fps={refYoloArtifact.fps}
+                      />
+                    ) : null
+                  ) : (
+                    <SegmentOverlay videoRef={refVideo} color="#38bdf8" />
+                  )
+                ) : null}
+                {sessionMode && showMoveNet ? (
+                  overlayMode === "precomputed" ? (
+                    refPoseArtifact ? (
+                      <PrecomputedFrameOverlay
+                        videoRef={refVideo}
+                        frames={refPoseArtifact.frames}
+                        fps={refPoseArtifact.fps}
+                      />
+                    ) : null
+                  ) : (
+                    <PoseOverlay videoRef={refVideo} color="#2563eb" method={overlayMethod} />
+                  )
+                ) : null}
+              </div>
               <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
               <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
                 <div className="seg-pause-card">
@@ -442,7 +698,35 @@ export function EbsViewer(props: EbsViewerProps) {
                 User (Clip 2)
                 <span className="time-display">{fmtTimeFull(state.userTime)}</span>
               </div>
-              <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
+              <div className="relative">
+                <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
+                {sessionMode && showYolo ? (
+                  overlayMode === "precomputed" ? (
+                    userYoloArtifact ? (
+                      <PrecomputedFrameOverlay
+                        videoRef={userVideo}
+                        frames={userYoloArtifact.frames}
+                        fps={userYoloArtifact.fps}
+                      />
+                    ) : null
+                  ) : (
+                    <SegmentOverlay videoRef={userVideo} color="#22c55e" />
+                  )
+                ) : null}
+                {sessionMode && showMoveNet ? (
+                  overlayMode === "precomputed" ? (
+                    userPoseArtifact ? (
+                      <PrecomputedFrameOverlay
+                        videoRef={userVideo}
+                        frames={userPoseArtifact.frames}
+                        fps={userPoseArtifact.fps}
+                      />
+                    ) : null
+                  ) : (
+                    <PoseOverlay videoRef={userVideo} color="#10b981" method={overlayMethod} />
+                  )
+                ) : null}
+              </div>
               <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
               <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
                 <div className="seg-pause-card">

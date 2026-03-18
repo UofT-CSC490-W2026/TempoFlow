@@ -52,6 +52,7 @@ function AnalysisPageContent() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const generationRequestRef = useRef<string | null>(null);
   const processorUrl = process.env.NEXT_PUBLIC_EBS_PROCESSOR_URL ?? DEFAULT_EBS_PROCESSOR_URL;
+
   const processorBaseUrl = useMemo(() => getProcessorBaseUrl(processorUrl), [processorUrl]);
 
   useEffect(() => {
@@ -554,6 +555,7 @@ function AnalysisPageContent() {
       <div className="pt-20">
         <EbsViewer
           mode="session"
+          sessionId={session.id}
           title="TempoFlow EBS Session"
           referenceVideoUrl={referenceVideoUrl}
           userVideoUrl={practiceVideoUrl}
