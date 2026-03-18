@@ -54,7 +54,7 @@ function AnalysisPageContent() {
   const processorUrl = process.env.NEXT_PUBLIC_EBS_PROCESSOR_URL ?? DEFAULT_EBS_PROCESSOR_URL;
 
   const processorBaseUrl = useMemo(() => getProcessorBaseUrl(processorUrl), [processorUrl]);
-
+  
   useEffect(() => {
     let referenceUrlToCleanup: string | null = null;
     let practiceUrlToCleanup: string | null = null;
@@ -128,7 +128,7 @@ function AnalysisPageContent() {
         setPageError("Failed to load the saved session from this device.");
       } finally {
         if (!cancelled) {
-          setLoadingSession(false);
+        setLoadingSession(false);
         }
       }
     };
@@ -251,7 +251,7 @@ function AnalysisPageContent() {
             status: "analyzed",
             ebsStatus: "ready",
             ebsErrorMessage: undefined,
-            errorMessage: undefined,
+          errorMessage: undefined,
             ebsMeta: buildEbsMeta(payload),
           }) ?? session;
 
@@ -421,8 +421,8 @@ function AnalysisPageContent() {
           </Link>
         </div>
       </div>
-    </div>
-  );
+      </div>
+    );
 
   const sessionSummary = useMemo(() => {
     if (!session) return null;
@@ -479,13 +479,13 @@ function AnalysisPageContent() {
   }
 
   if (!ebsData || !referenceVideoUrl || !practiceVideoUrl || !session) {
-    return (
+  return (
       <div className="min-h-screen bg-sky-50">
         {header}
         <div className="px-6 py-28 max-w-3xl mx-auto">
           <div className="rounded-[32px] border border-sky-100 bg-white p-8 shadow-sm">
             <div className="flex items-start justify-between gap-6">
-              <div>
+            <div>
                 <p className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-600">
                   TempoFlow EBS Session
                 </p>
@@ -495,11 +495,11 @@ function AnalysisPageContent() {
                 <p className="mt-2 text-slate-600">{statusMessage}</p>
                 {elapsedLabel ? <p className="mt-2 text-sm font-medium text-sky-700">{elapsedLabel}</p> : null}
                 {sessionSummary ? <p className="mt-4 text-sm text-slate-500">{sessionSummary}</p> : null}
-              </div>
+            </div>
               <div className="h-12 w-12 rounded-2xl border border-sky-100 bg-sky-50 flex items-center justify-center">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-sky-200 border-t-sky-500" />
               </div>
-            </div>
+                    </div>
 
             <div className="mt-8 h-2 overflow-hidden rounded-full bg-sky-100">
               <div
@@ -517,8 +517,8 @@ function AnalysisPageContent() {
               <p className="mt-2 text-slate-500">
                 Keep this tab active while processing. If the browser suspends the request, retry once after confirming
                 that <code>ebs_server.py</code> is still running.
-              </p>
-            </div>
+                  </p>
+                </div>
 
             {pageError ? (
               <div className="mt-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-4">
@@ -545,7 +545,7 @@ function AnalysisPageContent() {
             )}
           </div>
         </div>
-      </div>
+              </div>
     );
   }
 
@@ -567,7 +567,7 @@ function AnalysisPageContent() {
           footerSlot={
             <Link href="/upload" className="dl-btn">
               New Session
-            </Link>
+              </Link>
           }
         />
       </div>

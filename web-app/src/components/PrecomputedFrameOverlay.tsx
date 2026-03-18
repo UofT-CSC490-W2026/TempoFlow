@@ -5,7 +5,7 @@ import type { RefObject } from "react";
 
 export function PrecomputedFrameOverlay(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
-  frames: string[];
+  frames: Array<string | Blob>;
   fps: number;
 }) {
   const { videoRef, frames, fps } = props;
@@ -16,11 +16,15 @@ export function PrecomputedFrameOverlay(props: {
   const safeFps = Number.isFinite(fps) && fps > 0 ? fps : 30;
 
   const cacheRef = useRef<Map<number, HTMLImageElement>>(new Map());
+  const urlCacheRef = useRef<Map<number, string>>(new Map());
   const lastIdxRef = useRef<number>(-1);
 
   useEffect(() => {
     const cache = cacheRef.current;
+    const urlCache = urlCacheRef.current;
     cache.clear();
+    for (const u of urlCache.values()) URL.revokeObjectURL(u);
+    urlCache.clear();
     if (!frameCount) return;
 
     // Warm a small window (first few frames) for quick first render.
@@ -39,7 +43,14 @@ export function PrecomputedFrameOverlay(props: {
           setReady(true);
         }
       };
-      img.src = frames[i];
+      const f = frames[i];
+      if (typeof f === "string") {
+        img.src = f;
+      } else {
+        const url = URL.createObjectURL(f);
+        urlCache.set(i, url);
+        img.src = url;
+      }
       cache.set(i, img);
     }
 
@@ -53,7 +64,6 @@ export function PrecomputedFrameOverlay(props: {
     const canvas = canvasRef.current;
     if (!video || !canvas) return;
 
-    let raf = 0;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
     const cache = cacheRef.current;
@@ -71,17 +81,19 @@ export function PrecomputedFrameOverlay(props: {
       }
     };
 
-    const draw = () => {
+    const computeIndex = (t: number) => {
+      // Prefer FPS-based indexing because frames were generated at index/fps.
+      if (frameCount > 0) {
+        return Math.min(frameCount - 1, Math.max(0, Math.round(t * safeFps)));
+      }
+      return 0;
+    };
+
+    const drawAtTime = (t: number) => {
       syncCanvasSize();
-      const t = video.currentTime || 0;
-      const dur = video.duration || 0;
-      // Prefer duration-proportional indexing (matches exp/mock-up behavior).
-      const idx =
-        dur > 0
-          ? Math.min(frameCount - 1, Math.max(0, Math.round((t / dur) * (frameCount - 1))))
-          : Math.min(frameCount - 1, Math.max(0, Math.floor(t * safeFps)));
+      const idx = computeIndex(t);
       const src = frames[idx];
-      if (src) {
+      if (src != null) {
         if (idx !== lastIdxRef.current) {
           lastIdxRef.current = idx;
           const cached = cache.get(idx);
@@ -98,16 +110,61 @@ export function PrecomputedFrameOverlay(props: {
               ctx.clearRect(0, 0, canvas.width, canvas.height);
               ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             };
-            img.src = src;
+            if (typeof src === "string") {
+              img.src = src;
+            } else {
+              const existing = urlCacheRef.current.get(idx);
+              if (existing) {
+                img.src = existing;
+              } else {
+                const url = URL.createObjectURL(src);
+                urlCacheRef.current.set(idx, url);
+                img.src = url;
+              }
+            }
             cache.set(idx, img);
           }
         }
       }
-      raf = window.requestAnimationFrame(draw);
     };
 
-    raf = window.requestAnimationFrame(draw);
-    return () => window.cancelAnimationFrame(raf);
+    let raf = 0;
+    let cancelled = false;
+    // Use requestVideoFrameCallback for tight sync when available.
+    const rvfc = (video as HTMLVideoElement & {
+      requestVideoFrameCallback?: (
+        callback: (now: number, metadata: { mediaTime?: number }) => void,
+      ) => number;
+      cancelVideoFrameCallback?: (handle: number) => void;
+    }).requestVideoFrameCallback;
+    const cancelRvfc = (video as HTMLVideoElement & { cancelVideoFrameCallback?: (handle: number) => void })
+      .cancelVideoFrameCallback;
+
+    let rvfcHandle = 0;
+    const onVideoFrame = (_now: number, metadata: { mediaTime?: number }) => {
+      if (cancelled) return;
+      const t = metadata.mediaTime ?? video.currentTime ?? 0;
+      drawAtTime(t);
+      rvfcHandle = rvfc ? rvfc.call(video, onVideoFrame) : 0;
+    };
+
+    const onRaf = () => {
+      if (cancelled) return;
+      drawAtTime(video.currentTime || 0);
+      raf = window.requestAnimationFrame(onRaf);
+    };
+
+    if (rvfc) {
+      rvfcHandle = rvfc.call(video, onVideoFrame);
+    } else {
+      raf = window.requestAnimationFrame(onRaf);
+    }
+
+    return () => {
+      cancelled = true;
+      if (rvfc && cancelRvfc && rvfcHandle) cancelRvfc.call(video, rvfcHandle);
+      if (raf) window.cancelAnimationFrame(raf);
+    };
   }, [frameCount, frames, safeFps, videoRef]);
 
   return (

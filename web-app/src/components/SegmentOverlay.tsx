@@ -4,7 +4,7 @@ import React, { useRef, useEffect, useState, useCallback } from 'react';
 import type { InferenceSession } from 'onnxruntime-web';
 
 // ─── Constants ───────────────────────────────────────────────────────────────
-const MODEL_PATH = '/models/yolo11s-seg.onnx';
+const MODEL_PATH = '/models/yolo26n-seg.onnx';
 const INPUT_SIZE = 640;
 const MASK_SIZE = 160;       // output1 spatial dim (160×160 prototypes)
 const MASK_RATIO = INPUT_SIZE / MASK_SIZE; // 4

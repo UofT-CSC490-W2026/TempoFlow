@@ -7,9 +7,12 @@ import type { EbsData } from "./types";
 import PoseOverlay from "../PoseOverlay";
 import SegmentOverlay from "../SegmentOverlay";
 import { PrecomputedFrameOverlay } from "../PrecomputedFrameOverlay";
+import { PrecomputedVideoOverlay } from "../PrecomputedVideoOverlay";
 import { generateMoveNetOverlayFrames } from "../../lib/movenetOverlayGenerator";
-import { generateYoloOverlayFrames } from "../../lib/yoloOverlayGenerator";
+import { generateYoloOverlayFrames, type YoloExecutionProvider } from "../../lib/yoloOverlayGenerator";
+import { generateFastSamOverlayFrames } from "../../lib/fastSamOverlayGenerator";
 import { buildOverlayKey, getSessionOverlay, storeSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
+import { getSessionVideo } from "../../lib/videoStorage";
 
 type FileDropProps = {
   label: string;
@@ -142,39 +145,51 @@ export function EbsViewer(props: EbsViewerProps) {
   const [overlayMode, setOverlayMode] = useState<"precomputed" | "live">("precomputed");
   const [showMoveNet, setShowMoveNet] = useState(false);
   const [showYolo, setShowYolo] = useState(false);
+  const [showFastSam, setShowFastSam] = useState(false);
   const [overlayMethod, setOverlayMethod] = useState<"pose-fill" | "sam3-experimental" | "sam3-roboflow">("pose-fill");
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
+  const [segProvider, setSegProvider] = useState<YoloExecutionProvider>("wasm");
+  const [segGenerator, setSegGenerator] = useState<"python" | "browser">("python");
   const [refPoseArtifact, setRefPoseArtifact] = useState<OverlayArtifact | null>(null);
   const [refYoloArtifact, setRefYoloArtifact] = useState<OverlayArtifact | null>(null);
   const [userPoseArtifact, setUserPoseArtifact] = useState<OverlayArtifact | null>(null);
   const [userYoloArtifact, setUserYoloArtifact] = useState<OverlayArtifact | null>(null);
-  const OVERLAY_FPS = 30;
+  const [refFastSamArtifact, setRefFastSamArtifact] = useState<OverlayArtifact | null>(null);
+  const [userFastSamArtifact, setUserFastSamArtifact] = useState<OverlayArtifact | null>(null);
+  // Lower FPS dramatically reduces precompute time (model + WebP encode).
+  const OVERLAY_FPS = 12;
   const missingPrecomputed =
     overlayMode === "precomputed" &&
-    ((showYolo && (!refYoloArtifact || !userYoloArtifact)) || (showMoveNet && (!refPoseArtifact || !userPoseArtifact)));
+    ((showYolo && (!refYoloArtifact || !userYoloArtifact)) ||
+      (showMoveNet && (!refPoseArtifact || !userPoseArtifact)) ||
+      (showFastSam && (!refFastSamArtifact || !userFastSamArtifact)));
 
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
     const variant = overlayMethod;
-    const [rp, ry, up, uy] = await Promise.all([
+    const [rp, ry, up, uy, rf, uf] = await Promise.all([
       getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "reference", fps: OVERLAY_FPS, variant })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS, variant: segProvider })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "practice", fps: OVERLAY_FPS, variant })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS, variant: segProvider })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "fastsam", side: "reference", fps: OVERLAY_FPS, variant: "wasm" })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "fastsam", side: "practice", fps: OVERLAY_FPS, variant: "wasm" })),
     ]);
     setRefPoseArtifact(rp);
     setRefYoloArtifact(ry);
     setUserPoseArtifact(up);
     setUserYoloArtifact(uy);
-  }, [overlayMethod, sessionId]);
+    setRefFastSamArtifact(rf);
+    setUserFastSamArtifact(uf);
+  }, [overlayMethod, segProvider, sessionId]);
 
   useEffect(() => {
     void loadCachedOverlays();
   }, [loadCachedOverlays]);
 
   const generateOverlays = useCallback(
-    async (which: "movenet" | "yolo") => {
+    async (which: "movenet" | "yolo" | "fastsam") => {
       if (!sessionId || !activeReferenceVideoUrl || !activeUserVideoUrl) return;
       if (overlayBusy) return;
       setOverlayBusy(true);
@@ -183,50 +198,126 @@ export function EbsViewer(props: EbsViewerProps) {
       try {
         if (which === "yolo") {
           setOverlayStatus("Generating YOLO overlays…");
-          // Generate sequentially because onnxruntime-web sessions cannot run concurrently.
-          const refFrames = await generateYoloOverlayFrames({
-            videoUrl: activeReferenceVideoUrl,
-            color: "#38bdf8",
-            onProgress: (c, t) => setOverlayStatus(`YOLO (reference) ${c}/${t}`),
-          });
-          const userFrames = await generateYoloOverlayFrames({
-            videoUrl: activeUserVideoUrl,
-            color: "#22c55e",
-            onProgress: (c, t) => setOverlayStatus(`YOLO (user) ${c}/${t}`),
-          });
+          const processorUrl =
+            (process.env.NEXT_PUBLIC_EBS_PROCESSOR_URL as string | undefined) ?? "http://127.0.0.1:8787/api/process";
+          const baseUrl = processorUrl.replace(/\/api\/process\s*$/, "");
 
-          const refArtifact: OverlayArtifact = {
-            version: 1,
-            type: "yolo",
-            side: "reference",
-            fps: OVERLAY_FPS,
-            width: refVideo.current?.videoWidth || 640,
-            height: refVideo.current?.videoHeight || 480,
-            frameCount: refFrames.length,
-            createdAt: new Date().toISOString(),
-            frames: refFrames,
+          const generateViaPython = async (side: "reference" | "practice", color: string) => {
+            const file = await getSessionVideo(sessionId, side);
+            if (!file) throw new Error(`Missing ${side} video for this session`);
+
+            const form = new FormData();
+            form.append("video", file, file.name);
+            form.append("color", color);
+            form.append("fps", String(OVERLAY_FPS));
+            form.append("session_id", sessionId);
+            form.append("side", side);
+            form.append("backend", segProvider);
+
+            const res = await fetch(`${baseUrl}/api/overlay/yolo`, { method: "POST", body: form });
+            if (!res.ok) {
+              const txt = await res.text().catch(() => "");
+              throw new Error(`YOLO overlay service error (${res.status}): ${txt || res.statusText}`);
+            }
+            const blob = await res.blob();
+            return { blob, mime: res.headers.get("content-type") || "video/webm" };
           };
-          const userArtifact: OverlayArtifact = {
-            version: 1,
-            type: "yolo",
-            side: "practice",
-            fps: OVERLAY_FPS,
-            width: userVideo.current?.videoWidth || 640,
-            height: userVideo.current?.videoHeight || 480,
-            frameCount: userFrames.length,
-            createdAt: new Date().toISOString(),
-            frames: userFrames,
-          };
+
+          let refArtifact: OverlayArtifact;
+          let userArtifact: OverlayArtifact;
+
+          if (segGenerator === "python") {
+            setOverlayStatus("YOLO (reference) Python…");
+            const ref = await generateViaPython("reference", "#38bdf8");
+            setOverlayStatus("YOLO (user) Python…");
+            const user = await generateViaPython("practice", "#22c55e");
+
+            refArtifact = {
+              version: 1,
+              type: "yolo",
+              side: "reference",
+              fps: OVERLAY_FPS,
+              width: refVideo.current?.videoWidth || 640,
+              height: refVideo.current?.videoHeight || 480,
+              frameCount: 0,
+              createdAt: new Date().toISOString(),
+              video: ref.blob,
+              videoMime: ref.mime,
+              meta: { generator: "python", provider: segProvider },
+            };
+            userArtifact = {
+              version: 1,
+              type: "yolo",
+              side: "practice",
+              fps: OVERLAY_FPS,
+              width: userVideo.current?.videoWidth || 640,
+              height: userVideo.current?.videoHeight || 480,
+              frameCount: 0,
+              createdAt: new Date().toISOString(),
+              video: user.blob,
+              videoMime: user.mime,
+              meta: { generator: "python", provider: segProvider },
+            };
+          } else {
+            // Browser fallback (slow).
+            const refFrames = await generateYoloOverlayFrames({
+              videoUrl: activeReferenceVideoUrl,
+              color: "#38bdf8",
+              fps: OVERLAY_FPS,
+              inferFps: Math.max(4, Math.round(OVERLAY_FPS / 2)),
+              provider: segProvider,
+              onProgress: (c, t) => setOverlayStatus(`YOLO (reference) ${c}/${t}`),
+            });
+            const userFrames = await generateYoloOverlayFrames({
+              videoUrl: activeUserVideoUrl,
+              color: "#22c55e",
+              fps: OVERLAY_FPS,
+              inferFps: Math.max(4, Math.round(OVERLAY_FPS / 2)),
+              provider: segProvider,
+              onProgress: (c, t) => setOverlayStatus(`YOLO (user) ${c}/${t}`),
+            });
+
+            refArtifact = {
+              version: 1,
+              type: "yolo",
+              side: "reference",
+              fps: OVERLAY_FPS,
+              width: refVideo.current?.videoWidth || 640,
+              height: refVideo.current?.videoHeight || 480,
+              frameCount: refFrames.length,
+              createdAt: new Date().toISOString(),
+              frames: refFrames,
+              meta: { generator: "browser", provider: segProvider },
+            };
+            userArtifact = {
+              version: 1,
+              type: "yolo",
+              side: "practice",
+              fps: OVERLAY_FPS,
+              width: userVideo.current?.videoWidth || 640,
+              height: userVideo.current?.videoHeight || 480,
+              frameCount: userFrames.length,
+              createdAt: new Date().toISOString(),
+              frames: userFrames,
+              meta: { generator: "browser", provider: segProvider },
+            };
+          }
 
           await Promise.all([
-            storeSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS }), refArtifact),
-            storeSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS }), userArtifact),
+            storeSessionOverlay(
+              buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS, variant: segProvider }),
+              refArtifact,
+            ),
+            storeSessionOverlay(
+              buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS, variant: segProvider }),
+              userArtifact,
+            ),
           ]);
 
           setRefYoloArtifact(refArtifact);
           setUserYoloArtifact(userArtifact);
           setOverlayStatus("YOLO overlays ready.");
-        } else {
+        } else if (which === "movenet") {
           setOverlayStatus("Generating MoveNet overlays…");
           const variant = overlayMethod;
           // Generate sequentially to avoid contention and keep UI progress readable.
@@ -282,6 +373,56 @@ export function EbsViewer(props: EbsViewerProps) {
           setRefPoseArtifact(refArtifact);
           setUserPoseArtifact(userArtifact);
           setOverlayStatus("MoveNet overlays ready.");
+        } else {
+          setOverlayStatus("Generating FastSAM overlays…");
+          const ref = await generateFastSamOverlayFrames({
+            videoUrl: activeReferenceVideoUrl,
+            color: "#f97316",
+            onProgress: (c, t) => setOverlayStatus(`FastSAM (reference) ${c}/${t}`),
+          });
+          const user = await generateFastSamOverlayFrames({
+            videoUrl: activeUserVideoUrl,
+            color: "#fb923c",
+            onProgress: (c, t) => setOverlayStatus(`FastSAM (user) ${c}/${t}`),
+          });
+
+          const refArtifact: OverlayArtifact = {
+            version: 1,
+            type: "fastsam",
+            side: "reference",
+            fps: ref.fps,
+            width: ref.width,
+            height: ref.height,
+            frameCount: ref.frames.length,
+            createdAt: new Date().toISOString(),
+            frames: ref.frames,
+          };
+          const userArtifact: OverlayArtifact = {
+            version: 1,
+            type: "fastsam",
+            side: "practice",
+            fps: user.fps,
+            width: user.width,
+            height: user.height,
+            frameCount: user.frames.length,
+            createdAt: new Date().toISOString(),
+            frames: user.frames,
+          };
+
+          await Promise.all([
+            storeSessionOverlay(
+              buildOverlayKey({ sessionId, type: "fastsam", side: "reference", fps: OVERLAY_FPS, variant: "wasm" }),
+              refArtifact,
+            ),
+            storeSessionOverlay(
+              buildOverlayKey({ sessionId, type: "fastsam", side: "practice", fps: OVERLAY_FPS, variant: "wasm" }),
+              userArtifact,
+            ),
+          ]);
+
+          setRefFastSamArtifact(refArtifact);
+          setUserFastSamArtifact(userArtifact);
+          setOverlayStatus("FastSAM overlays ready.");
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Overlay generation failed.";
@@ -577,6 +718,24 @@ export function EbsViewer(props: EbsViewerProps) {
                   <option value="precomputed">Precomputed</option>
                   <option value="live">Live</option>
                 </select>
+                <select
+                  value={segGenerator}
+                  onChange={(e) => setSegGenerator(e.target.value as "python" | "browser")}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                  aria-label="Overlay generator"
+                >
+                  <option value="python">Python (fast)</option>
+                  <option value="browser">Browser (slow)</option>
+                </select>
+                <select
+                  value={segProvider}
+                  onChange={(e) => setSegProvider(e.target.value as YoloExecutionProvider)}
+                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                  aria-label="Segmentation backend"
+                >
+                  <option value="wasm">CPU (WASM)</option>
+                  <option value="webgpu">WebGPU (experimental)</option>
+                </select>
                 <button
                   onClick={() => setShowMoveNet((v) => !v)}
                   className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
@@ -592,6 +751,14 @@ export function EbsViewer(props: EbsViewerProps) {
                   }`}
                 >
                   YOLO
+                </button>
+                <button
+                  onClick={() => setShowFastSam((v) => !v)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                    showFastSam ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                  }`}
+                >
+                  FastSAM
                 </button>
                 <select
                   value={overlayMethod}
@@ -619,6 +786,13 @@ export function EbsViewer(props: EbsViewerProps) {
                   className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
                 >
                   Gen YOLO
+                </button>
+                <button
+                  onClick={() => void generateOverlays("fastsam")}
+                  disabled={overlayBusy || !showFastSam}
+                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                >
+                  Gen FastSAM
                 </button>
               </div>
             ) : null}
@@ -660,15 +834,30 @@ export function EbsViewer(props: EbsViewerProps) {
                 {sessionMode && showYolo ? (
                   overlayMode === "precomputed" ? (
                     refYoloArtifact ? (
-                      <PrecomputedFrameOverlay
-                        videoRef={refVideo}
-                        frames={refYoloArtifact.frames}
-                        fps={refYoloArtifact.fps}
-                      />
+                      refYoloArtifact.video ? (
+                        <PrecomputedVideoOverlay
+                          videoRef={refVideo}
+                          overlayBlob={refYoloArtifact.video}
+                          mimeType={refYoloArtifact.videoMime}
+                        />
+                      ) : refYoloArtifact.frames ? (
+                        <PrecomputedFrameOverlay videoRef={refVideo} frames={refYoloArtifact.frames} fps={refYoloArtifact.fps} />
+                      ) : null
                     ) : null
                   ) : (
                     <SegmentOverlay videoRef={refVideo} color="#38bdf8" />
                   )
+                ) : null}
+                {sessionMode && showFastSam ? (
+                  overlayMode === "precomputed" ? (
+                    refFastSamArtifact ? (
+                      <PrecomputedFrameOverlay
+                        videoRef={refVideo}
+                        frames={refFastSamArtifact.frames}
+                        fps={refFastSamArtifact.fps}
+                      />
+                    ) : null
+                  ) : null
                 ) : null}
                 {sessionMode && showMoveNet ? (
                   overlayMode === "precomputed" ? (
@@ -703,15 +892,30 @@ export function EbsViewer(props: EbsViewerProps) {
                 {sessionMode && showYolo ? (
                   overlayMode === "precomputed" ? (
                     userYoloArtifact ? (
-                      <PrecomputedFrameOverlay
-                        videoRef={userVideo}
-                        frames={userYoloArtifact.frames}
-                        fps={userYoloArtifact.fps}
-                      />
+                      userYoloArtifact.video ? (
+                        <PrecomputedVideoOverlay
+                          videoRef={userVideo}
+                          overlayBlob={userYoloArtifact.video}
+                          mimeType={userYoloArtifact.videoMime}
+                        />
+                      ) : userYoloArtifact.frames ? (
+                        <PrecomputedFrameOverlay videoRef={userVideo} frames={userYoloArtifact.frames} fps={userYoloArtifact.fps} />
+                      ) : null
                     ) : null
                   ) : (
                     <SegmentOverlay videoRef={userVideo} color="#22c55e" />
                   )
+                ) : null}
+                {sessionMode && showFastSam ? (
+                  overlayMode === "precomputed" ? (
+                    userFastSamArtifact ? (
+                      <PrecomputedFrameOverlay
+                        videoRef={userVideo}
+                        frames={userFastSamArtifact.frames}
+                        fps={userFastSamArtifact.fps}
+                      />
+                    ) : null
+                  ) : null
                 ) : null}
                 {sessionMode && showMoveNet ? (
                   overlayMode === "precomputed" ? (
