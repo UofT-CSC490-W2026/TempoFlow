@@ -19,6 +19,7 @@ import cgi
 import io
 import json
 import logging
+import math
 import subprocess
 import tempfile
 from http.server import HTTPServer, SimpleHTTPRequestHandler
@@ -40,6 +41,11 @@ logging.basicConfig(
 logger = logging.getLogger("ebs-server")
 
 SERVE_DIR = Path(__file__).resolve().parent
+
+# Store latest results in-memory keyed by session_id.
+# This allows the frontend to recover if the original long POST hangs client-side.
+SESSION_STATUS: dict[str, str] = {}
+SESSION_RESULTS: dict[str, dict] = {}
 
 
 def probe_video_metadata(video_path: str) -> dict:
@@ -98,13 +104,32 @@ class EBSHandler(SimpleHTTPRequestHandler):
         else:
             self.send_error(404, "Not found")
 
+    def do_OPTIONS(self):
+        if self.path.startswith("/api/"):
+            self.send_response(204)
+            self.end_headers()
+            return
+        self.send_error(404, "Not found")
+
     def do_GET(self):
         # Browsers auto-request /favicon.ico. Return 204 to avoid noisy 404s.
         if self.path == "/favicon.ico":
             self.send_response(204)
             self.end_headers()
             return
+        if self.path.startswith("/api/status"):
+            self._handle_status()
+            return
+        if self.path.startswith("/api/result"):
+            self._handle_result()
+            return
         super().do_GET()
+
+    def end_headers(self):
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS, HEAD")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        super().end_headers()
 
     def _handle_process(self):
         """Accept ref_video + user_video, run EBS, return JSON."""
@@ -125,12 +150,19 @@ class EBSHandler(SimpleHTTPRequestHandler):
 
             ref_field = form["ref_video"]
             user_field = form["user_video"]
+            session_id = None
+            try:
+                session_id = form.getfirst("session_id")
+            except Exception:
+                session_id = None
+            session_id = (session_id or "").strip() or "default"
 
             if not ref_field.file or not user_field.file:
                 self._json_error(400, "Both ref_video and user_video are required")
                 return
 
-            logger.info("Received video files — running EBS pipeline")
+            logger.info("Received video files — running EBS pipeline (session=%s)", session_id)
+            SESSION_STATUS[session_id] = "processing"
 
             # Write uploads to temp files
             ref_tmp = self._save_upload(ref_field, "ref")
@@ -167,7 +199,9 @@ class EBSHandler(SimpleHTTPRequestHandler):
                     logger.warning("Video probe failed: %s", probe_exc)
 
                 # Return JSON
-                self._json_response(200, artifact)
+                SESSION_RESULTS[session_id] = self._sanitize_json(artifact)
+                SESSION_STATUS[session_id] = "done"
+                self._json_response(200, SESSION_RESULTS[session_id])
                 logger.info(
                     "Done — %d segments (%s)",
                     len(artifact["segments"]),
@@ -189,7 +223,55 @@ class EBSHandler(SimpleHTTPRequestHandler):
 
         except Exception as exc:
             logger.exception("Pipeline error")
+            if "session_id" in locals():
+                SESSION_STATUS[session_id] = "error"
             self._json_error(500, str(exc))
+
+    def _handle_status(self):
+        # /api/status?session=<id>
+        try:
+            session_id = self._get_query_param("session") or "default"
+            status = SESSION_STATUS.get(session_id, "idle")
+            has_result = session_id in SESSION_RESULTS
+            segment_count = None
+            if has_result:
+                try:
+                    segment_count = len(SESSION_RESULTS[session_id].get("segments") or [])
+                except Exception:
+                    segment_count = None
+            self._json_response(
+                200,
+                {
+                    "session": session_id,
+                    "status": status,
+                    "has_result": has_result,
+                    "segment_count": segment_count,
+                },
+            )
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _handle_result(self):
+        # /api/result?session=<id>
+        try:
+            session_id = self._get_query_param("session") or "default"
+            if session_id not in SESSION_RESULTS:
+                self._json_error(404, "No result for this session yet.")
+                return
+            self._json_response(200, SESSION_RESULTS[session_id])
+        except Exception as exc:
+            self._json_error(500, str(exc))
+
+    def _get_query_param(self, key: str) -> str | None:
+        # Avoid importing urllib at top-level; tiny helper here.
+        from urllib.parse import parse_qs, urlparse
+
+        parsed = urlparse(self.path)
+        params = parse_qs(parsed.query or "")
+        values = params.get(key)
+        if not values:
+            return None
+        return values[0]
 
     # ----- Helpers ---------------------------------------------------------
 
@@ -205,7 +287,7 @@ class EBSHandler(SimpleHTTPRequestHandler):
         return tmp.name
 
     def _json_response(self, code, data):
-        body = json.dumps(data, indent=2).encode("utf-8")
+        body = json.dumps(self._sanitize_json(data), indent=2, allow_nan=False).encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -214,6 +296,17 @@ class EBSHandler(SimpleHTTPRequestHandler):
 
     def _json_error(self, code, message):
         self._json_response(code, {"error": message})
+
+    @staticmethod
+    def _sanitize_json(obj):
+        """Recursively replace NaN/Infinity with None so output is valid JSON."""
+        if isinstance(obj, float):
+            return obj if math.isfinite(obj) else None
+        if isinstance(obj, dict):
+            return {k: EBSHandler._sanitize_json(v) for k, v in obj.items()}
+        if isinstance(obj, (list, tuple)):
+            return [EBSHandler._sanitize_json(v) for v in obj]
+        return obj
 
     # Suppress noisy access logs for static files
     def log_message(self, fmt, *args):
