@@ -10,7 +10,6 @@ from src.alignment_and_segmentation.utils import (
 )
 from src.alignment_and_segmentation.schemas import AlignmentResult, TimeRange, Segment, AlignmentAndSegmentationResult
 import librosa
-import numpy as np
 
 router = APIRouter()
 

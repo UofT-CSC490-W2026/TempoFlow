@@ -15,8 +15,10 @@ def mock_upload_file():
     """Create a mock UploadFile object."""
     mock_file = MagicMock(spec=UploadFile)
     mock_file.file = MagicMock()
-    mock_file.filename = "test.mp4"
-    return mock_file
+    # Mocking soundfile.info to return a valid samplerate
+    with patch("soundfile.info") as mock_info:
+        mock_info.return_value.samplerate = 22050
+        yield mock_file
 
 def test_load_audio_files_same_sr(mock_upload_file):
     """Test loading files with identical sample rates."""
@@ -38,53 +40,59 @@ def test_load_audio_files_same_sr(mock_upload_file):
 def test_load_audio_files_resample(mock_upload_file):
     """Test loading files where resampling is required."""
     with patch("librosa.load") as mock_load, \
-         patch("librosa.resample") as mock_resample:
+         patch("librosa.resample") as mock_resample, \
+         patch("soundfile.info") as mock_sf_info:
         
         # File A: 44100, File B: 22050
         # Should pick 22050 as target
-        mock_load.side_effect = [
-            (np.zeros(200), 44100), 
-            (np.zeros(100), 22050)
+        mock_sf_info.side_effect = [
+            MagicMock(samplerate=44100),
+            MagicMock(samplerate=22050)
         ]
-        
-        # Mock resample return
-        mock_resample.return_value = np.zeros(100)
+
+        # librosa.load shouldn't need side_effect return values for logic check if it's just returning audio
+        # but let's provide dummy data
+        mock_load.return_value = (np.zeros(100), 22050)
         
         y_a, y_b, sr = load_audio_files(mock_upload_file, mock_upload_file)
         
         assert sr == 22050
-        # Only A needs resampling (44100 -> 22050)
-        mock_resample.assert_called_once()
-        # Verify call args
-        args, kwargs = mock_resample.call_args
-        assert kwargs['orig_sr'] == 44100
-        assert kwargs['target_sr'] == 22050
+        
+        # In the optimized implementation, librosa.load is called with sr=target_sr
+        # for ALL files, so librosa handles the resampling.
+        # We expect librosa.load to be called twice, both with sr=22050
+        assert mock_load.call_count == 2
+        
+        # Check call arguments for both calls
+        # Since it runs in threads, the order might vary, but both should use sr=22050
+        call_args_list = mock_load.call_args_list
+        for call in call_args_list:
+             _, kwargs = call
+             assert kwargs['sr'] == 22050
 
 def test_load_audio_files_resample_file_b(mock_upload_file):
     """Test loading files where File B requires resampling instead of File A."""
     with patch("librosa.load") as mock_load, \
-         patch("librosa.resample") as mock_resample:
+         patch("librosa.resample") as mock_resample, \
+         patch("soundfile.info") as mock_sf_info:
         
         # File A: 22050, File B: 44100
         # Should pick 22050 as target
-        mock_load.side_effect = [
-            (np.zeros(100), 22050), 
-            (np.zeros(200), 44100)
+        mock_sf_info.side_effect = [
+            MagicMock(samplerate=22050),
+            MagicMock(samplerate=44100)
         ]
-        
-        # Mock resample return
-        mock_resample.return_value = np.zeros(100)
+
+        mock_load.return_value = (np.zeros(100), 22050)
         
         y_a, y_b, sr = load_audio_files(mock_upload_file, mock_upload_file)
         
         assert sr == 22050
-        # Only B needs resampling (44100 -> 22050)
-        mock_resample.assert_called_once()
         
-        # Verify call args
-        args, kwargs = mock_resample.call_args
-        assert kwargs['orig_sr'] == 44100
-        assert kwargs['target_sr'] == 22050
+        assert mock_load.call_count == 2
+        for call in mock_load.call_args_list:
+             _, kwargs = call
+             assert kwargs['sr'] == 22050
 
 def test_check_less_than_one_minute_valid():
     sr = 22050

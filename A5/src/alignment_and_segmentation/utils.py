@@ -3,45 +3,50 @@ import numpy as np
 import librosa
 from fastapi import UploadFile
 
+from typing import BinaryIO, Tuple, Union
+import concurrent
+import numpy as np
+import librosa
+from fastapi import UploadFile
+import soundfile as sf
+
 def load_audio_files(
-    file_a: Union[BinaryIO, UploadFile], 
-    file_b: Union[BinaryIO, UploadFile]
+    file_a: Union[str, BinaryIO, UploadFile], 
+    file_b: Union[str, BinaryIO, UploadFile]
 ) -> Tuple[np.ndarray, np.ndarray, int]:
     """
-    Load two audio files and normalize their audio tracks to a shared sample rate.
-    
-    Args:
-        file_a: File object or UploadFile
-        file_b: File object or UploadFile
-        
-    Returns:
-        y_a:  Audio array for file A
-        y_b:  Audio array for file B
-        sr:   Shared sample rate (minimum of the two source rates)
+    Optimized loading of two audio files. 
+    Accepts file paths (str), file-like objects or FastAPI UploadFiles.
     """
-    # If the input is an UploadFile, access its underlying file-like object
-    f_a = file_a.file if isinstance(file_a, UploadFile) else file_a
-    f_b = file_b.file if isinstance(file_b, UploadFile) else file_b
+    # Extract the underlying file-like object if it's an UploadFile
+    f_a = file_a.file if hasattr(file_a, 'file') else file_a
+    f_b = file_b.file if hasattr(file_b, 'file') else file_b
 
-    # load returns (audio_time_series, sampling_rate)
-    y_a_raw, sr_a = librosa.load(f_a, sr=None)
-    y_b_raw, sr_b = librosa.load(f_b, sr=None)
+    # Read the sample rates from the headers
+    sr_a = sf.info(f_a).samplerate
+    sr_b = sf.info(f_b).samplerate
+    
+    # Reset the file pointers since we are strictly dealing with streams
+    if hasattr(f_a, 'seek'):
+        f_a.seek(0)
+    if hasattr(f_b, 'seek'):
+        f_b.seek(0)
 
-    # Use the minimum sample rate to avoid upsampling artifacts if possible
-    sr = min(sr_a, sr_b)
+    target_sr = min(sr_a, sr_b)
 
-    # Resample if necessary
-    if sr_a != sr:
-        y_a = librosa.resample(y_a_raw, orig_sr=sr_a, target_sr=sr)
-    else:
-        y_a = y_a_raw
+    def load_and_resample(file_obj):
+        # Allow librosa to handle resampling during load
+        y, _ = librosa.load(file_obj, sr=target_sr)
+        return y
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=2) as executor:
+        future_a = executor.submit(load_and_resample, f_a)
+        future_b = executor.submit(load_and_resample, f_b)
         
-    if sr_b != sr:
-        y_b = librosa.resample(y_b_raw, orig_sr=sr_b, target_sr=sr)
-    else:
-        y_b = y_b_raw
+        y_a = future_a.result()
+        y_b = future_b.result()
 
-    return y_a, y_b, sr
+    return y_a, y_b, target_sr
 
 def check_less_than_one_minute(y: np.ndarray, sr: int) -> None:
     """
@@ -119,5 +124,3 @@ def map_segments_to_clips(
         segments.append((float(start_final), float(end_final)))
         
     return segments
-
-

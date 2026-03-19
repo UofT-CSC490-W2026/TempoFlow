@@ -254,7 +254,14 @@ def test_alignment_algorithm_accuracy():
 
     # Calculate averages safely
     avg_allignment_error = np.mean(alignment_errors) if alignment_errors else 0
-    num_allignment_within_range = sum(1 for e in alignment_errors if e <= MAX_ALIGNMENT_ERROR)
+    
+    if len(alignment_errors) > 0:
+        num_allignment_within_range = sum(1 for e in alignment_errors if e <= MAX_ALIGNMENT_ERROR)
+        pct_within_range = num_allignment_within_range / len(alignment_errors)
+    else:
+        num_allignment_within_range = 0
+        pct_within_range = 0.0
+
     avg_start_error_a = np.mean(start_error) if start_error else 0
     avg_end_error_a = np.mean(end_error) if end_error else 0
 
@@ -262,8 +269,10 @@ def test_alignment_algorithm_accuracy():
     if avg_allignment_error > MAX_ALIGNMENT_ERROR:
         failure_reasons.append(f"Average alignment error {avg_allignment_error:.5f}s > limit {MAX_ALIGNMENT_ERROR:.5f}s")
     
-    if num_allignment_within_range / len(alignment_errors) < MIN_ALIGNMENT_SUCCESS_RATE:
-        failure_reasons.append(f"Percentage of alignments within error range {num_allignment_within_range / len(alignment_errors):.5f} < limit {MIN_ALIGNMENT_SUCCESS_RATE:.5f}")
+    if len(alignment_errors) == 0:
+        failure_reasons.append("No successful alignments were performed (all tests failed or returned no alignment data).")
+    elif pct_within_range < MIN_ALIGNMENT_SUCCESS_RATE:
+        failure_reasons.append(f"Percentage of alignments within error range {pct_within_range:.5f} < limit {MIN_ALIGNMENT_SUCCESS_RATE:.5f}")
     
     if avg_start_error_a > MAX_START_PRED_ERROR:
         failure_reasons.append(f"Avg start prediction error {avg_start_error_a:.5f}s > limit {MAX_START_PRED_ERROR:.5f}s")

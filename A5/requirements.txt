@@ -7,3 +7,5 @@ soundfile
 scipy
 pytest
 pytest-cov
+matplotlib
+cProfile

@@ -30,13 +30,20 @@ def smith_waterman(S: np.ndarray, match_score_bias: float = 0.5) -> np.ndarray:
     T_a, T_b = S.shape
     H = np.zeros((T_a + 1, T_b + 1), dtype=np.float32)
 
+    # Precompute the scoring matrix to avoid doing this in the loop
+    M = S - match_score_bias
+
     # Vectorized implementation could be faster, but keeping iteratively for clarity/correctness
     # as SW has data dependencies. Numba could speed this up if needed.
-    for i in range(1, T_a + 1):
+    if T_a <= T_b:
+        for i in range(1, T_a + 1):
+            # Update entire row i at once based on row i-1
+            H[i, 1:] = np.maximum(0, H[i-1, :-1] + M[i-1, :])
+    else:
         for j in range(1, T_b + 1):
-            match = H[i-1, j-1] + (S[i-1, j-1] - match_score_bias)
-            H[i, j] = max(0, match)
-
+            # Update entire column j at once based on col j-1
+            H[1:, j] = np.maximum(0, H[:-1, j-1] + M[:, j-1])
+            
     return H
 
 def traceback(H: np.ndarray) -> tuple[int, int, int, int]:
