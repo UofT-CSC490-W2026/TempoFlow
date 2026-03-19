@@ -4,13 +4,14 @@ import { useState } from 'react';
 import Link from 'next/link';
 
 import { deleteSessionMetadata, getSessions, TempoFlowSession } from '../../lib/sessionStorage';
+import { deleteSessionEbs } from '../../lib/ebsStorage';
 import { deleteSessionVideos } from '../../lib/videoStorage';
 
 export default function DashboardPage() {
   const [sessions, setSessions] = useState<TempoFlowSession[]>(() => getSessions());
 
   const handleDelete = async (sessionId: string) => {
-    await deleteSessionVideos(sessionId);
+    await Promise.all([deleteSessionVideos(sessionId), deleteSessionEbs(sessionId)]);
     deleteSessionMetadata(sessionId);
     setSessions(getSessions());
   };
@@ -31,19 +32,19 @@ export default function DashboardPage() {
           <Link href="/" className="text-2xl font-bold text-gray-900">
             TempoFlow
           </Link>
-          <Link 
-            href="/upload"
-            className="px-4 py-2 bg-gray-900 text-white rounded-full text-sm font-medium hover:bg-gray-800 transition-all active:scale-95"
-          >
-            Upload
-          </Link>
+            <Link
+              href="/upload"
+              className="px-4 py-2 bg-gray-900 text-white rounded-full text-sm font-medium hover:bg-gray-800 transition-all active:scale-95"
+            >
+              New Session
+            </Link>
         </div>
       </div>
 
       <div className="px-6 py-24 max-w-4xl mx-auto">
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">Your Dances</h1>
-          <p className="text-gray-600">Track local sessions, revisit analysis, and keep iterating quickly.</p>
+          <p className="text-gray-600">Track local sessions, reopen EBS practice views, and keep iterating quickly.</p>
         </div>
 
         {sessions.length > 0 ? (
@@ -76,10 +77,12 @@ export default function DashboardPage() {
                   </div>
 
                   <div className="flex flex-wrap items-center gap-3">
-                    {session.status === 'analyzed' && session.analysis ? (
+                    {session.ebsStatus === 'ready' && session.ebsMeta ? (
                       <div className="rounded-2xl bg-white px-4 py-3 text-right shadow-sm">
-                        <div className="text-2xl font-bold text-gray-900">{session.analysis.scores.overall}</div>
-                        <div className="text-xs text-gray-500">Overall score</div>
+                        <div className="text-lg font-bold text-gray-900">{session.ebsMeta.segmentCount} segments</div>
+                        <div className="text-xs text-gray-500">
+                          {session.ebsMeta.estimatedBpm ? `${Math.round(session.ebsMeta.estimatedBpm)} BPM` : 'EBS ready'}
+                        </div>
                       </div>
                     ) : session.status === 'error' ? (
                       <div className="rounded-full bg-red-100 px-3 py-1 text-xs font-medium text-red-700">
@@ -95,7 +98,7 @@ export default function DashboardPage() {
                       href={`/analysis?session=${session.id}`}
                       className="rounded-full bg-gray-900 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-gray-800"
                     >
-                      Open
+                      Open Session
                     </Link>
                     <button
                       onClick={() => handleDelete(session.id)}

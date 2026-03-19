@@ -281,8 +281,13 @@ export default function UploadPage() {
       await uploadToAwsIfNeeded(referenceFile, 'reference');
       await uploadToAwsIfNeeded(practiceFile, 'practice');
 
-      updateSession(session.id, { status: 'analyzing' });
-      setMessage('Session ready. Opening analysis...');
+      updateSession(session.id, {
+        status: 'analyzing',
+        ebsStatus: 'processing',
+        ebsErrorMessage: undefined,
+        errorMessage: undefined,
+      });
+      setMessage('Session ready. Opening EBS session...');
       router.push(`/analysis?session=${session.id}`);
     } catch (error: unknown) {
       const typedError = error instanceof Error ? error : new Error('An unexpected error occurred.');
@@ -305,9 +310,9 @@ export default function UploadPage() {
       onDragOver={(e) => { e.preventDefault(); setDraggingType(type); }}
       onDragLeave={() => setDraggingType(null)}
       className={`
-        relative border-2 border-dashed rounded-3xl p-8 text-center transition-all
-        ${draggingType === type ? 'border-purple-500 bg-purple-50' : 'border-gray-200 hover:border-gray-300'}
-        ${file ? 'bg-gray-50 border-solid border-purple-200' : ''}
+        relative border-2 border-dashed rounded-[28px] p-8 text-center transition-all bg-sky-50/60
+        ${draggingType === type ? 'border-sky-500 bg-sky-100' : 'border-sky-100 hover:border-sky-300'}
+        ${file ? 'bg-white border-solid border-sky-300 shadow-sm' : ''}
       `}
     >
       <input
@@ -320,24 +325,25 @@ export default function UploadPage() {
       
       {!file ? (
         <div className="space-y-3">
-          <div className="w-12 h-12 mx-auto bg-gray-100 rounded-2xl flex items-center justify-center">
-            <svg className="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="w-12 h-12 mx-auto bg-white rounded-2xl flex items-center justify-center border border-sky-100">
+            <svg className="w-6 h-6 text-sky-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" />
             </svg>
           </div>
           <div>
-            <p className="text-base font-medium text-gray-900">Add {type} video</p>
+            <p className="text-base font-medium text-slate-900">Add {type} video</p>
+            <p className="mt-1 text-xs text-slate-500">Drop file or click to browse</p>
           </div>
         </div>
       ) : (
         <div className="space-y-3">
-          <div className="w-12 h-12 mx-auto bg-purple-100 rounded-2xl flex items-center justify-center">
-            <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="w-12 h-12 mx-auto bg-sky-100 rounded-2xl flex items-center justify-center">
+            <svg className="w-6 h-6 text-sky-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
           <div>
-            <p className="text-sm font-medium text-gray-900 truncate px-2">{file.name}</p>
+            <p className="text-sm font-medium text-slate-900 truncate px-2">{file.name}</p>
           </div>
         </div>
       )}
@@ -345,91 +351,98 @@ export default function UploadPage() {
   );
 
   return (
-    <div className="min-h-screen bg-white">
-      {/* Header */}
-      <div className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-md border-b border-gray-100 z-10">
+    <div className="min-h-screen bg-sky-50">
+      <div className="fixed top-0 left-0 right-0 bg-white/85 backdrop-blur-md border-b border-sky-100 z-10">
         <div className="flex items-center justify-between px-6 py-4">
           <Link href="/" className="text-2xl font-bold text-gray-900">
             TempoFlow
           </Link>
+          <Link
+            href="/dashboard"
+            className="px-4 py-2 bg-sky-50 text-sky-700 rounded-full text-sm font-medium hover:bg-sky-100 transition-all"
+          >
+            Dashboard
+          </Link>
         </div>
       </div>
 
-      {/* Main Content */}
       <div className="flex flex-col items-center justify-center min-h-screen px-6 py-24">
-        <div className="w-full max-w-2xl space-y-8">
-          {/* Title */}
+        <div className="w-full max-w-4xl space-y-8">
           <div className="text-center">
-            <h1 className="text-4xl font-bold text-gray-900 mb-2">Sync Your Session</h1>
-            <p className="text-gray-600">Upload the reference and your practice video</p>
+            <p className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-600">TempoFlow EBS Session</p>
+            <h1 className="mt-3 text-4xl font-bold text-slate-900 mb-2">Start with two videos</h1>
+            <p className="text-slate-600">Upload the reference and your practice clip. We will open the beat-synced EBS session view automatically.</p>
             <div className="mt-4 inline-flex flex-wrap items-center justify-center gap-2 text-xs font-medium">
-              <span className="rounded-full bg-gray-100 px-3 py-1 text-gray-700">
+              <span className="rounded-full bg-white px-3 py-1 text-slate-700 border border-sky-100">
                 Storage: {storageMode === 'aws' ? 'AWS + local backup' : 'Local-only'}
               </span>
-              <span className="rounded-full bg-purple-50 px-3 py-1 text-purple-700">
+              <span className="rounded-full bg-sky-50 px-3 py-1 text-sky-700 border border-sky-100">
                 Analysis: {analysisMode === 'api' ? 'Local + API assist' : 'Local'}
               </span>
             </div>
           </div>
 
-          <div className="rounded-3xl border border-gray-200 bg-gray-50 px-5 py-4 text-sm text-gray-600">
+          <div className="rounded-[32px] border border-sky-100 bg-white px-6 py-5 text-sm text-slate-600 shadow-sm">
             {storageMode === 'aws'
               ? 'Videos are saved on this device first, then uploaded to cloud storage.'
-              : 'Videos stay on this device for now so you can iterate locally without AWS setup.'}
+              : 'Videos stay on this device for now so you can iterate locally without AWS setup. EBS processing happens after upload in the session page.'}
           </div>
 
-          {/* Dual Upload Area */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          <div className="rounded-[32px] border border-sky-100 bg-white p-6 shadow-sm">
+            <div className="mb-5">
+              <h2 className="text-lg font-semibold text-slate-900">Upload clips</h2>
+              <p className="mt-1 text-sm text-slate-600">This replaces the old analysis flow. New sessions open directly in the EBS viewer.</p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-1">Reference</p>
+              <p className="text-sm font-semibold text-sky-700 uppercase tracking-wider ml-1">Reference</p>
               <UploadZone type="reference" file={referenceFile} />
             </div>
             <div className="space-y-2">
-              <p className="text-sm font-semibold text-gray-400 uppercase tracking-wider ml-1">Your Practice</p>
+              <p className="text-sm font-semibold text-sky-700 uppercase tracking-wider ml-1">Your Practice</p>
               <UploadZone type="practice" file={practiceFile} />
             </div>
           </div>
+          </div>
 
-          {/* Upload Button */}
           {referenceFile && practiceFile && !uploading && (
             <button
               onClick={handleUpload}
-              className="w-full py-4 text-xl font-semibold text-white bg-gray-900 rounded-full hover:bg-gray-800 transition-all active:scale-95 shadow-xl"
+              className="w-full py-4 text-xl font-semibold text-white bg-gradient-to-r from-sky-400 to-blue-600 rounded-full hover:opacity-95 transition-all active:scale-95 shadow-xl"
             >
-              Analyze Locally
+              Open EBS Session
             </button>
           )}
 
-          {/* Status Message */}
           {message && (
             <div className={`
-              text-center py-4 px-6 rounded-3xl transition-all animate-in fade-in slide-in-from-bottom-2
-              ${message.includes('✓') ? 'bg-green-50 text-green-700' : 'bg-gray-100 text-gray-700 font-medium'}
+              text-center py-4 px-6 rounded-[28px] transition-all animate-in fade-in slide-in-from-bottom-2 border
+              ${message.includes('✓') ? 'bg-green-50 text-green-700 border-green-100' : 'bg-white text-slate-700 font-medium border-sky-100'}
             `}>
               {message}
             </div>
           )}
 
-          {/* Loading State */}
           {uploading && (
-            <div className="flex flex-col items-center justify-center gap-4 text-gray-600">
-              <div className="w-8 h-8 border-3 border-gray-200 border-t-purple-600 rounded-full animate-spin" />
-              <p className="animate-pulse">Preparing your local analysis...</p>
+            <div className="flex flex-col items-center justify-center gap-4 text-slate-600 rounded-[32px] border border-sky-100 bg-white py-8 shadow-sm">
+              <div className="w-8 h-8 border-3 border-sky-100 border-t-sky-500 rounded-full animate-spin" />
+              <p className="animate-pulse">Preparing your EBS session...</p>
             </div>
           )}
 
-          <div className="rounded-3xl border border-gray-200 bg-white p-6">
+          <div className="rounded-[32px] border border-sky-100 bg-white p-6 shadow-sm">
             <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
               <div>
-                <h2 className="text-lg font-semibold text-gray-900">Film your practice in the app</h2>
-                <p className="text-sm text-gray-600">
+                <h2 className="text-lg font-semibold text-slate-900">Film your practice in the app</h2>
+                <p className="text-sm text-slate-600">
                   Keep the reference as an upload, then record a new practice take directly from your camera.
                 </p>
               </div>
               <button
                 onClick={recorderOpen ? closeRecorder : openRecorder}
                 disabled={uploading}
-                className="rounded-full bg-purple-600 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-purple-700 disabled:cursor-not-allowed disabled:opacity-60"
+                className="rounded-full bg-sky-600 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-sky-700 disabled:cursor-not-allowed disabled:opacity-60"
               >
                 {recorderOpen ? 'Close Recorder' : 'Record Practice Video'}
               </button>
@@ -458,7 +471,7 @@ export default function UploadPage() {
                     <button
                       onClick={startRecording}
                       disabled={!cameraReady || uploading}
-                      className="rounded-full bg-gray-900 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-gray-800 disabled:cursor-not-allowed disabled:opacity-50"
+                      className="rounded-full bg-slate-900 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
                     >
                       Start Recording
                     </button>
