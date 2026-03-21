@@ -162,7 +162,7 @@ export function PrecomputedFrameOverlay(props: {
 
     return () => {
       cancelled = true;
-      if (rvfc && cancelRvfc && rvfcHandle) cancelRvfc.call(video, rvfcHandle);
+      if (cancelRvfc && rvfcHandle) cancelRvfc.call(video, rvfcHandle);
       if (raf) window.cancelAnimationFrame(raf);
     };
   }, [frameCount, frames, safeFps, videoRef]);

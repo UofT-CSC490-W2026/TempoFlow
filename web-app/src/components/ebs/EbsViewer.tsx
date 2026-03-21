@@ -15,6 +15,9 @@ import { generateFastSamOverlayFrames } from "../../lib/fastSamOverlayGenerator"
 import { generateBodyPixOverlayFrames } from "../../lib/bodyPixOverlayGenerator";
 import { buildOverlayKey, getSessionOverlay, storeSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
 import { getSessionVideo } from "../../lib/videoStorage";
+import { FeedbackPanel } from "./FeedbackPanel";
+import { FeedbackOverlay } from "./FeedbackOverlay";
+import type { DanceFeedback } from "../../lib/bodyPixComparison";
 
 type FileDropProps = {
   label: string;
@@ -150,6 +153,8 @@ export function EbsViewer(props: EbsViewerProps) {
   const [showYoloPose, setShowYoloPose] = useState(false);
   const [showBodyPix, setShowBodyPix] = useState(false);
   const [showFastSam, setShowFastSam] = useState(false);
+  const [showFeedback, setShowFeedback] = useState(false);
+  const [danceFeedback, setDanceFeedback] = useState<DanceFeedback[]>([]);
   const [overlayMethod, setOverlayMethod] = useState<"pose-fill" | "sam3-experimental" | "sam3-roboflow">("pose-fill");
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
@@ -1119,6 +1124,14 @@ export function EbsViewer(props: EbsViewerProps) {
                 >
                   FastSAM
                 </button>
+                <button
+                  onClick={() => setShowFeedback((v) => !v)}
+                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                    showFeedback ? "bg-violet-600 text-white border-violet-600" : "bg-white text-violet-700 border-violet-200 hover:bg-violet-50"
+                  }`}
+                >
+                  Feedback
+                </button>
                 <select
                   value={overlayMethod}
                   onChange={(e) =>
@@ -1215,7 +1228,7 @@ export function EbsViewer(props: EbsViewerProps) {
                           mimeType={refYoloArtifact.videoMime}
                         />
                       ) : refYoloArtifact.frames ? (
-                        <PrecomputedFrameOverlay videoRef={refVideo} frames={refYoloArtifact.frames} fps={refYoloArtifact.fps} />
+                        <PrecomputedFrameOverlay videoRef={refVideo} frames={refYoloArtifact.frames ?? []} fps={refYoloArtifact.fps} />
                       ) : null
                     ) : null
                   ) : (
@@ -1254,7 +1267,7 @@ export function EbsViewer(props: EbsViewerProps) {
                       ) : refBodyPixArtifact.frames ? (
                         <PrecomputedFrameOverlay
                           videoRef={refVideo}
-                          frames={refBodyPixArtifact.frames}
+                          frames={refBodyPixArtifact.frames ?? []}
                           fps={refBodyPixArtifact.fps}
                         />
                       ) : null
@@ -1268,7 +1281,7 @@ export function EbsViewer(props: EbsViewerProps) {
                     refFastSamArtifact ? (
                       <PrecomputedFrameOverlay
                         videoRef={refVideo}
-                        frames={refFastSamArtifact.frames}
+                        frames={refFastSamArtifact.frames ?? []}
                         fps={refFastSamArtifact.fps}
                       />
                     ) : null
@@ -1279,7 +1292,7 @@ export function EbsViewer(props: EbsViewerProps) {
                     refPoseArtifact ? (
                       <PrecomputedFrameOverlay
                         videoRef={refVideo}
-                        frames={refPoseArtifact.frames}
+                        frames={refPoseArtifact.frames ?? []}
                         fps={refPoseArtifact.fps}
                       />
                     ) : null
@@ -1314,7 +1327,7 @@ export function EbsViewer(props: EbsViewerProps) {
                           mimeType={userYoloArtifact.videoMime}
                         />
                       ) : userYoloArtifact.frames ? (
-                        <PrecomputedFrameOverlay videoRef={userVideo} frames={userYoloArtifact.frames} fps={userYoloArtifact.fps} />
+                        <PrecomputedFrameOverlay videoRef={userVideo} frames={userYoloArtifact.frames ?? []} fps={userYoloArtifact.fps} />
                       ) : null
                     ) : null
                   ) : (
@@ -1353,7 +1366,7 @@ export function EbsViewer(props: EbsViewerProps) {
                       ) : userBodyPixArtifact.frames ? (
                         <PrecomputedFrameOverlay
                           videoRef={userVideo}
-                          frames={userBodyPixArtifact.frames}
+                          frames={userBodyPixArtifact.frames ?? []}
                           fps={userBodyPixArtifact.fps}
                         />
                       ) : null
@@ -1367,7 +1380,7 @@ export function EbsViewer(props: EbsViewerProps) {
                     userFastSamArtifact ? (
                       <PrecomputedFrameOverlay
                         videoRef={userVideo}
-                        frames={userFastSamArtifact.frames}
+                        frames={userFastSamArtifact.frames ?? []}
                         fps={userFastSamArtifact.fps}
                       />
                     ) : null
@@ -1378,13 +1391,21 @@ export function EbsViewer(props: EbsViewerProps) {
                     userPoseArtifact ? (
                       <PrecomputedFrameOverlay
                         videoRef={userVideo}
-                        frames={userPoseArtifact.frames}
+                        frames={userPoseArtifact.frames ?? []}
                         fps={userPoseArtifact.fps}
                       />
                     ) : null
                   ) : (
                     <PoseOverlay videoRef={userVideo} color="#10b981" method={overlayMethod} />
                   )
+                ) : null}
+                {sessionMode && showFeedback && danceFeedback.length > 0 ? (
+                  <FeedbackOverlay
+                    refVideoRef={refVideo}
+                    videoRef={userVideo}
+                    feedback={danceFeedback}
+                    sharedTime={state.sharedTime}
+                  />
                 ) : null}
               </div>
               <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
@@ -1397,6 +1418,19 @@ export function EbsViewer(props: EbsViewerProps) {
               </div>
             </div>
           </div>
+
+          {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
+            <div className="mt-4 mb-2">
+              <FeedbackPanel
+                referenceVideoUrl={activeReferenceVideoUrl}
+                userVideoUrl={activeUserVideoUrl}
+                segments={state.segments}
+                sharedTime={state.sharedTime}
+                onSeek={seekToShared}
+                onFeedbackReady={setDanceFeedback}
+              />
+            </div>
+          )}
 
           {!state.practice.enabled && hasSegments && (
             <>
