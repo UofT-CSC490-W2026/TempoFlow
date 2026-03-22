@@ -25,6 +25,7 @@ Output: ebs_segments.json (see README for full schema).
 """
 
 import json
+import os
 import shutil
 import argparse
 import logging
@@ -36,11 +37,16 @@ import numpy as np
 import librosa
 from scipy.signal import fftconvolve
 
+from ebs_alignment_chroma import perform_alignment as chroma_perform_alignment
+
 # ---------------------------------------------------------------------------
 # Constants – match existing audio pipeline conventions
 # ---------------------------------------------------------------------------
 
 SAMPLE_RATE = 22050
+
+# Chroma STFT hop (must match librosa.feature.chroma_stft default used below)
+CHROMA_HOP_LENGTH = 512
 
 # EBS parameters
 BEATS_PER_SEGMENT = 8
@@ -53,7 +59,7 @@ BEAT_INTERVAL_MIN_SEC = 0.25       # ~240 BPM ceiling
 BEAT_INTERVAL_MAX_SEC = 1.0        # ~60 BPM floor
 BEAT_CV_THRESHOLD = 0.3            # max coefficient of variation
 
-PIPELINE_VERSION = "1.0.0"
+PIPELINE_VERSION = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -137,24 +143,29 @@ def extract_audio_from_video(
 
 
 # ---------------------------------------------------------------------------
-# Auto-alignment via onset-envelope cross-correlation
+# Auto-alignment: chroma + local match (default) or onset cross-correlation
 # ---------------------------------------------------------------------------
 
 
-def auto_align(
+def _auto_align_mode_from_env() -> str:
+    """Read ``EBS_AUTO_ALIGN_MODE``: ``chroma_sw`` (default) or ``onset_xcorr``."""
+    raw = (os.environ.get("EBS_AUTO_ALIGN_MODE") or "chroma_sw").strip().lower()
+    if raw in ("chroma_sw", "chroma", "sw", "a5"):
+        return "chroma_sw"
+    if raw in ("onset_xcorr", "onset", "legacy", "xcorr"):
+        return "onset_xcorr"
+    logging.getLogger("ebs").warning(
+        "Unknown EBS_AUTO_ALIGN_MODE=%r — using chroma_sw", raw
+    )
+    return "chroma_sw"
+
+
+def auto_align_onset_xcorr(
     ref_audio: np.ndarray,
     user_audio: np.ndarray,
     sr: int = SAMPLE_RATE,
 ) -> dict:
-    """Compute the shared-content window between two clips.
-
-    Uses onset-strength envelopes (compact, tempo-aware representation)
-    and FFT-based cross-correlation to find the lag that best aligns the
-    two signals.
-
-    Returns an alignment dict compatible with the EBS pipeline:
-    ``{clip_1_start_sec, clip_1_end_sec, clip_2_start_sec, clip_2_end_sec}``
-    """
+    """Global lag alignment via onset envelopes + FFT cross-correlation (legacy)."""
     logger = logging.getLogger("ebs")
 
     # Onset envelopes (one value per hop ≈ 23 ms at sr=22050, hop=512)
@@ -201,18 +212,140 @@ def auto_align(
         "clip_2_start_sec": round(c2_start, ROUNDING_PRECISION),
         "clip_2_end_sec": round(c2_start + shared_len, ROUNDING_PRECISION),
         "auto_align": True,
+        "auto_align_mode": "onset_xcorr",
         "lag_sec": round(lag_sec, ROUNDING_PRECISION),
         "correlation_peak": round(float(corr[peak_idx]), ROUNDING_PRECISION),
     }
 
     logger.info(
-        "Auto-alignment: lag=%.3fs, shared=%.3fs, "
+        "Auto-alignment (onset_xcorr): lag=%.3fs, shared=%.3fs, "
         "clip_1=[%.3f,%.3f], clip_2=[%.3f,%.3f]",
         lag_sec, shared_len,
         alignment["clip_1_start_sec"], alignment["clip_1_end_sec"],
         alignment["clip_2_start_sec"], alignment["clip_2_end_sec"],
     )
     return alignment
+
+
+def auto_align_chroma_sw(
+    ref_audio: np.ndarray,
+    user_audio: np.ndarray,
+    sr: int = SAMPLE_RATE,
+    match_score_bias: float = 0.5,
+) -> dict:
+    """Local alignment via chroma + Smith–Waterman-style scoring (A5-style)."""
+    logger = logging.getLogger("ebs")
+
+    chroma_a = librosa.feature.chroma_stft(
+        y=ref_audio, sr=sr, hop_length=CHROMA_HOP_LENGTH
+    )
+    chroma_b = librosa.feature.chroma_stft(
+        y=user_audio, sr=sr, hop_length=CHROMA_HOP_LENGTH
+    )
+    ta, tb = chroma_a.shape[1], chroma_b.shape[1]
+    if ta < 4 or tb < 4:
+        raise ValueError(f"chroma too short for alignment (frames {ta}, {tb})")
+
+    start_a, end_a, start_b, end_b = chroma_perform_alignment(
+        chroma_a, chroma_b, match_score_bias=match_score_bias
+    )
+
+    # Normalize / order indices
+    if end_a < start_a:
+        start_a, end_a = end_a, start_a
+    if end_b < start_b:
+        start_b, end_b = end_b, start_b
+
+    start_a = int(np.clip(start_a, 0, ta - 1))
+    end_a = int(np.clip(end_a, 0, ta - 1))
+    start_b = int(np.clip(start_b, 0, tb - 1))
+    end_b = int(np.clip(end_b, 0, tb - 1))
+    if end_a < start_a:
+        start_a, end_a = end_a, start_a
+    if end_b < start_b:
+        start_b, end_b = end_b, start_b
+
+    start_time_a = float(
+        librosa.frames_to_time(start_a, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+    end_time_a = float(
+        librosa.frames_to_time(end_a, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+    start_time_b = float(
+        librosa.frames_to_time(start_b, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+    end_time_b = float(
+        librosa.frames_to_time(end_b, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+
+    ref_dur = len(ref_audio) / sr
+    usr_dur = len(user_audio) / sr
+
+    c1_start = float(np.clip(start_time_a, 0.0, ref_dur))
+    c1_end_raw = float(np.clip(end_time_a, 0.0, ref_dur))
+    c2_start = float(np.clip(start_time_b, 0.0, usr_dur))
+    c2_end_raw = float(np.clip(end_time_b, 0.0, usr_dur))
+
+    if c1_end_raw <= c1_start or c2_end_raw <= c2_start:
+        raise ValueError("degenerate chroma alignment window after clamping")
+
+    len1 = c1_end_raw - c1_start
+    len2 = c2_end_raw - c2_start
+    shared_len = min(len1, len2, ref_dur - c1_start, usr_dur - c2_start)
+    shared_len = max(float(shared_len), 0.0)
+
+    if shared_len < 0.05:
+        raise ValueError(f"chroma alignment window too short ({shared_len:.3f}s)")
+
+    alignment = {
+        "clip_1_start_sec": round(c1_start, ROUNDING_PRECISION),
+        "clip_1_end_sec": round(c1_start + shared_len, ROUNDING_PRECISION),
+        "clip_2_start_sec": round(c2_start, ROUNDING_PRECISION),
+        "clip_2_end_sec": round(c2_start + shared_len, ROUNDING_PRECISION),
+        "auto_align": True,
+        "auto_align_mode": "chroma_sw",
+    }
+
+    logger.info(
+        "Auto-alignment (chroma_sw): shared=%.3fs, clip_1=[%.3f,%.3f], clip_2=[%.3f,%.3f]",
+        shared_len,
+        alignment["clip_1_start_sec"],
+        alignment["clip_1_end_sec"],
+        alignment["clip_2_start_sec"],
+        alignment["clip_2_end_sec"],
+    )
+    return alignment
+
+
+def auto_align(
+    ref_audio: np.ndarray,
+    user_audio: np.ndarray,
+    sr: int = SAMPLE_RATE,
+) -> dict:
+    """Compute the shared-content window between two clips.
+
+    **Default** (``EBS_AUTO_ALIGN_MODE=chroma_sw``): chroma features + local
+    scoring (A5-style), better when the match is a *segment* rather than a
+    single global time shift.
+
+    **Legacy** (``EBS_AUTO_ALIGN_MODE=onset_xcorr``): onset envelopes +
+    FFT cross-correlation (single lag).
+
+    Returns an alignment dict compatible with the EBS pipeline:
+    ``{clip_1_start_sec, clip_1_end_sec, clip_2_start_sec, clip_2_end_sec}``
+    """
+    logger = logging.getLogger("ebs")
+    mode = _auto_align_mode_from_env()
+    if mode == "onset_xcorr":
+        return auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
+    try:
+        return auto_align_chroma_sw(ref_audio, user_audio, sr=sr)
+    except Exception as exc:
+        logger.warning(
+            "chroma_sw auto-align failed (%s); falling back to onset_xcorr",
+            exc,
+        )
+        return auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
 
 
 # ---------------------------------------------------------------------------
@@ -709,6 +842,11 @@ def run_ebs_pipeline(
             "clip_2_start_sec": clip_2_start,
             "clip_2_end_sec": clip_2_end,
             "shared_len_sec": shared_len_sec,
+            **(
+                {"auto_align_mode": alignment["auto_align_mode"]}
+                if alignment.get("auto_align_mode")
+                else {}
+            ),
         },
         "beat_tracking": {
             "estimated_bpm": confidence_info["estimated_bpm"],
@@ -796,8 +934,18 @@ def main() -> int:
         "--auto-align",
         action="store_true",
         help=(
-            "Compute alignment automatically via onset-envelope "
-            "cross-correlation (requires both ref and user audio/video)"
+            "Compute alignment automatically (default: chroma + local match; "
+            "override with --auto-align-mode or env EBS_AUTO_ALIGN_MODE)"
+        ),
+    )
+    align_grp.add_argument(
+        "--auto-align-mode",
+        type=str,
+        choices=("chroma_sw", "onset_xcorr"),
+        default=None,
+        help=(
+            "Auto-align algorithm: chroma_sw (default) or onset_xcorr (legacy). "
+            "Same as env EBS_AUTO_ALIGN_MODE."
         ),
     )
 
@@ -855,6 +1003,8 @@ def main() -> int:
 
         # -- resolve alignment -----------------------------------------------
         if args.auto_align:
+            if args.auto_align_mode:
+                os.environ["EBS_AUTO_ALIGN_MODE"] = args.auto_align_mode
             if user_audio_path is None:
                 logger.error(
                     "--auto-align requires a user clip "

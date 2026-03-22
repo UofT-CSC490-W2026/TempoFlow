@@ -4,6 +4,8 @@ export type EbsAlignment = {
   clip_2_start_sec: number;
   clip_2_end_sec?: number;
   shared_len_sec: number;
+  /** Present when alignment was computed by auto_align (chroma_sw vs onset_xcorr). */
+  auto_align_mode?: "chroma_sw" | "onset_xcorr";
 };
 
 export type EbsSegment = {

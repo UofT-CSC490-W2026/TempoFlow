@@ -212,7 +212,9 @@ direct video input with automatic alignment.
   shared window through the first downbeat-aligned 8-count boundary, capturing
   any pre-beat lead-in.
 - **Auto-alignment** — when given two video files, computes the shared content
-  window automatically via onset-envelope cross-correlation.
+  window automatically. **Default:** chroma features + local match (A5-style),
+  with automatic fallback to onset-envelope cross-correlation if chroma fails.
+  Set ``EBS_AUTO_ALIGN_MODE=onset_xcorr`` to force the legacy global-lag method only.
 - **Robust fallback** — if beat detection fails confidence checks, falls back
   to fixed-time 3.0 s chunks.
 
@@ -246,7 +248,8 @@ python ebs_segment.py \
 | **Alignment** | | |
 | `--alignment` | — | Path to alignment JSON (manifest.json or single-entry object) |
 | `--test-id` | — | Select entry from a multi-entry manifest array |
-| `--auto-align` | — | Compute alignment via onset-envelope cross-correlation |
+| `--auto-align` | — | Compute alignment automatically (default: chroma + local match) |
+| `--auto-align-mode` | env default | `chroma_sw` (default) or `onset_xcorr` (legacy); same as ``EBS_AUTO_ALIGN_MODE`` |
 | **Output** | | |
 | `--out` | `ebs_segments.json` | Output JSON path |
 | `--verbose` | — | Enable DEBUG-level logging |
@@ -259,8 +262,9 @@ or `--auto-align`. Auto-alignment additionally requires a user clip
 
 1. **Audio extraction** — if video inputs are provided, audio is extracted via
    ffmpeg (preferred) or librosa/audioread (fallback).
-2. **Alignment** — either loaded from a JSON manifest or computed
-   automatically via onset-envelope cross-correlation (`scipy.signal.fftconvolve`).
+2. **Alignment** — either loaded from a JSON manifest or computed automatically:
+   chroma STFT + local scoring (default), with fallback to onset-envelope
+   cross-correlation (`scipy.signal.fftconvolve`) if needed.
 3. **Beat tracking** — `librosa.beat.beat_track` runs on the reference clip's
    shared window (mono, 22050 Hz). Returns beat times, onset envelope, and
    beat frame positions.
