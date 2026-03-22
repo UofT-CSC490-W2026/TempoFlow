@@ -34,6 +34,7 @@ from pathlib import Path
 
 import numpy as np
 import librosa
+import os
 from scipy.signal import fftconvolve
 
 # ---------------------------------------------------------------------------
@@ -60,11 +61,32 @@ PIPELINE_VERSION = "1.0.0"
 # ---------------------------------------------------------------------------
 
 
-def load_audio(filepath: str, sr: int = SAMPLE_RATE) -> np.ndarray:
-    """Load an audio file and return as mono numpy array."""
-    audio, _ = librosa.load(filepath, sr=sr, mono=True)
-    return audio
-
+# def load_audio(filepath: str, sr: int = SAMPLE_RATE) -> np.ndarray:
+#     """Load an audio file and return as mono numpy array."""
+#     audio, _ = librosa.load(filepath, sr=sr, mono=True)
+#     return audio
+def load_audio(input_val, sr=22050):
+    """
+    Smart loader: 
+    - If input_val is a NumPy array, return it (it's already loaded).
+    - If input_val is a string/path, load it from disk.
+    """
+    # 1. Check if it's already a numpy array (the data you just extracted)
+    if isinstance(input_val, np.ndarray):
+        return input_val
+    
+    # 2. If it's a path, check if it exists before loading
+    if not input_val or not os.path.exists(str(input_val)):
+        # logger.error(f"Audio path not found or invalid: {input_val}")
+        return None
+        
+    # 3. Standard file loading
+    try:
+        audio, _ = librosa.load(input_val, sr=sr, mono=True)
+        return audio
+    except Exception as e:
+        # logger.error(f"Error loading audio file {input_val}: {e}")
+        return None
 
 def extract_shared_window(
     audio: np.ndarray,
@@ -84,57 +106,92 @@ def extract_shared_window(
 # ---------------------------------------------------------------------------
 
 
-def extract_audio_from_video(
-    video_path: str, output_wav: str | None = None, sr: int = SAMPLE_RATE
-) -> str:
-    """Extract audio from a video file and save as mono WAV.
+# def extract_audio_from_video(
+#     video_path: str, output_wav: str | None = None, sr: int = SAMPLE_RATE
+# ) -> str:
+#     """Extract audio from a video file and save as mono WAV.
 
-    Tries ffmpeg first (fastest, most robust).  Falls back to
-    ``librosa.load`` which delegates to the ``audioread`` backends
-    (CoreAudio on macOS, GStreamer on Linux).
+#     Tries ffmpeg first (fastest, most robust).  Falls back to
+#     ``librosa.load`` which delegates to the ``audioread`` backends
+#     (CoreAudio on macOS, GStreamer on Linux).
 
-    Returns the path to the written WAV file.
-    """
+#     Returns the path to the written WAV file.
+#     """
+#     logger = logging.getLogger("ebs")
+#     video_path = str(video_path)
+
+#     if output_wav is None:
+#         suffix = Path(video_path).stem
+#         tmp = tempfile.NamedTemporaryFile(
+#             prefix=f"ebs_{suffix}_", suffix=".wav", delete=False
+#         )
+#         output_wav = tmp.name
+#         tmp.close()
+
+#     # --- try ffmpeg --------------------------------------------------------
+#     if shutil.which("ffmpeg"):
+#         logger.info("Extracting audio via ffmpeg: %s", video_path)
+#         cmd = [
+#             "ffmpeg", "-y", "-i", video_path,
+#             "-vn",                         # drop video
+#             "-acodec", "pcm_s16le",        # 16-bit PCM
+#             "-ar", str(sr),                # target sample rate
+#             "-ac", "1",                    # mono
+#             output_wav,
+#         ]
+#         result = subprocess.run(
+#             cmd, capture_output=True, text=True, timeout=120
+#         )
+#         if result.returncode == 0:
+#             logger.info("ffmpeg extraction OK → %s", output_wav)
+#             return output_wav
+#         logger.warning("ffmpeg failed (rc=%d), trying librosa fallback",
+#                        result.returncode)
+
+#     # --- librosa / audioread fallback --------------------------------------
+#     logger.info("Extracting audio via librosa/audioread: %s", video_path)
+#     import soundfile as sf
+
+#     audio, _ = librosa.load(video_path, sr=sr, mono=True)
+#     sf.write(output_wav, audio, sr)
+#     logger.info("librosa extraction OK → %s", output_wav)
+#     return output_wav
+def extract_audio_from_video(video_path, sr=22050):
     logger = logging.getLogger("ebs")
-    video_path = str(video_path)
+    # Use your hardcoded path
+    FFMPEG_PATH = r"C:\ffmpeg\bin\ffmpeg.exe" 
+    
+    # We will use FFmpeg to convert the video's audio to raw PCM data
+    # and pipe it directly into a numpy array.
+    command = [
+        FFMPEG_PATH,
+        "-i", str(video_path),
+        "-vn",               # Disable video
+        "-ac", "1",          # Mono
+        "-ar", str(sr),      # Set sample rate
+        "-f", "s16le",       # Signed 16-bit little-endian
+        "-acodec", "pcm_s16le",
+        "-"                  # Output to stdout
+    ]
 
-    if output_wav is None:
-        suffix = Path(video_path).stem
-        tmp = tempfile.NamedTemporaryFile(
-            prefix=f"ebs_{suffix}_", suffix=".wav", delete=False
-        )
-        output_wav = tmp.name
-        tmp.close()
+    logger.info(f"[ebs] Calling FFmpeg to extract audio from: {video_path}")
+    
+    try:
+        process = subprocess.Popen(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        out, err = process.communicate()
 
-    # --- try ffmpeg --------------------------------------------------------
-    if shutil.which("ffmpeg"):
-        logger.info("Extracting audio via ffmpeg: %s", video_path)
-        cmd = [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vn",                         # drop video
-            "-acodec", "pcm_s16le",        # 16-bit PCM
-            "-ar", str(sr),                # target sample rate
-            "-ac", "1",                    # mono
-            output_wav,
-        ]
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=120
-        )
-        if result.returncode == 0:
-            logger.info("ffmpeg extraction OK → %s", output_wav)
-            return output_wav
-        logger.warning("ffmpeg failed (rc=%d), trying librosa fallback",
-                       result.returncode)
+        if process.returncode != 0:
+            logger.error(f"FFmpeg error: {err.decode()}")
+            raise RuntimeError(f"FFmpeg failed: {err.decode()}")
 
-    # --- librosa / audioread fallback --------------------------------------
-    logger.info("Extracting audio via librosa/audioread: %s", video_path)
-    import soundfile as sf
+        # Convert raw bytes to numpy array
+        # PCM s16le is 2 bytes per sample, so we divide by 32768 to normalize to [-1, 1]
+        audio_data = np.frombuffer(out, dtype=np.int16).astype(np.float32) / 32768.0
+        return audio_data
 
-    audio, _ = librosa.load(video_path, sr=sr, mono=True)
-    sf.write(output_wav, audio, sr)
-    logger.info("librosa extraction OK → %s", output_wav)
-    return output_wav
-
+    except Exception as e:
+        logger.error(f"Failed to extract audio from video: {e}")
+        raise
 
 # ---------------------------------------------------------------------------
 # Auto-alignment via onset-envelope cross-correlation

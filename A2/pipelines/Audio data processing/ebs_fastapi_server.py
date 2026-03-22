@@ -67,17 +67,13 @@ def _sanitize_json(obj: Any) -> Any:
 
 
 def probe_video_metadata(video_path: str) -> dict[str, Any]:
+    # Ensure we use the hardcoded path if PATH is unreliable on Windows
+    FFPROBE_PATH = r"C:\ffmpeg\bin\ffprobe.exe" if Path(r"C:\ffmpeg\bin\ffprobe.exe").exists() else "ffprobe"
+    
     cmd = [
-        "ffprobe",
-        "-v",
-        "error",
-        "-select_streams",
-        "v:0",
-        "-show_entries",
-        "stream=avg_frame_rate,nb_frames,duration",
-        "-of",
-        "json",
-        video_path,
+        FFPROBE_PATH, "-v", "error", "-select_streams", "v:0",
+        "-show_entries", "stream=avg_frame_rate,nb_frames,duration",
+        "-of", "json", video_path,
     ]
     result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
     if result.returncode != 0:
@@ -126,24 +122,25 @@ async def process(
 
     ref_tmp = _save_upload(ref_video, "ref")
     user_tmp = _save_upload(user_video, "user")
-    ref_wav: str | None = None
-    user_wav: str | None = None
 
     try:
+        # 1. Extract audio (Returns NumPy arrays now)
         logger.info("Extracting audio…")
-        ref_wav = extract_audio_from_video(ref_tmp)
-        user_wav = extract_audio_from_video(user_tmp)
+        ref_audio = extract_audio_from_video(ref_tmp)
+        user_audio = extract_audio_from_video(user_tmp)
 
+        # 2. Auto-align (Uses arrays directly)
         logger.info("Auto-align…")
-        ref_audio = load_audio(ref_wav)
-        user_audio = load_audio(user_wav)
         alignment = auto_align(ref_audio, user_audio)
 
+        # 3. EBS segmentation 
+        # Note: We pass the audio arrays into the pipeline. 
+        # Ensure ebs_segment.py is updated to check `if isinstance(ref_audio_path, np.ndarray)`
         logger.info("EBS segmentation…")
         artifact = run_ebs_pipeline(
-            ref_audio_path=ref_wav,
+            ref_audio_path=ref_audio,  # Passing the array
             alignment=alignment,
-            user_audio_path=user_wav,
+            user_audio_path=user_audio, # Passing the array
         )
 
         try:
@@ -165,13 +162,14 @@ async def process(
         return JSONResponse({"error": str(exc)}, status_code=500)
 
     finally:
-        for p in [ref_tmp, user_tmp, ref_wav, user_wav]:
-            if not p:
-                continue
-            try:
-                Path(p).unlink(missing_ok=True)
-            except OSError:
-                pass
+        # Clean up video files. 
+        # Note: We don't clean up .wav files anymore because we never saved them to disk!
+        for p in [ref_tmp, user_tmp]:
+            if p and isinstance(p, str):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
 
 
 @app.get("/api/status")

@@ -302,7 +302,6 @@ function AnalysisPageContent() {
         }
       }
     };
-
     void generateEbs();
 
     return () => {
