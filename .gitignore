@@ -12,3 +12,4 @@ bin/*
 .venv/*
 # lib
 # lib/*
+web-app/package-lock.json

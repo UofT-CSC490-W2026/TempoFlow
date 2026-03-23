@@ -370,10 +370,15 @@ function AnalysisPageContent() {
       }
     };
 
+    // Backup only: primary path is the in-flight POST (no poll delay for that).
+    // Fast polls help pick up IndexedDB cache or /api/status if the POST fails or tab was backgrounded.
+    const POLL_MS = 250;
+    void checkCachedEbs();
+    void pollProcessorStatus();
     const intervalId = window.setInterval(() => {
       void checkCachedEbs();
       void pollProcessorStatus();
-    }, 5000);
+    }, POLL_MS);
 
     const timeoutId = window.setTimeout(() => {
       if (cancelled) return;
