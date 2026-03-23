@@ -30,6 +30,7 @@ from fastapi import BackgroundTasks, FastAPI, File, Form, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
+from ebs_ffmpeg_paths import resolve_ffprobe_executable
 from ebs_segment import auto_align, extract_audio_from_video, load_audio, run_ebs_pipeline
 
 logging.basicConfig(
@@ -67,8 +68,9 @@ def _sanitize_json(obj: Any) -> Any:
 
 
 def probe_video_metadata(video_path: str) -> dict[str, Any]:
+    ffprobe_exe = resolve_ffprobe_executable()
     cmd = [
-        "ffprobe",
+        ffprobe_exe,
         "-v",
         "error",
         "-select_streams",
@@ -79,7 +81,15 @@ def probe_video_metadata(video_path: str) -> dict[str, Any]:
         "json",
         video_path,
     ]
-    result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+    try:
+        result = subprocess.run(
+            cmd, capture_output=True, text=True, timeout=30
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError(
+            f"ffprobe not found ({ffprobe_exe}). Install FFmpeg, add to PATH, "
+            "or set EBS_FFPROBE_PATH."
+        ) from exc
     if result.returncode != 0:
         raise RuntimeError(f"ffprobe failed: {result.stderr.strip()}")
 

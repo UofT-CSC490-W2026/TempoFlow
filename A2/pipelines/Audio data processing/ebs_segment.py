@@ -26,7 +26,6 @@ Output: ebs_segments.json (see README for full schema).
 
 import json
 import os
-import shutil
 import argparse
 import logging
 import subprocess
@@ -38,6 +37,7 @@ import librosa
 from scipy.signal import fftconvolve
 
 from ebs_alignment_chroma import perform_alignment as chroma_perform_alignment
+from ebs_ffmpeg_paths import resolve_ffmpeg_executable
 
 # ---------------------------------------------------------------------------
 # Constants – match existing audio pipeline conventions
@@ -112,25 +112,40 @@ def extract_audio_from_video(
         output_wav = tmp.name
         tmp.close()
 
-    # --- try ffmpeg --------------------------------------------------------
-    if shutil.which("ffmpeg"):
-        logger.info("Extracting audio via ffmpeg: %s", video_path)
-        cmd = [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vn",                         # drop video
-            "-acodec", "pcm_s16le",        # 16-bit PCM
-            "-ar", str(sr),                # target sample rate
-            "-ac", "1",                    # mono
-            output_wav,
-        ]
+    # --- try ffmpeg (PATH, EBS_FFMPEG_PATH, or common Windows locations) ---
+    ffmpeg_exe = resolve_ffmpeg_executable()
+    logger.info("Extracting audio via ffmpeg (%s): %s", ffmpeg_exe, video_path)
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i",
+        video_path,
+        "-vn",  # drop video
+        "-acodec",
+        "pcm_s16le",  # 16-bit PCM
+        "-ar",
+        str(sr),  # target sample rate
+        "-ac",
+        "1",  # mono
+        output_wav,
+    ]
+    try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=120
         )
-        if result.returncode == 0:
-            logger.info("ffmpeg extraction OK → %s", output_wav)
-            return output_wav
-        logger.warning("ffmpeg failed (rc=%d), trying librosa fallback",
-                       result.returncode)
+    except FileNotFoundError:
+        logger.warning(
+            "ffmpeg not found (%s); add to PATH or set EBS_FFMPEG_PATH — using librosa",
+            ffmpeg_exe,
+        )
+        result = None
+    if result is not None and result.returncode == 0:
+        logger.info("ffmpeg extraction OK → %s", output_wav)
+        return output_wav
+    if result is not None:
+        logger.warning(
+            "ffmpeg failed (rc=%d), trying librosa fallback", result.returncode
+        )
 
     # --- librosa / audioread fallback --------------------------------------
     logger.info("Extracting audio via librosa/audioread: %s", video_path)

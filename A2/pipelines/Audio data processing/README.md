@@ -258,6 +258,16 @@ At minimum, provide `--ref-audio` or `--ref-video`, plus either `--alignment`
 or `--auto-align`. Auto-alignment additionally requires a user clip
 (`--user-audio` / `--user-video`).
 
+### FFmpeg / ffprobe (all platforms)
+
+Video extraction and metadata use **ffmpeg** and **ffprobe**. Resolution order:
+
+1. **`EBS_FFMPEG_PATH`** / **`EBS_FFPROBE_PATH`** — full path to each binary (use when they are not on `PATH`, e.g. some Windows installs).
+2. **`shutil.which`** — standard `PATH` lookup.
+3. **Windows** — if still missing, common folders are checked: `%ProgramFiles%\ffmpeg\bin`, `%ProgramFiles(x86)%\ffmpeg\bin`, `C:\ffmpeg\bin`.
+
+If ffmpeg is missing, the pipeline falls back to **librosa/audioread** for audio (slower). If ffprobe is missing, `video_meta` in the API may fail; set **`EBS_FFPROBE_PATH`** or install FFmpeg and add it to `PATH`.
+
 ### How it works
 
 1. **Audio extraction** — if video inputs are provided, audio is extracted via
