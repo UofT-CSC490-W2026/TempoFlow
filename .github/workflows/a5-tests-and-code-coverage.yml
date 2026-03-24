@@ -55,7 +55,7 @@ jobs:
           badge-title: Coverage
 
       - name: Generate Coverage Markdown
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/a5')
         run: |
           echo "# A5 Test Coverage Report" > test_coverage.md
           echo "" >> test_coverage.md
@@ -66,7 +66,7 @@ jobs:
           echo '```' >> test_coverage.md
 
       - name: Commit Coverage Markdown
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/a5')
         uses: stefanzweifel/git-auto-commit-action@v5
         with:
           commit_message: "docs(A5): update test coverage report [skip ci]"
