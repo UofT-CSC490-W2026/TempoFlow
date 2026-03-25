@@ -15,7 +15,6 @@ import { generateFastSamOverlayFrames } from "../../lib/fastSamOverlayGenerator"
 import { generateBodyPixOverlayFrames } from "../../lib/bodyPixOverlayGenerator";
 import { buildOverlayKey, getSessionOverlay, storeSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
 import { getSessionVideo } from "../../lib/videoStorage";
-import { FeedbackPanel } from "./FeedbackPanel";
 import { FeedbackOverlay } from "./FeedbackOverlay";
 import type { DanceFeedback } from "../../lib/bodyPixComparison";
 
@@ -41,8 +40,6 @@ type SessionViewerProps = {
   referenceName?: string;
   practiceName?: string;
   title?: string;
-  backLabel?: string;
-  onBack?: () => void;
   footerSlot?: ReactNode;
 };
 
@@ -144,7 +141,6 @@ export function EbsViewer(props: EbsViewerProps) {
   const sessionEbsData = sessionProps?.ebsData ?? null;
   const sessionReferenceName = sessionProps?.referenceName ?? null;
   const sessionPracticeName = sessionProps?.practiceName ?? null;
-  const sessionBackLabel = sessionProps?.backLabel ?? "Back";
   const sessionFooterSlot = sessionProps?.footerSlot ?? null;
   const sessionId = sessionProps?.sessionId ?? null;
   const [overlayMode, setOverlayMode] = useState<"precomputed" | "live">("precomputed");
@@ -924,16 +920,6 @@ export function EbsViewer(props: EbsViewerProps) {
   const moveDoneSet = new Set(state.practice.doneMoveIndexes);
   const hasSegments = state.segments.length > 0;
 
-  const handleBack = () => {
-    if (sessionMode) {
-      sessionProps?.onBack?.();
-      return;
-    }
-    pausePlayback();
-    resetViewer();
-    setShowViewer(false);
-  };
-
   const handleTimelineClick = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!timelineTrackRef.current || sharedLen <= 0) return;
     const rect = timelineTrackRef.current.getBoundingClientRect();
@@ -1048,14 +1034,11 @@ export function EbsViewer(props: EbsViewerProps) {
           </button>
         </div>
       )}
-
       {viewerVisible && (
         <div className="ebs-viewer visible">
           <div className="ebs-top-bar">
-            <button className="ebs-back-btn" onClick={handleBack}>
-              {sessionMode ? sessionBackLabel : "Load New Videos"}
-            </button>
             {sessionMode ? (
+            <div className="flex flex-col gap-3 items-end">
               <div className="flex flex-wrap items-center gap-2 justify-end">
                 <select
                   value={overlayMode}
@@ -1123,7 +1106,8 @@ export function EbsViewer(props: EbsViewerProps) {
                   }`}
                 >
                   FastSAM
-                </button>
+                </button>                
+                {/* moved to new tab 
                 <button
                   onClick={() => setShowFeedback((v) => !v)}
                   className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
@@ -1131,8 +1115,9 @@ export function EbsViewer(props: EbsViewerProps) {
                   }`}
                 >
                   Feedback
-                </button>
-                <select
+                </button>*/}
+                {/*do we have options for this tho
+                 <select
                   value={overlayMethod}
                   onChange={(e) =>
                     setOverlayMethod(e.target.value as "pose-fill" | "sam3-experimental" | "sam3-roboflow")
@@ -1144,42 +1129,32 @@ export function EbsViewer(props: EbsViewerProps) {
                   <option value="pose-fill">Pose fill</option>
                   <option value="sam3-experimental">SAM3-style</option>
                   <option value="sam3-roboflow">Roboflow SAM3</option>
-                </select>
-                <button
-                  onClick={() => void generateOverlays("movenet")}
-                  disabled={overlayBusy || !showMoveNet}
-                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                >
-                  Gen MoveNet
-                </button>
-                <button
-                  onClick={() => void generateOverlays("yolo")}
-                  disabled={overlayBusy || !showYolo}
-                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                >
-                  Gen YOLO
-                </button>
-                <button
-                  onClick={() => void generateOverlays("yolo-pose")}
-                  disabled={overlayBusy || !showYoloPose}
-                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                >
-                  Gen YOLO Pose
-                </button>
-                <button
-                  onClick={() => void generateOverlays("bodypix")}
-                  disabled={overlayBusy || !showBodyPix}
-                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                >
-                  Gen BodyPix
-                </button>
-                <button
-                  onClick={() => void generateOverlays("fastsam")}
-                  disabled={overlayBusy || !showFastSam}
-                  className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                >
-                  Gen FastSAM
-                </button>
+                </select> */}
+                {/* Generation Buttons (Sky themed) */}
+                <div className="flex gap-1 ml-2 pl-2 border-l border-slate-200">
+                  <button
+                    onClick={() => void generateOverlays("movenet")}
+                    disabled={overlayBusy || !showMoveNet}
+                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                  >
+                    Gen MoveNet
+                  </button>
+                  <button
+                    onClick={() => void generateOverlays("yolo")}
+                    disabled={overlayBusy || !showYolo}
+                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                  >
+                    Gen YOLO
+                  </button>
+                  <button
+                    onClick={() => void generateOverlays("bodypix")}
+                    disabled={overlayBusy || !showBodyPix}
+                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                  >
+                    Gen BodyPix
+                  </button>
+                </div>
+                </div>
               </div>
             ) : null}
             {hasSegments ? (
@@ -1418,7 +1393,7 @@ export function EbsViewer(props: EbsViewerProps) {
               </div>
             </div>
           </div>
-
+{/* moved to new tab
           {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
             <div className="mt-4 mb-2">
               <FeedbackPanel
@@ -1430,7 +1405,7 @@ export function EbsViewer(props: EbsViewerProps) {
                 onFeedbackReady={setDanceFeedback}
               />
             </div>
-          )}
+          )} */}
 
           {!state.practice.enabled && hasSegments && (
             <>
