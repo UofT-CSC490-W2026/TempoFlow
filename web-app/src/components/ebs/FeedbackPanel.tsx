@@ -5,11 +5,11 @@ import type { EbsSegment } from "./types";
 import {
   compareWithBodyPix,
   generateSampleTimestamps,
-  type BodyRegion,
   type ComparisonProgress,
   type DanceFeedback,
   type FeedbackSeverity,
 } from "../../lib/bodyPixComparison";
+import { buildFallbackPerFrameOutputs, buildPerFrameCoachPayload } from "../../lib/ebsTemporalLlm";
 
 type FeedbackPanelProps = {
   referenceVideoUrl: string;
@@ -30,14 +30,6 @@ const SEVERITY_CONFIG: Record<
   major: { label: "Focus here", color: "text-red-700", bg: "bg-red-50", border: "border-red-200", dot: "bg-red-500" },
 };
 
-const REGION_ICON: Record<BodyRegion, string> = {
-  head: "Head",
-  arms: "Arms",
-  torso: "Torso",
-  legs: "Legs",
-  full_body: "Full Body",
-};
-
 function fmtTime(sec: number) {
   const safe = Math.max(0, sec);
   const m = Math.floor(safe / 60);
@@ -45,45 +37,28 @@ function fmtTime(sec: number) {
 }
 
 function BodyDiagram({ feedback }: { feedback: DanceFeedback[] }) {
-  const regionSeverity = useMemo(() => {
-    const severity: Record<BodyRegion, FeedbackSeverity> = {
-      head: "good", arms: "good", torso: "good", legs: "good", full_body: "good",
-    };
+  const worst = useMemo(() => {
     const order: FeedbackSeverity[] = ["good", "minor", "moderate", "major"];
-    for (const fb of feedback) {
-      if (order.indexOf(fb.severity) > order.indexOf(severity[fb.bodyRegion])) {
-        severity[fb.bodyRegion] = fb.severity;
-      }
-    }
-    return severity;
+    return feedback.reduce<FeedbackSeverity>((w, fb) => {
+      return order.indexOf(fb.severity) > order.indexOf(w) ? fb.severity : w;
+    }, "good");
   }, [feedback]);
 
-  const colorFor = (region: BodyRegion) => {
-    const s = regionSeverity[region];
-    if (s === "good") return "#34d399";
-    if (s === "minor") return "#fbbf24";
-    if (s === "moderate") return "#fb923c";
-    return "#f87171";
-  };
+  const color =
+    worst === "good" ? "#34d399" :
+    worst === "minor" ? "#fbbf24" :
+    worst === "moderate" ? "#fb923c" : "#f87171";
 
   return (
     <svg viewBox="0 0 100 200" className="w-20 h-40 mx-auto" aria-label="Body diagram">
-      {/* Head */}
-      <circle cx="50" cy="22" r="14" fill={colorFor("head")} opacity="0.7" />
-      {/* Torso */}
-      <rect x="32" y="40" width="36" height="50" rx="6" fill={colorFor("torso")} opacity="0.7" />
-      {/* Left arm */}
-      <rect x="10" y="42" width="18" height="44" rx="6" fill={colorFor("arms")} opacity="0.7" />
-      {/* Right arm */}
-      <rect x="72" y="42" width="18" height="44" rx="6" fill={colorFor("arms")} opacity="0.7" />
-      {/* Left leg */}
-      <rect x="32" y="94" width="16" height="56" rx="6" fill={colorFor("legs")} opacity="0.7" />
-      {/* Right leg */}
-      <rect x="52" y="94" width="16" height="56" rx="6" fill={colorFor("legs")} opacity="0.7" />
-      {/* Left foot */}
-      <ellipse cx="40" cy="155" rx="10" ry="5" fill={colorFor("legs")} opacity="0.7" />
-      {/* Right foot */}
-      <ellipse cx="60" cy="155" rx="10" ry="5" fill={colorFor("legs")} opacity="0.7" />
+      <circle cx="50" cy="22" r="14" fill={color} opacity="0.7" />
+      <rect x="32" y="40" width="36" height="50" rx="6" fill={color} opacity="0.7" />
+      <rect x="10" y="42" width="18" height="44" rx="6" fill={color} opacity="0.7" />
+      <rect x="72" y="42" width="18" height="44" rx="6" fill={color} opacity="0.7" />
+      <rect x="32" y="94" width="16" height="56" rx="6" fill={color} opacity="0.7" />
+      <rect x="52" y="94" width="16" height="56" rx="6" fill={color} opacity="0.7" />
+      <ellipse cx="40" cy="155" rx="10" ry="5" fill={color} opacity="0.7" />
+      <ellipse cx="60" cy="155" rx="10" ry="5" fill={color} opacity="0.7" />
     </svg>
   );
 }
@@ -94,8 +69,10 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
   const [running, setRunning] = useState(false);
   const [progress, setProgress] = useState<ComparisonProgress | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [filterRegion, setFilterRegion] = useState<BodyRegion | "all">("all");
   const [filterSeverity, setFilterSeverity] = useState<FeedbackSeverity | "all">("all");
+  const [timingIssuesOnly, setTimingIssuesOnly] = useState(false);
+  const [llmLoading, setLlmLoading] = useState(false);
+  const [llmSource, setLlmSource] = useState<string | null>(null);
   const feedbackListRef = useRef<HTMLDivElement>(null);
   const userHovering = useRef(false);
   const hasRun = useRef(false);
@@ -105,6 +82,7 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
     setRunning(true);
     setError(null);
     setFeedback([]);
+    setLlmSource(null);
     hasRun.current = true;
 
     try {
@@ -115,8 +93,77 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
         timestamps,
         onProgress: setProgress,
       });
-      setFeedback(result);
-      onFeedbackReady?.(result);
+      const perFramePayload = buildPerFrameCoachPayload(segments, result.refSamples, result.userSamples);
+      const withTimingFlags = result.feedback.map((fb, i) => ({
+        ...fb,
+        microTimingOff: perFramePayload.frames[fb.frameIndex ?? i]?.microTimingOff ?? false,
+      }));
+      setFeedback(withTimingFlags);
+      onFeedbackReady?.(withTimingFlags);
+
+      const total = result.refSamples.length;
+      setProgress({ currentFrame: total, totalFrames: total, phase: "llm" });
+      setLlmLoading(true);
+
+      const applyRows = (
+        rows: Array<{
+          frameIndex: number;
+          microTimingOff: boolean;
+          attackDecay: string;
+          transitionToNext: string;
+        }>,
+      ) => {
+        const byIdx = new Map(rows.map((r) => [r.frameIndex, r]));
+        return withTimingFlags.map((fb) => {
+          const row = fb.frameIndex != null ? byIdx.get(fb.frameIndex) : undefined;
+          if (!row) return fb;
+          const message = `${row.attackDecay}\n\n→ Next: ${row.transitionToNext}`;
+          return {
+            ...fb,
+            microTimingOff: row.microTimingOff,
+            attackDecay: row.attackDecay,
+            transitionToNext: row.transitionToNext,
+            message,
+          };
+        });
+      };
+
+      try {
+        const res = await fetch("/api/ebs-pose-feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ perFramePayload }),
+        });
+        const data = (await res.json()) as {
+          frames?: Array<{
+            frameIndex: number;
+            microTimingOff: boolean;
+            attackDecay: string;
+            transitionToNext: string;
+          }>;
+          source?: string;
+        };
+
+        if (res.ok && Array.isArray(data.frames) && data.frames.length > 0) {
+          const merged = applyRows(data.frames);
+          setFeedback(merged);
+          onFeedbackReady?.(merged);
+          setLlmSource(data.source ?? "groq");
+        } else {
+          const merged = applyRows(buildFallbackPerFrameOutputs(perFramePayload));
+          setFeedback(merged);
+          onFeedbackReady?.(merged);
+          setLlmSource("local-fallback");
+        }
+      } catch {
+        const merged = applyRows(buildFallbackPerFrameOutputs(perFramePayload));
+        setFeedback(merged);
+        onFeedbackReady?.(merged);
+        setLlmSource("local-fallback");
+      } finally {
+        setLlmLoading(false);
+        setProgress({ currentFrame: total, totalFrames: total, phase: "done" });
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Comparison failed.");
     } finally {
@@ -126,29 +173,16 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
 
   const filtered = useMemo(() => {
     return feedback.filter((fb) => {
-      if (filterRegion !== "all" && fb.bodyRegion !== filterRegion) return false;
+      if (timingIssuesOnly && !fb.microTimingOff) return false;
       if (filterSeverity !== "all" && fb.severity !== filterSeverity) return false;
       return true;
     });
-  }, [feedback, filterRegion, filterSeverity]);
+  }, [feedback, filterSeverity, timingIssuesOnly]);
 
-  const summaryByRegion = useMemo(() => {
-    const regions: BodyRegion[] = ["head", "arms", "torso", "legs"];
-    return regions.map((region) => {
-      const items = feedback.filter((fb) => fb.bodyRegion === region);
-      const avgDev = items.length
-        ? items.reduce((s, fb) => s + fb.deviation, 0) / items.length
-        : 0;
-      const worstSeverity = items.reduce<FeedbackSeverity>(
-        (worst, fb) => {
-          const order: FeedbackSeverity[] = ["good", "minor", "moderate", "major"];
-          return order.indexOf(fb.severity) > order.indexOf(worst) ? fb.severity : worst;
-        },
-        "good",
-      );
-      return { region, count: items.length, avgDeviation: avgDev, worstSeverity };
-    });
-  }, [feedback]);
+  const timingOffCount = useMemo(
+    () => feedback.filter((f) => f.microTimingOff).length,
+    [feedback],
+  );
 
   useEffect(() => {
     const container = feedbackListRef.current;
@@ -189,7 +223,7 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
           <div>
             <h3 className="text-base font-semibold text-slate-900">Pose Comparison Feedback</h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              BodyPix part segmentation + keypoint analysis
+              One row per sampled frame: attack/decay, transition to next pose, micro-timing flags
             </p>
           </div>
           <button
@@ -228,35 +262,33 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
       {/* Results */}
       {feedback.length > 0 && (
         <>
+          {llmLoading && (
+            <div className="px-5 py-2 border-b border-indigo-100 bg-indigo-50/60 text-xs text-indigo-900">
+              Generating per-frame coaching (attack/decay &amp; transitions)…
+            </div>
+          )}
+
           {/* Body diagram + summary */}
           <div className="px-5 py-4 border-b border-sky-50">
             <div className="flex items-start gap-6">
               <BodyDiagram feedback={feedback} />
-              <div className="flex-1 grid grid-cols-2 gap-2">
-                {summaryByRegion.map(({ region, count, worstSeverity }) => {
-                  const cfg = SEVERITY_CONFIG[worstSeverity];
-                  return (
-                    <button
-                      key={region}
-                      onClick={() => setFilterRegion(filterRegion === region ? "all" : region)}
-                      className={`rounded-xl px-3 py-2 text-left transition-all border ${
-                        filterRegion === region
-                          ? `${cfg.bg} ${cfg.border} ring-1 ring-offset-1 ring-sky-300`
-                          : `bg-slate-50 border-slate-100 hover:bg-slate-100`
-                      }`}
-                    >
-                      <div className="flex items-center gap-1.5">
-                        <div className={`w-2 h-2 rounded-full ${cfg.dot}`} />
-                        <span className="text-xs font-semibold text-slate-700 capitalize">
-                          {REGION_ICON[region]}
-                        </span>
-                      </div>
-                      <div className={`text-xs mt-0.5 ${cfg.color}`}>
-                        {count === 0 ? "Looking good" : `${count} note${count > 1 ? "s" : ""}`}
-                      </div>
-                    </button>
-                  );
-                })}
+              <div className="flex-1 min-w-0">
+                <p className="text-sm font-medium text-slate-800">
+                  {feedback.length} sampled frame{feedback.length === 1 ? "" : "s"}
+                </p>
+                <p className="text-xs text-slate-500 mt-1">
+                  {timingOffCount} timestamp{timingOffCount === 1 ? "" : "s"} flagged for micro-timing vs reference motion
+                </p>
+                {llmSource && (
+                  <p className="text-[10px] text-slate-400 mt-2">
+                    Coach:{" "}
+                    {llmSource === "groq"
+                      ? "Groq"
+                      : llmSource === "openai"
+                        ? "OpenAI"
+                        : "offline"}
+                  </p>
+                )}
               </div>
             </div>
           </div>
@@ -277,6 +309,17 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
                 {sev === "all" ? "All" : SEVERITY_CONFIG[sev].label}
               </button>
             ))}
+            <button
+              type="button"
+              onClick={() => setTimingIssuesOnly(!timingIssuesOnly)}
+              className={`rounded-full px-2.5 py-1 text-[11px] font-medium border transition-all ${
+                timingIssuesOnly
+                  ? "bg-amber-100 text-amber-900 border-amber-300"
+                  : "bg-white text-slate-600 border-slate-200 hover:bg-slate-50"
+              }`}
+            >
+              Timing flags only
+            </button>
             <span className="text-[11px] text-slate-400 ml-auto">
               {filtered.length} of {feedback.length} items
             </span>
@@ -294,7 +337,7 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
               const isNearCurrent = Math.abs(fb.timestamp - sharedTime) < 0.8;
               return (
                 <button
-                  key={`${fb.timestamp}-${fb.bodyRegion}-${i}`}
+                  key={`${fb.frameIndex ?? i}-${fb.timestamp}`}
                   onClick={() => onSeek(fb.timestamp)}
                   className={`w-full text-left px-5 py-3 transition-all hover:bg-sky-50 ${
                     isNearCurrent ? "bg-sky-50/80 ring-inset ring-1 ring-sky-200" : ""
@@ -308,20 +351,36 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
                       </span>
                     </div>
                     <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <span className={`text-[11px] font-semibold uppercase tracking-wide ${cfg.color}`}>
-                          {REGION_ICON[fb.bodyRegion]}
+                          Sample {fb.frameIndex != null ? fb.frameIndex + 1 : i + 1}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cfg.bg} ${cfg.color} font-medium`}>
                           {cfg.label}
                         </span>
+                        {fb.microTimingOff && (
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-violet-100 text-violet-800 font-medium">
+                            Micro-timing
+                          </span>
+                        )}
                         <span className="text-[10px] text-slate-400 ml-auto">
                           Seg {fb.segmentIndex}
                         </span>
                       </div>
-                      <p className="text-xs text-slate-600 mt-1 leading-relaxed">
-                        {fb.message}
-                      </p>
+                      {fb.attackDecay ? (
+                        <>
+                          <p className="text-[11px] font-semibold text-slate-700 mt-2">Attack &amp; decay</p>
+                          <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">{fb.attackDecay}</p>
+                          {fb.transitionToNext && (
+                            <>
+                              <p className="text-[11px] font-semibold text-slate-700 mt-2">Toward next pose</p>
+                              <p className="text-xs text-slate-600 mt-0.5 leading-relaxed">{fb.transitionToNext}</p>
+                            </>
+                          )}
+                        </>
+                      ) : (
+                        <p className="text-xs text-slate-500 mt-1 italic">Coaching text loading or unavailable.</p>
+                      )}
                     </div>
                   </div>
                 </button>

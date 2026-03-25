@@ -65,8 +65,18 @@ function findRegionSeverities(
   };
   for (const fb of feedback) {
     if (Math.abs(fb.timestamp - sharedTime) > windowSec) continue;
-    if (SEVERITY_ORDER.indexOf(fb.severity) > SEVERITY_ORDER.indexOf(result[fb.bodyRegion])) {
-      result[fb.bodyRegion] = fb.severity;
+    const sev = fb.severity;
+    if (fb.bodyRegion === "full_body") {
+      for (const r of ["head", "arms", "torso", "legs"] as BodyRegion[]) {
+        if (SEVERITY_ORDER.indexOf(sev) > SEVERITY_ORDER.indexOf(result[r])) {
+          result[r] = sev;
+        }
+      }
+      if (SEVERITY_ORDER.indexOf(sev) > SEVERITY_ORDER.indexOf(result.full_body)) {
+        result.full_body = sev;
+      }
+    } else if (SEVERITY_ORDER.indexOf(sev) > SEVERITY_ORDER.indexOf(result[fb.bodyRegion])) {
+      result[fb.bodyRegion] = sev;
     }
   }
   return result;

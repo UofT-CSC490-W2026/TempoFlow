@@ -18,24 +18,37 @@ export type DanceFeedback = {
   segmentIndex: number;
   bodyRegion: BodyRegion;
   severity: FeedbackSeverity;
+  /** Legacy combined line; per-frame coaching uses attackDecay + transitionToNext when set. */
   message: string;
   deviation: number;
+  /** Sample index in the BodyPix run (one row per sampled frame). */
+  frameIndex?: number;
+  /** Heuristic: motion emphasis misaligned vs reference at this sample. */
+  microTimingOff?: boolean;
+  /** Coaching: onset, stops, release (no joint degrees). */
+  attackDecay?: string;
+  /** Coaching: how this shape should move toward the next sampled pose. */
+  transitionToNext?: string;
 };
 
 export type ComparisonProgress = {
   currentFrame: number;
   totalFrames: number;
-  phase: "loading" | "sampling" | "comparing" | "done";
+  phase: "loading" | "sampling" | "comparing" | "llm" | "done";
 };
 
-type Keypoint = { x: number; y: number; score: number; name?: string };
+export type PoseKeypoint = { x: number; y: number; score: number; name?: string };
 
-type FrameSample = {
+type Keypoint = PoseKeypoint;
+
+export type SampledPoseFrame = {
   timestamp: number;
   segmentIndex: number;
   keypoints: Keypoint[];
   partCoverage: Record<BodyRegion, number>;
 };
+
+type FrameSample = SampledPoseFrame;
 
 const KEYPOINT_NAMES = [
   "nose", "leftEye", "rightEye", "leftEar", "rightEar",
@@ -131,7 +144,7 @@ function keypointDistance(a: Keypoint[], b: Keypoint[], indices: number[]): numb
   return count > 0 ? totalDist / count : 0;
 }
 
-function computeAngle(a: Keypoint, b: Keypoint, c: Keypoint): number | null {
+export function computeAngle(a: Keypoint, b: Keypoint, c: Keypoint): number | null {
   if (a.score < 0.3 || b.score < 0.3 || c.score < 0.3) return null;
   const ba = { x: a.x - b.x, y: a.y - b.y };
   const bc = { x: c.x - b.x, y: c.y - b.y };
@@ -140,9 +153,9 @@ function computeAngle(a: Keypoint, b: Keypoint, c: Keypoint): number | null {
   return Math.atan2(cross, dot) * (180 / Math.PI);
 }
 
-type JointAngle = { name: string; region: BodyRegion; joints: [number, number, number] };
+export type JointAngle = { name: string; region: BodyRegion; joints: [number, number, number] };
 
-const JOINT_ANGLES: JointAngle[] = [
+export const JOINT_ANGLES: JointAngle[] = [
   { name: "left elbow", region: "arms", joints: [5, 7, 9] },
   { name: "right elbow", region: "arms", joints: [6, 8, 10] },
   { name: "left shoulder", region: "torso", joints: [7, 5, 11] },
@@ -153,39 +166,25 @@ const JOINT_ANGLES: JointAngle[] = [
   { name: "right hip", region: "legs", joints: [6, 12, 14] },
 ];
 
+export function jointAnglesDegFromKeypoints(
+  keypoints: PoseKeypoint[],
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {};
+  for (const ja of JOINT_ANGLES) {
+    out[ja.name] = computeAngle(
+      keypoints[ja.joints[0]],
+      keypoints[ja.joints[1]],
+      keypoints[ja.joints[2]],
+    );
+  }
+  return out;
+}
+
 function classifySeverity(deviation: number): FeedbackSeverity {
   if (deviation < 0.12) return "good";
   if (deviation < 0.25) return "minor";
   if (deviation < 0.4) return "moderate";
   return "major";
-}
-
-function buildFeedbackMessage(
-  region: BodyRegion,
-  severity: FeedbackSeverity,
-  angleDetails: Array<{ name: string; diff: number }>,
-): string {
-  const regionLabel: Record<BodyRegion, string> = {
-    head: "Head position",
-    arms: "Arm placement",
-    torso: "Torso alignment",
-    legs: "Leg positioning",
-    full_body: "Overall body position",
-  };
-
-  if (severity === "good") {
-    return `${regionLabel[region]} looks great — closely matches the reference.`;
-  }
-
-  const worst = angleDetails.sort((a, b) => b.diff - a.diff)[0];
-  const intensityWord =
-    severity === "minor" ? "slightly" : severity === "moderate" ? "noticeably" : "significantly";
-
-  if (worst) {
-    return `${regionLabel[region]} is ${intensityWord} off — your ${worst.name} differs by ~${Math.round(worst.diff)}° from the reference. Try adjusting to match the reference pose.`;
-  }
-
-  return `${regionLabel[region]} is ${intensityWord} different from the reference. Watch the reference clip for this section and adjust.`;
 }
 
 async function sampleFrame(
@@ -235,9 +234,15 @@ export type ComparisonOptions = {
   onProgress?: (progress: ComparisonProgress) => void;
 };
 
+export type BodyPixComparisonResult = {
+  feedback: DanceFeedback[];
+  refSamples: SampledPoseFrame[];
+  userSamples: SampledPoseFrame[];
+};
+
 export async function compareWithBodyPix(
   opts: ComparisonOptions,
-): Promise<DanceFeedback[]> {
+): Promise<BodyPixComparisonResult> {
   const { referenceVideoUrl, userVideoUrl, timestamps, onProgress } = opts;
   const totalFrames = timestamps.length;
 
@@ -289,10 +294,10 @@ export async function compareWithBodyPix(
     const userNorm = normalizeKeypoints(user.keypoints);
 
     const regions: BodyRegion[] = ["head", "arms", "torso", "legs"];
+    let maxCombined = 0;
     for (const region of regions) {
       const dist = keypointDistance(refNorm, userNorm, REGION_KEYPOINTS[region]);
-
-      const angleDetails: Array<{ name: string; diff: number }> = [];
+      const angleDetails: number[] = [];
       for (const ja of JOINT_ANGLES.filter((j) => j.region === region)) {
         const refAngle = computeAngle(
           ref.keypoints[ja.joints[0]],
@@ -307,33 +312,30 @@ export async function compareWithBodyPix(
         if (refAngle != null && userAngle != null) {
           let diff = Math.abs(refAngle - userAngle);
           if (diff > 180) diff = 360 - diff;
-          angleDetails.push({ name: ja.name, diff });
+          angleDetails.push(diff);
         }
       }
-
-      const maxAngleDiff = angleDetails.length
-        ? Math.max(...angleDetails.map((a) => a.diff))
-        : 0;
+      const maxAngleDiff = angleDetails.length ? Math.max(...angleDetails) : 0;
       const combinedDeviation = dist * 0.6 + (maxAngleDiff / 180) * 0.4;
-      const severity = classifySeverity(combinedDeviation);
-
-      if (severity !== "good") {
-        feedback.push({
-          timestamp: ref.timestamp,
-          segmentIndex: ref.segmentIndex,
-          bodyRegion: region,
-          severity,
-          message: buildFeedbackMessage(region, severity, angleDetails),
-          deviation: combinedDeviation,
-        });
-      }
+      if (combinedDeviation > maxCombined) maxCombined = combinedDeviation;
     }
+
+    const severity = classifySeverity(maxCombined);
+    feedback.push({
+      timestamp: ref.timestamp,
+      segmentIndex: ref.segmentIndex,
+      bodyRegion: "full_body",
+      severity,
+      message: "",
+      deviation: maxCombined,
+      frameIndex: i,
+    });
   }
 
   feedback.sort((a, b) => a.timestamp - b.timestamp || b.deviation - a.deviation);
 
   onProgress?.({ currentFrame: totalFrames, totalFrames, phase: "done" });
-  return feedback;
+  return { feedback, refSamples, userSamples };
 }
 
 export function generateSampleTimestamps(
