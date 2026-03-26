@@ -132,6 +132,49 @@ npm run dev
 
 Open `http://localhost:3000`.
 
+### Test
+
+```bash
+npm test
+```
+
+This runs the Vitest test suite once in non-interactive mode.
+
+Use this when you want a quick pass/fail check during development or before pushing code.
+
+What it covers:
+
+- executes all `*.test.ts` and `*.test.tsx` files matched by the Vitest config
+- validates expected behavior for the tested pages and library modules
+- reports which tests passed or failed
+
+What it does not do:
+
+- it does not calculate line/statement/branch coverage percentages
+- it does not generate the HTML coverage report
+
+### Coverage
+
+```bash
+npm run coverage
+```
+
+This runs the same test suite as `npm test`, but with coverage instrumentation turned on.
+
+Use this when you need to measure how much of the app is exercised by the tests for the assignment report or CI.
+
+What it covers:
+
+- runs the same tests as `npm test`
+- measures statement, branch, function, and line coverage
+- prints a coverage summary in the terminal
+- writes the detailed HTML coverage report to `web-app/coverage/`
+
+In short:
+
+- `npm test` answers "Do the tests pass?"
+- `npm run coverage` answers "Do the tests pass, and how much code did they exercise?"
+
 ## Environment Modes
 
 Copy `web-app/.env.example` to `.env.local` and start from local mode.
