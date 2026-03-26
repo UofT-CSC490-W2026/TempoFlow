@@ -12,3 +12,4 @@ httpx
 tqdm
 opencv-python
 ultralytics
+google-generativeai>=0.8.0

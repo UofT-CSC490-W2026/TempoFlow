@@ -272,3 +272,94 @@ def process_uploads(ref_video: UploadFile, user_video: UploadFile) -> dict[str, 
                 Path(p).unlink(missing_ok=True)
             except OSError:
                 pass
+
+
+def process_videos_from_paths(ref_video_path: str, user_video_path: str) -> dict[str, Any]:
+    """Run the EBS alignment+segmentation pipeline for two saved video files.
+
+    Unlike `process_uploads()`, this function DOES NOT delete `ref_video_path`
+    or `user_video_path`. It only cleans up the extracted temporary audio
+    `.wav` files.
+    """
+    ref_wav: str | None = None
+    user_wav: str | None = None
+    try:
+        ref_wav = extract_audio_from_video(ref_video_path)
+        user_wav = extract_audio_from_video(user_video_path)
+        ref_audio, _ = librosa.load(ref_wav, sr=SAMPLE_RATE, mono=True)
+        user_audio, _ = librosa.load(user_wav, sr=SAMPLE_RATE, mono=True)
+
+        alignment = _auto_align(ref_audio, user_audio, SAMPLE_RATE)
+        shared_start = alignment["clip_1_start_sec"]
+        shared_end = alignment["clip_1_end_sec"]
+        shared_len_sec = round(float(shared_end - shared_start), ROUNDING_PRECISION)
+
+        shared_audio = ref_audio[int(shared_start * SAMPLE_RATE) : int(shared_end * SAMPLE_RATE)]
+        beat_times, bpm, confidence_info, onset_env, beat_frames = track_beats(shared_audio, SAMPLE_RATE)
+
+        segmentation_mode = "fixed_time"
+        beats_shared: list[float] = []
+        segments: list[dict[str, Any]] = _build_fallback_segments(shared_len_sec)
+
+        try:
+            if len(beat_times) >= BEATS_PER_SEGMENT + 1 and confidence_info["coefficient_of_variation"] <= 0.3:
+                downbeat_offset = estimate_downbeat_phase(onset_env, beat_frames, BEATS_PER_SEGMENT)
+                segment_points, _segment_beat_times = generate_segments(
+                    beat_times, downbeat_offset, BEATS_PER_SEGMENT
+                )
+                segs = _build_segments_from_beats(beat_times, segment_points, shared_len_sec)
+                if segs:
+                    segmentation_mode = "eight_beat"
+                    segments = segs
+                    beats_shared = [round(float(b), ROUNDING_PRECISION) for b in beat_times]
+        except Exception:
+            pass
+
+        clip_1_start = float(alignment["clip_1_start_sec"])
+        clip_2_start = float(alignment["clip_2_start_sec"])
+        for seg in segments:
+            seg["clip_1_seg_start_sec"] = round(
+                clip_1_start + seg["shared_start_sec"], ROUNDING_PRECISION
+            )
+            seg["clip_1_seg_end_sec"] = round(
+                clip_1_start + seg["shared_end_sec"], ROUNDING_PRECISION
+            )
+            seg["clip_2_seg_start_sec"] = round(
+                clip_2_start + seg["shared_start_sec"], ROUNDING_PRECISION
+            )
+            seg["clip_2_seg_end_sec"] = round(
+                clip_2_start + seg["shared_end_sec"], ROUNDING_PRECISION
+            )
+
+        artifact: dict[str, Any] = {
+            "alignment": {
+                "clip_1_start_sec": clip_1_start,
+                "clip_1_end_sec": float(alignment["clip_1_end_sec"]),
+                "clip_2_start_sec": clip_2_start,
+                "clip_2_end_sec": float(alignment["clip_2_end_sec"]),
+                "shared_len_sec": shared_len_sec,
+                "auto_align_mode": "chroma_sw",
+            },
+            "beat_tracking": {
+                "estimated_bpm": confidence_info.get("estimated_bpm", round(float(bpm), 1)),
+                "num_beats": confidence_info.get("num_beats", int(len(beat_times))),
+                "num_beats_detected": confidence_info.get("num_beats", int(len(beat_times))),
+                "source": "librosa.beat.beat_track",
+            },
+            "beats_shared_sec": beats_shared,
+            "segmentation_mode": segmentation_mode,
+            "segments": segments,
+            "video_meta": {
+                "clip_1": probe_video_metadata(ref_video_path),
+                "clip_2": probe_video_metadata(user_video_path),
+            },
+        }
+        return sanitize_json(artifact)
+    finally:
+        for p in (ref_wav, user_wav):
+            if not p:
+                continue
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
