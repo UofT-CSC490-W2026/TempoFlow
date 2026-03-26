@@ -1,6 +1,6 @@
 # A5 Test Coverage Report
 
-*Last Updated: Thu Mar 26 21:53:51 UTC 2026*
+*Last Updated: Thu Mar 26 22:36:38 UTC 2026*
 
 ```text
 ============================= test session starts ==============================
@@ -30,12 +30,12 @@ src/alignment_and_segmentation/router.py                 62      0   100%
 src/alignment_and_segmentation/schemas.py                17      0   100%
 src/alignment_and_segmentation/segmentation_core.py      59      0   100%
 src/alignment_and_segmentation/utils.py                  58      0   100%
-src/ebs_web_adapter.py                                  204    178    13%
+src/ebs_web_adapter.py                                  213    186    13%
 src/ffmpeg_paths.py                                      57     47    18%
 src/gemini_move_feedback.py                             192    162    16%
 src/main.py                                             153     95    38%
 src/overlay_api.py                                      474    426    10%
 -------------------------------------------------------------------------
-TOTAL                                                  1309    908    31%
-======================== 62 passed, 1 skipped in 35.01s ========================
+TOTAL                                                  1318    916    31%
+======================== 62 passed, 1 skipped in 35.78s ========================
 ```
