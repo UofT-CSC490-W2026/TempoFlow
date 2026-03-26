@@ -72,6 +72,7 @@ export class AmplifyWebAppStack extends cdk.Stack {
       platform: 'WEB_COMPUTE',
       buildSpec: buildSpecYaml,
       environmentVariables: [
+        { name: 'AMPLIFY_MONOREPO_APP_ROOT', value: 'web-app' },
         { name: 'NEXT_PUBLIC_APP_STORAGE_MODE', value: 'local' },
         { name: 'NEXT_PUBLIC_APP_ANALYSIS_MODE', value: 'local' },
       ],
