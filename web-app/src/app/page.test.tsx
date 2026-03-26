@@ -1,4 +1,5 @@
 import { render, screen } from '@testing-library/react';
+import React from 'react';
 
 import Home from './page';
 
@@ -7,16 +8,13 @@ vi.mock('next/link', () => ({
     href,
     children,
     ...props
-  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) =>
+    React.createElement('a', { href, ...props }, children),
 }));
 
 describe('Home page', () => {
   it('renders the main call-to-action links', () => {
-    render(<Home />);
+    render(React.createElement(Home));
 
     expect(screen.getByRole('heading', { name: 'TempoFlow' })).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /start session/i })).toHaveAttribute('href', '/upload');
@@ -24,7 +22,7 @@ describe('Home page', () => {
   });
 
   it('highlights the local-first practice flow', () => {
-    render(<Home />);
+    render(React.createElement(Home));
 
     expect(screen.getByText(/local-first mode/i)).toBeInTheDocument();
     expect(

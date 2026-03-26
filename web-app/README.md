@@ -175,6 +175,18 @@ In short:
 - `npm test` answers "Do the tests pass?"
 - `npm run coverage` answers "Do the tests pass, and how much code did they exercise?"
 
+### Combined (A5 + web-app) tests
+
+From repo root:
+
+```bash
+./scripts/test_all.sh
+```
+
+This runs:
+- `A5` backend tests via `pytest`
+- `web-app` tests via `vitest`
+
 ## Environment Modes
 
 Copy `web-app/.env.example` to `.env.local` and start from local mode.

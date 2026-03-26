@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import React from 'react';
 
 import DashboardPage from './page';
 
@@ -36,11 +37,8 @@ vi.mock('next/link', () => ({
     href,
     children,
     ...props
-  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) => (
-    <a href={href} {...props}>
-      {children}
-    </a>
-  ),
+  }: React.AnchorHTMLAttributes<HTMLAnchorElement> & { href: string }) =>
+    React.createElement('a', { href, ...props }, children),
 }));
 
 vi.mock('../../lib/sessionStorage', () => ({
@@ -66,7 +64,7 @@ describe('Dashboard page', () => {
   });
 
   it('renders the empty state when there are no saved sessions', () => {
-    render(<DashboardPage />);
+    render(React.createElement(DashboardPage));
 
     expect(screen.getByText(/no dances yet/i)).toBeInTheDocument();
     expect(screen.getByRole('link', { name: /upload video/i })).toHaveAttribute(
@@ -98,7 +96,7 @@ describe('Dashboard page', () => {
       },
     ];
 
-    render(<DashboardPage />);
+    render(React.createElement(DashboardPage));
 
     expect(screen.getByRole('heading', { name: /your dances/i })).toBeInTheDocument();
     expect(screen.getByText('practice.mp4')).toBeInTheDocument();
@@ -133,7 +131,7 @@ describe('Dashboard page', () => {
       },
     ];
 
-    render(<DashboardPage />);
+    render(React.createElement(DashboardPage));
     fireEvent.click(screen.getByRole('button', { name: /delete/i }));
 
     await waitFor(() => {
