@@ -84,19 +84,27 @@ def generate_segments(
     beat_times: np.ndarray,
     downbeat_offset: int,
     beats_per_seg: int
-) -> list[float]:
+) -> tuple[list[float], list[list[tuple[float, float]]]]:
     """
     Generate segmentation points (timestamps) based on beats and downbeat offset.
-    Returns a list of timestamps [t0, t1, t2...] defining the segment boundaries.
+
+    Returns
+    -------
+    segment_boundaries : list[float]
+        Timestamps [t0, t1, t2...] defining the segment boundaries.
+    segment_beat_times : list[list[tuple[float, float]]]
+        Per-segment beat timestamps. ``segment_beat_times[i]`` contains the
+        individual beat times that fall within segment *i*.
     """
-    segment_boundaries = []
+    segment_boundaries: list[float] = []
+    segment_beat_times: list[list[tuple[float, float]]] = []
     num_beats = len(beat_times)
     
     start_idx = downbeat_offset
 
     # If we can't make at least one segment, return empty
     if start_idx + beats_per_seg > num_beats:
-         return []
+         return [], []
 
     # Add the first point (start of first segment)
     segment_boundaries.append(float(beat_times[start_idx]))
@@ -114,7 +122,12 @@ def generate_segments(
                 last_interval = 0.5
             end_time = beat_times[-1] + last_interval
 
+        # Collect beat timestamps for this segment
+        beats_end = min(end_idx, num_beats)
+        seg_beats = [(float(beat_times[j]), float(beat_times[j+1])) for j in range(start_idx, beats_end-1)]
+        segment_beat_times.append(seg_beats)
+
         segment_boundaries.append(float(end_time))
         start_idx += beats_per_seg
         
-    return segment_boundaries
+    return segment_boundaries, segment_beat_times

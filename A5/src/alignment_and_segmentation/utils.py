@@ -79,8 +79,9 @@ def extract_chroma(y: np.ndarray, sr: int) -> np.ndarray:
 def map_segments_to_clips(
     segment_points: list[float],
     clip_start_time: float,
-    clip_end_time: float
-) -> list[tuple[float, float]]:
+    clip_end_time: float,
+    segment_beat_times: list[list[tuple[float, float]]] | None = None,
+) -> list[tuple[float, float, list[tuple[float, float]]]]:
     """
     Map relative segmentation points to absolute clip times.
     
@@ -88,9 +89,10 @@ def map_segments_to_clips(
         segment_points: List of relative timestamps [t0, t1, t2...] from the start of the aligned region.
         clip_start_time: Absolute start time of the aligned region in the clip.
         clip_end_time: Absolute end time of the aligned region in the clip.
+        segment_beat_times: Optional per-segment beat timestamps (relative to aligned region).
         
     Returns:
-        List of (start, end) tuples in absolute clip time.
+        List of (start, end, beat_times) tuples in absolute clip time.
     """
     segments = []
     if not segment_points or len(segment_points) < 2:
@@ -104,23 +106,16 @@ def map_segments_to_clips(
         abs_start = clip_start_time + rel_start
         abs_end = clip_start_time + rel_end
         
-        # Ensure we don't go beyond the clip's valid aligned region
-        # (Though extrapolation in generate_segments might intentionally go slightly over,
-        # usually we want to clamp to the file/alignment limits if strict)
-        
-        # Allow slight overshoot if it's the last segment? 
-        # For safety, let's clamp to clip_end_time provided by the alignment context.
-        # But if clip_end_time is just "end of alignment", and the beat goes slightly past,
-        # we might want to keep it. 
-        # However, the user asked for "start and endtime for all audio clips".
-        
-        start_final = abs_start
-        end_final = abs_end
-        
-        # Filter out segments that strictly start after the clip ends (shouldn't happen with correct logic)
-        if start_final >= clip_end_time:
+        # Filter out segments that strictly start after the clip ends
+        if abs_start >= clip_end_time:
             continue
+
+        # Get beat times for this segment (keep relative, not offset)
+        if segment_beat_times is not None and i < len(segment_beat_times):
+            beats = segment_beat_times[i]
+        else:
+            beats = []
             
-        segments.append((float(start_final), float(end_final)))
+        segments.append((float(abs_start), float(abs_end), beats))
         
     return segments

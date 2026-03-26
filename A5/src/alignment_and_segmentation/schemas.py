@@ -8,6 +8,7 @@ class TimeRange(BaseModel):
 class Segment(BaseModel):
     start_time: float
     end_time: float
+    beat_times: List[List[float]] = []
 
 class AlignmentResult(BaseModel):
     file_a: TimeRange
