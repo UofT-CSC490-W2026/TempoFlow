@@ -131,14 +131,10 @@ export function PrecomputedFrameOverlay(props: {
     let raf = 0;
     let cancelled = false;
     // Use requestVideoFrameCallback for tight sync when available.
-    const rvfc = (video as HTMLVideoElement & {
-      requestVideoFrameCallback?: (
-        callback: (now: number, metadata: { mediaTime?: number }) => void,
-      ) => number;
-      cancelVideoFrameCallback?: (handle: number) => void;
-    }).requestVideoFrameCallback;
-    const cancelRvfc = (video as HTMLVideoElement & { cancelVideoFrameCallback?: (handle: number) => void })
-      .cancelVideoFrameCallback;
+    const rvfc = (video as any).requestVideoFrameCallback as
+      | ((callback: (now: number, metadata: { mediaTime?: number }) => void) => number)
+      | undefined;
+    const cancelRvfc = (video as any).cancelVideoFrameCallback as ((handle: number) => void) | undefined;
 
     let rvfcHandle = 0;
     const onVideoFrame = (_now: number, metadata: { mediaTime?: number }) => {
@@ -162,7 +158,7 @@ export function PrecomputedFrameOverlay(props: {
 
     return () => {
       cancelled = true;
-      if (cancelRvfc && rvfcHandle) cancelRvfc.call(video, rvfcHandle);
+      if (rvfcHandle) cancelRvfc?.call(video, rvfcHandle);
       if (raf) window.cancelAnimationFrame(raf);
     };
   }, [frameCount, frames, safeFps, videoRef]);

@@ -186,7 +186,7 @@ export function EbsViewer(props: EbsViewerProps) {
   // Lower FPS dramatically reduces precompute time (model + WebP encode).
   const OVERLAY_FPS = 12;
   const yoloVariant = `${segGenerator}-${segProvider}`;
-  const bodyPixVariant = segGenerator === "python" ? "bodypix24-python" : "bodypix24-browser";
+  const bodyPixVariant = "bodypix24-browser";
   const overlaySegmentPlans = useMemo(() => buildOverlaySegmentPlans(state.ebs), [state.ebs]);
   const missingPrecomputed =
     overlayMode === "precomputed" &&
@@ -956,8 +956,6 @@ export function EbsViewer(props: EbsViewerProps) {
           setOverlayStatus("YOLO Pose overlays ready.");
         } else if (which === "bodypix") {
           setOverlayStatus("Generating BodyPix overlays…");
-          let refArtifact: OverlayArtifact;
-          let userArtifact: OverlayArtifact;
 
           const usedSegmentPipeline = await runSegmentedOverlayPipeline({
             label: "BodyPix",
@@ -967,46 +965,9 @@ export function EbsViewer(props: EbsViewerProps) {
             existingPractice: userBodyPixArtifact,
             setReferenceArtifact: setRefBodyPixArtifact,
             setPracticeArtifact: setUserBodyPixArtifact,
-            referenceMeta: { generator: segGenerator },
-            practiceMeta: { generator: segGenerator },
+            referenceMeta: { generator: "browser" },
+            practiceMeta: { generator: "browser" },
             buildReferenceSegment: async (plan, ctx) => {
-              if (segGenerator === "python") {
-                const file = await getSessionVideo(sessionId, "reference");
-                if (!file) throw new Error("Missing reference video for this session");
-
-                const form = new FormData();
-                form.append("video", file, file.name);
-                form.append("arms_color", "#38bdf8");
-                form.append("legs_color", "#6366f1");
-                form.append("torso_color", "#22c55e");
-                form.append("head_color", "#f59e0b");
-                form.append("fps", String(OVERLAY_FPS));
-                form.append("session_id", sessionId);
-                form.append("side", "reference");
-                form.append("start_sec", String(plan.reference.startSec));
-                form.append("end_sec", String(plan.reference.endSec));
-
-                const jobId = await startBackgroundJob("bodypix", form);
-                const result = await waitForBackgroundJob("bodypix", jobId, ctx.reportProgress);
-                const size = getVideoSize("reference");
-                return {
-                  index: plan.index,
-                  startSec: plan.reference.startSec,
-                  endSec: plan.reference.endSec,
-                  fps: OVERLAY_FPS,
-                  width: size.width,
-                  height: size.height,
-                  frameCount: Math.max(
-                    1,
-                    Math.ceil((plan.reference.endSec - plan.reference.startSec) * OVERLAY_FPS),
-                  ),
-                  createdAt: new Date().toISOString(),
-                  video: result.blob,
-                  videoMime: result.mime,
-                  meta: { generator: "python", segmentIndex: plan.index },
-                };
-              }
-
               const result = await generateBodyPixOverlayFrames({
                 videoUrl: activeReferenceVideoUrl,
                 fps: OVERLAY_FPS,
@@ -1030,43 +991,6 @@ export function EbsViewer(props: EbsViewerProps) {
               };
             },
             buildPracticeSegment: async (plan, ctx) => {
-              if (segGenerator === "python") {
-                const file = await getSessionVideo(sessionId, "practice");
-                if (!file) throw new Error("Missing practice video for this session");
-
-                const form = new FormData();
-                form.append("video", file, file.name);
-                form.append("arms_color", "#22c55e");
-                form.append("legs_color", "#f59e0b");
-                form.append("torso_color", "#38bdf8");
-                form.append("head_color", "#f97316");
-                form.append("fps", String(OVERLAY_FPS));
-                form.append("session_id", sessionId);
-                form.append("side", "practice");
-                form.append("start_sec", String(plan.practice.startSec));
-                form.append("end_sec", String(plan.practice.endSec));
-
-                const jobId = await startBackgroundJob("bodypix", form);
-                const result = await waitForBackgroundJob("bodypix", jobId, ctx.reportProgress);
-                const size = getVideoSize("practice");
-                return {
-                  index: plan.index,
-                  startSec: plan.practice.startSec,
-                  endSec: plan.practice.endSec,
-                  fps: OVERLAY_FPS,
-                  width: size.width,
-                  height: size.height,
-                  frameCount: Math.max(
-                    1,
-                    Math.ceil((plan.practice.endSec - plan.practice.startSec) * OVERLAY_FPS),
-                  ),
-                  createdAt: new Date().toISOString(),
-                  video: result.blob,
-                  videoMime: result.mime,
-                  meta: { generator: "python", segmentIndex: plan.index },
-                };
-              }
-
               const result = await generateBodyPixOverlayFrames({
                 videoUrl: activeUserVideoUrl,
                 fps: OVERLAY_FPS,
@@ -1095,122 +1019,43 @@ export function EbsViewer(props: EbsViewerProps) {
             return;
           }
 
-          if (segGenerator === "python") {
-            let referenceProgress = 0;
-            let practiceProgress = 0;
-            const updateStatus = () => {
-              const avgProgress = (referenceProgress + practiceProgress) / 2;
-              setOverlayStatus(`BodyPix overlays generating… ${Math.round(avgProgress * 100)}%`);
-            };
+          const ref = await generateBodyPixOverlayFrames({
+            videoUrl: activeReferenceVideoUrl,
+            fps: OVERLAY_FPS,
+            opacity: 0.68,
+            onProgress: (c, t) => setOverlayStatus(`BodyPix (reference) ${c}/${t}`),
+          });
+          const user = await generateBodyPixOverlayFrames({
+            videoUrl: activeUserVideoUrl,
+            fps: OVERLAY_FPS,
+            opacity: 0.68,
+            onProgress: (c, t) => setOverlayStatus(`BodyPix (user) ${c}/${t}`),
+          });
 
-            const startJob = async (
-              side: "reference" | "practice",
-              colors: { arms: string; legs: string; torso: string; head: string },
-            ) => {
-              const file = await getSessionVideo(sessionId, side);
-              if (!file) throw new Error(`Missing ${side} video for this session`);
-
-              const form = new FormData();
-              form.append("video", file, file.name);
-              form.append("arms_color", colors.arms);
-              form.append("legs_color", colors.legs);
-              form.append("torso_color", colors.torso);
-              form.append("head_color", colors.head);
-              form.append("fps", String(OVERLAY_FPS));
-              form.append("session_id", sessionId);
-              form.append("side", side);
-              return startBackgroundJob("bodypix", form);
-            };
-
-            const [referenceJobId, practiceJobId] = await Promise.all([
-              startJob("reference", {
-                arms: "#38bdf8",
-                legs: "#6366f1",
-                torso: "#22c55e",
-                head: "#f59e0b",
-              }),
-              startJob("practice", {
-                arms: "#22c55e",
-                legs: "#f59e0b",
-                torso: "#38bdf8",
-                head: "#f97316",
-              }),
-            ]);
-
-            const [referenceResult, practiceResult] = await Promise.all([
-              waitForBackgroundJob("bodypix", referenceJobId, (progress) => {
-                referenceProgress = progress;
-                updateStatus();
-              }),
-              waitForBackgroundJob("bodypix", practiceJobId, (progress) => {
-                practiceProgress = progress;
-                updateStatus();
-              }),
-            ]);
-
-            refArtifact = {
-              version: 1,
-              type: "bodypix",
-              side: "reference",
-              fps: OVERLAY_FPS,
-              ...getVideoSize("reference"),
-              frameCount: 0,
-              createdAt: new Date().toISOString(),
-              video: referenceResult.blob,
-              videoMime: referenceResult.mime,
-              meta: { generator: "python" },
-            };
-            userArtifact = {
-              version: 1,
-              type: "bodypix",
-              side: "practice",
-              fps: OVERLAY_FPS,
-              ...getVideoSize("practice"),
-              frameCount: 0,
-              createdAt: new Date().toISOString(),
-              video: practiceResult.blob,
-              videoMime: practiceResult.mime,
-              meta: { generator: "python" },
-            };
-          } else {
-            const ref = await generateBodyPixOverlayFrames({
-              videoUrl: activeReferenceVideoUrl,
-              fps: OVERLAY_FPS,
-              opacity: 0.68,
-              onProgress: (c, t) => setOverlayStatus(`BodyPix (reference) ${c}/${t}`),
-            });
-            const user = await generateBodyPixOverlayFrames({
-              videoUrl: activeUserVideoUrl,
-              fps: OVERLAY_FPS,
-              opacity: 0.68,
-              onProgress: (c, t) => setOverlayStatus(`BodyPix (user) ${c}/${t}`),
-            });
-
-            refArtifact = {
-              version: 1,
-              type: "bodypix",
-              side: "reference",
-              fps: ref.fps,
-              width: ref.width,
-              height: ref.height,
-              frameCount: ref.frames.length,
-              createdAt: new Date().toISOString(),
-              frames: ref.frames,
-              meta: { generator: "browser" },
-            };
-            userArtifact = {
-              version: 1,
-              type: "bodypix",
-              side: "practice",
-              fps: user.fps,
-              width: user.width,
-              height: user.height,
-              frameCount: user.frames.length,
-              createdAt: new Date().toISOString(),
-              frames: user.frames,
-              meta: { generator: "browser" },
-            };
-          }
+          const refArtifact: OverlayArtifact = {
+            version: 1,
+            type: "bodypix",
+            side: "reference",
+            fps: ref.fps,
+            width: ref.width,
+            height: ref.height,
+            frameCount: ref.frames.length,
+            createdAt: new Date().toISOString(),
+            frames: ref.frames,
+            meta: { generator: "browser" },
+          };
+          const userArtifact: OverlayArtifact = {
+            version: 1,
+            type: "bodypix",
+            side: "practice",
+            fps: user.fps,
+            width: user.width,
+            height: user.height,
+            frameCount: user.frames.length,
+            createdAt: new Date().toISOString(),
+            frames: user.frames,
+            meta: { generator: "browser" },
+          };
 
           await Promise.all([
             storeSessionOverlay(

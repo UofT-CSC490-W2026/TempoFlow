@@ -112,7 +112,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   // Lower FPS dramatically reduces precompute time (model + WebP encode).
   const OVERLAY_FPS = 12;
   const yoloVariant = `${segGenerator}-${segProvider}`;
-  const bodyPixVariant = segGenerator === "python" ? "bodypix24-python" : "bodypix24-browser";
+  const bodyPixVariant = "bodypix24-browser";
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
     const variant = overlayMethod;

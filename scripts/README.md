@@ -29,6 +29,25 @@ What the script does:
 2. Runs `cdk bootstrap` (safe to repeat).
 3. Runs `STAGE=<arg> cdk deploy`.
 
+To also deploy the **optional** Next.js stack (`TempoFlow-Web-<stage>` — Fargate + ALB), set `DEPLOY_WEB_STACK=1` when running the deploy script (requires Docker because CDK builds the `web-app/` container image locally):
+
+```bash
+DEPLOY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+To deploy the web app with **AWS Amplify Hosting** (no local Docker required), set:
+
+```bash
+export AMPLIFY_GITHUB_REPO="owner/repo"
+export AMPLIFY_GITHUB_BRANCH="main"   # optional
+export AMPLIFY_GITHUB_ACCESS_TOKEN="ghp_..."         # classic PAT (do not commit; do not paste in chat)
+DEPLOY_AMPLIFY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+Amplify will pull/build automatically using the PAT passed as a NoEcho CloudFormation parameter.
+
+See `A2/infrastructure/README.md` for details.
+
 ### 4. Verify in AWS console
 - CloudFormation → Stack `TempoFlow-Infra-<stage>` should be `CREATE_COMPLETE`/`UPDATE_COMPLETE`.
 - Outputs tab lists the bucket + table names to plug into pipelines/web app.
