@@ -1,5 +1,5 @@
-import type { SampledPoseFrame } from "./bodyPixComparison";
-import { JOINT_ANGLES, jointAnglesDegFromKeypoints } from "./bodyPixComparison";
+import type { SampledPoseFrame } from "./bodyPix";
+import { JOINT_ANGLES, jointAnglesDegFromKeypoints } from "./bodyPix";
 
 export type EbsSegmentMeta = { shared_start_sec: number; shared_end_sec: number };
 
@@ -38,14 +38,21 @@ function mean(nums: number[]): number {
   return nums.reduce((a, b) => a + b, 0) / nums.length;
 }
 
-function angleDiffDeg(a: number | null, b: number | null): number | null {
+/** Exposed for tests (`mean([])` branch) and optional reuse. */
+export function meanOfArray(nums: number[]): number {
+  return mean(nums);
+}
+
+/** Exported for unit tests (pure geometry helpers). */
+export function angleDiffDeg(a: number | null, b: number | null): number | null {
   if (a == null || b == null) return null;
   let d = Math.abs(a - b);
   if (d > 180) d = 360 - d;
   return d;
 }
 
-function jointMotion(prev: Record<string, number | null>, curr: Record<string, number | null>): number {
+/** Exported for unit tests. */
+export function jointMotion(prev: Record<string, number | null>, curr: Record<string, number | null>): number {
   const deltas: number[] = [];
   for (const ja of JOINT_ANGLES) {
     const p = prev[ja.name];
@@ -61,7 +68,8 @@ function jointMotion(prev: Record<string, number | null>, curr: Record<string, n
 /**
  * Find integer lag (in steps) that best aligns user motion energy with reference.
  */
-function estimateTimingLagSteps(refMag: number[], userMag: number[]): number {
+/** Exported for unit tests. */
+export function estimateTimingLagSteps(refMag: number[], userMag: number[]): number {
   if (refMag.length === 0 || userMag.length === 0) return 0;
   const maxLag = Math.min(6, Math.floor(refMag.length / 2));
   let bestLag = 0;
@@ -255,14 +263,16 @@ export type PerFrameCoachPayload = {
   frames: PerFrameCoachRow[];
 };
 
-function median(nums: number[]): number {
+/** Exported for unit tests. */
+export function median(nums: number[]): number {
   if (nums.length === 0) return 0;
   const s = [...nums].sort((a, b) => a - b);
   const m = Math.floor(s.length / 2);
   return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2;
 }
 
-function angleDeltaDeg(a: number | null, b: number | null): number | null {
+/** Exported for unit tests. */
+export function angleDeltaDeg(a: number | null, b: number | null): number | null {
   if (a == null || b == null) return null;
   let d = b - a;
   while (d > 180) d -= 360;
@@ -270,13 +280,15 @@ function angleDeltaDeg(a: number | null, b: number | null): number | null {
   return d;
 }
 
-function shapeMismatchBand(meanDiffDeg: number): "low" | "med" | "high" {
+/** Exported for unit tests. */
+export function shapeMismatchBand(meanDiffDeg: number): "low" | "med" | "high" {
   if (meanDiffDeg < 18) return "low";
   if (meanDiffDeg < 35) return "med";
   return "high";
 }
 
-function frameMicroTimingOff(
+/** Exported for unit tests. */
+export function frameMicroTimingOff(
   frameIndex: number,
   refEdges: number[],
   userEdges: number[],

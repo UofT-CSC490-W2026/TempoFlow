@@ -41,7 +41,8 @@ export function DifferenceViewer({
       // @ts-ignore - Assuming global or imported utility
       const ref = await generateBodyPixOverlayFrames({
         videoUrl: referenceVideoUrl,
-        fps: 15,
+        fps: 12,
+        opacity: 0.68,
         onProgress: (c: number, t: number) => setStatus(`Ghosting Instructor: ${Math.round((c/t)*100)}%`)
       });
       setRefArtifact(ref);
@@ -51,7 +52,8 @@ export function DifferenceViewer({
       // @ts-ignore - Assuming global or imported utility
       const user = await generateBodyPixOverlayFrames({
         videoUrl: userVideoUrl,
-        fps: 15,
+        fps: 12,
+        opacity: 0.68,
         onProgress: (c: number, t: number) => setStatus(`Mapping User: ${Math.round((c/t)*100)}%`)
       });
       setUserArtifact(user);
@@ -85,7 +87,14 @@ export function DifferenceViewer({
     if (!artifact || !artifact.frames || artifact.frames.length === 0) return null;
     const index = Math.floor(currentTime * artifact.fps);
     const clampedIndex = Math.max(0, Math.min(index, artifact.frames.length - 1));
-    return artifact.frames[clampedIndex];
+    const frame = artifact.frames[clampedIndex];
+
+    // Check if the frame is a Blob and convert it to a URL string
+    if (frame instanceof Blob) {
+      return URL.createObjectURL(frame);
+    }
+    
+    return frame; // It's already a string (URL)
   };
 
   const instructorFrame = getFrame(refArtifact);
