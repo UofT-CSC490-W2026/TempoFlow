@@ -1,6 +1,8 @@
-# Audio Alignment API
+# Audio Alignment + EBS Web API
 
-This project provides an API for aligning audio from video files and segmenting them based on musical beats.
+This project provides:
+- A tested assignment API surface for alignment/segmentation logic.
+- A web-app compatible EBS processor API used by `web-app` (`/api/process`, `/api/status`, `/api/result`).
 
 ## Prerequisites
 
@@ -55,10 +57,26 @@ You can access the automatic interactive API documentation at:
 -   **Swagger UI:** [http://localhost:8787/docs](http://localhost:8787/docs)
 -   **ReDoc:** [http://localhost:8787/redoc](http://localhost:8787/redoc)
 
-### Endpoint: `/alignment`
+### Endpoint: `/a5/api/process`
 
 -   **Method:** `POST`
--   **Description:** Uploads two video/audio files (`file_a` and `file_b`), aligns them, and returns segmentation timestamps.
+-   **Description:** Original A5 router endpoint (tested module path). Accepts `file_a` and `file_b`.
+
+### Endpoint: `/api/process`
+
+-   **Method:** `POST`
+-   **Description:** Web-app compatible EBS endpoint. Accepts `ref_video` + `user_video` (also supports `file_a` + `file_b` for compatibility).
+-   **Returns:** EBS JSON payload with `alignment`, `segments`, `beats_shared_sec`, `beat_tracking`, and `video_meta`.
+
+### Additional web-app compatibility endpoints
+
+- `GET /api/status?session=<id>`
+- `GET /api/result?session=<id>`
+- `HEAD/GET /ebs_viewer.html` (health probe)
+- Overlay jobs for session overlays:
+  - `POST /api/overlay/yolo/start`, `GET /api/overlay/yolo/status`, `GET /api/overlay/yolo/result`
+  - `POST /api/overlay/yolo-pose/start`, `GET /api/overlay/yolo-pose/status`, `GET /api/overlay/yolo-pose/result`
+  - `POST /api/overlay/bodypix/start`, `GET /api/overlay/bodypix/status`, `GET /api/overlay/bodypix/result`
 
 ## Testing
 

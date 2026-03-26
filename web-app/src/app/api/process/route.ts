@@ -32,6 +32,7 @@ export async function POST(request: Request) {
     const formData = await request.formData();
     const refVideo = formData.get("ref_video");
     const userVideo = formData.get("user_video");
+    const sessionId = formData.get("session_id");
 
     if (!(refVideo instanceof File) || !(userVideo instanceof File)) {
       return NextResponse.json(
@@ -43,6 +44,9 @@ export async function POST(request: Request) {
     const upstreamFormData = new FormData();
     upstreamFormData.append("ref_video", refVideo, refVideo.name);
     upstreamFormData.append("user_video", userVideo, userVideo.name);
+    if (typeof sessionId === "string" && sessionId.trim().length > 0) {
+      upstreamFormData.append("session_id", sessionId.trim());
+    }
 
     const response = await fetch(upstreamUrl, {
       method: "POST",
@@ -64,7 +68,7 @@ export async function POST(request: Request) {
     const reachable = await isProcessorReachable(upstreamUrl);
     const message = reachable
       ? "The EBS processor is running, but this request did not complete cleanly. Keep the analysis tab active, avoid laptop sleep, then retry once."
-      : `Failed to reach the EBS processor at ${upstreamUrl}. Start the local Python service with: cd "A2/pipelines/Audio data processing" && python3 ebs_server.py`;
+      : `Failed to reach the EBS processor at ${upstreamUrl}. Start the local Python service with: cd "A5" && uvicorn src.main:app --host 127.0.0.1 --port 8787`;
 
     return NextResponse.json(
       {
