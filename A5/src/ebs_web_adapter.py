@@ -195,6 +195,15 @@ def _build_segments_from_beats(
     return segments
 
 
+def _ensure_segment_starts_at_zero(segment_points: list[float]) -> list[float]:
+    if not segment_points:
+        return segment_points
+    first = float(segment_points[0])
+    if first <= 1e-6:
+        return segment_points
+    return [0.0, *segment_points]
+
+
 def process_uploads(ref_video: UploadFile, user_video: UploadFile) -> dict[str, Any]:
     ref_tmp = save_upload(ref_video, "ref")
     user_tmp = save_upload(user_video, "user")
@@ -224,6 +233,7 @@ def process_uploads(ref_video: UploadFile, user_video: UploadFile) -> dict[str, 
                 segment_points, _segment_beat_times = generate_segments(
                     beat_times, downbeat_offset, BEATS_PER_SEGMENT
                 )
+                segment_points = _ensure_segment_starts_at_zero(segment_points)
                 segs = _build_segments_from_beats(beat_times, segment_points, shared_len_sec)
                 if segs:
                     segmentation_mode = "eight_beat"
@@ -307,6 +317,7 @@ def process_videos_from_paths(ref_video_path: str, user_video_path: str) -> dict
                 segment_points, _segment_beat_times = generate_segments(
                     beat_times, downbeat_offset, BEATS_PER_SEGMENT
                 )
+                segment_points = _ensure_segment_starts_at_zero(segment_points)
                 segs = _build_segments_from_beats(beat_times, segment_points, shared_len_sec)
                 if segs:
                     segmentation_mode = "eight_beat"
