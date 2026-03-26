@@ -2,47 +2,28 @@
 
 import { useEffect, useRef, useState } from "react";
 import type { RefObject } from "react";
+import { calculateAlignmentTransform, type Keypoint } from "../lib/normalization";
 
 type BodyPixModule = typeof import("@tensorflow-models/body-pix");
 type BodyPixNet = Awaited<ReturnType<BodyPixModule["load"]>>;
 
-const BODYPIX_PART_COLORS: Array<[number, number, number]> = [
-  [110, 64, 170],
-  [106, 72, 183],
-  [100, 81, 196],
-  [92, 91, 206],
-  [84, 101, 214],
-  [75, 113, 221],
-  [66, 125, 224],
-  [56, 138, 226],
-  [48, 150, 224],
-  [40, 163, 220],
-  [33, 176, 214],
-  [29, 188, 205],
-  [26, 199, 194],
-  [26, 210, 182],
-  [28, 219, 169],
-  [33, 227, 155],
-  [41, 234, 141],
-  [51, 240, 128],
-  [64, 243, 116],
-  [79, 246, 105],
-  [96, 247, 97],
-  [115, 246, 91],
-  [134, 245, 88],
-  [155, 243, 88],
-];
-
-export function BodyPixOverlay(props: {
+interface BodyPixOverlayProps {
   videoRef: RefObject<HTMLVideoElement | null>;
+  sourceKeypoints?: Keypoint[] | null;
   opacity?: number;
-}) {
-  const { videoRef, opacity = 0.68 } = props;
+}
+
+export function BodyPixOverlay({
+  videoRef,
+  sourceKeypoints,
+  opacity = 0.6,
+}: BodyPixOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const netRef = useRef<BodyPixNet | null>(null);
   const [ready, setReady] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // --- EFFECT 1: Initialize TensorFlow and BodyPix ---
   useEffect(() => {
     let mounted = true;
     const setup = async () => {
@@ -59,20 +40,20 @@ export function BodyPixOverlay(props: {
           multiplier: 0.75,
           quantBytes: 2,
         });
+
         if (!mounted) return;
         netRef.current = net;
         setReady(true);
       } catch (e) {
         if (!mounted) return;
-        setError(e instanceof Error ? e.message : "BodyPix load failed.");
+        setError(e instanceof Error ? e.message : "Failed to load BodyPix");
       }
     };
     void setup();
-    return () => {
-      mounted = false;
-    };
+    return () => { mounted = false; };
   }, []);
 
+  // --- EFFECT 2: The Inference and Alignment Loop ---
   useEffect(() => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -85,61 +66,81 @@ export function BodyPixOverlay(props: {
     let raf = 0;
     let running = true;
     let lastInferAt = 0;
-    const inferEveryMs = 80; // ~12.5Hz, keeps browser responsive
+    const inferEveryMs = 60; // ~16 FPS for smooth dance tracking
 
     const loop = async () => {
       if (!running) return;
       raf = window.requestAnimationFrame(loop);
-      if (video.readyState < 2 || video.videoWidth <= 0 || video.videoHeight <= 0) return;
+      
+      // Ensure video is playing and has data
+      if (video.readyState < 2 || video.videoWidth <= 0) return;
 
       const now = performance.now();
       if (now - lastInferAt < inferEveryMs) return;
       lastInferAt = now;
 
+      // Match canvas to video display size
       const dpr = window.devicePixelRatio || 1;
-      const w = Math.max(1, Math.round((video.clientWidth || video.videoWidth) * dpr));
-      const h = Math.max(1, Math.round((video.clientHeight || video.videoHeight) * dpr));
+      const w = Math.round((video.clientWidth || video.videoWidth) * dpr);
+      const h = Math.round((video.clientHeight || video.videoHeight) * dpr);
       if (canvas.width !== w || canvas.height !== h) {
         canvas.width = w;
         canvas.height = h;
       }
 
-      const seg = (await net.segmentPersonParts(video, {
-        flipHorizontal: false,
+      // 1. Perform Inference (Outputs Mask + Wiremesh Keypoints)
+      const result = await net.segmentPersonParts(video, {
         internalResolution: "medium",
         segmentationThreshold: 0.5,
-        maxDetections: 1,
-        scoreThreshold: 0.2,
-        nmsRadius: 20,
-      })) as { data: Int32Array; width: number; height: number };
+      });
 
-      const image = ctx.createImageData(seg.width, seg.height);
-      const data = image.data;
-      const parts = seg.data;
+      const targetPose = result.allPoses[0];
+      if (!targetPose) return;
 
-      for (let i = 0; i < parts.length; i += 1) {
-        const part = parts[i];
-        if (part < 0) continue;
-        const px = i * 4;
+      // 2. Create the Mask Image Buffer (Offscreen)
+      const offscreen = document.createElement("canvas");
+      offscreen.width = result.width;
+      offscreen.height = result.height;
+      const offCtx = offscreen.getContext("2d");
+      if (!offCtx) return;
 
-        const c = BODYPIX_PART_COLORS[part] ?? [56, 189, 248];
-        data[px] = c[0];
-        data[px + 1] = c[1];
-        data[px + 2] = c[2];
-        data[px + 3] = Math.round(255 * opacity);
+      const imgData = offCtx.createImageData(result.width, result.height);
+      for (let i = 0; i < result.data.length; i++) {
+        if (result.data[i] >= 0) { // If pixel belongs to a body part
+          const px = i * 4;
+          imgData.data[px] = 56;     // Cyan/Blue R
+          imgData.data[px + 1] = 189; // Cyan/Blue G
+          imgData.data[px + 2] = 248; // Cyan/Blue B
+          imgData.data[px + 3] = Math.round(255 * opacity);
+        }
+      }
+      offCtx.putImageData(imgData, 0, 0);
+
+      // 3. Clear and Transform Main Canvas
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.save();
+
+      if (sourceKeypoints) {
+        // Use the wiremesh (allPoses) to calculate the linear transformation
+        const matrix = calculateAlignmentTransform(sourceKeypoints, targetPose.keypoints);
+        
+        if (matrix) {
+          // A: Scale to the current display canvas size
+          ctx.scale(canvas.width / result.width, canvas.height / result.height);
+          // B: Apply the matrix (Rotation, Scale, Translation to match Source)
+          ctx.transform(matrix.a, matrix.b, matrix.c, matrix.d, matrix.e, matrix.f);
+        }
+      } else {
+        // Default: Just scale to fill the canvas
+        ctx.scale(canvas.width / result.width, canvas.height / result.height);
       }
 
-      const offscreen = document.createElement("canvas");
-      offscreen.width = seg.width;
-      offscreen.height = seg.height;
-      const off = offscreen.getContext("2d");
-      if (!off) return;
-      off.putImageData(image, 0, 0);
-
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      // 4. Draw the Transformed Mask
       ctx.imageSmoothingEnabled = true;
       ctx.imageSmoothingQuality = "high";
-      ctx.drawImage(offscreen, 0, 0, canvas.width, canvas.height);
+      ctx.drawImage(offscreen, 0, 0);
+
+      ctx.restore();
     };
 
     raf = window.requestAnimationFrame(loop);
@@ -147,15 +148,17 @@ export function BodyPixOverlay(props: {
       running = false;
       if (raf) window.cancelAnimationFrame(raf);
     };
-  }, [videoRef, error, opacity, ready]);
+  }, [videoRef, sourceKeypoints, opacity, ready, error]);
 
   if (error) return null;
+
   return (
     <canvas
       ref={canvasRef}
-      className={`pointer-events-none absolute inset-0 h-full w-full ${ready ? "opacity-100" : "opacity-80"}`}
+      className={`absolute inset-0 h-full w-full pointer-events-none transition-opacity duration-300 ${
+        ready ? "opacity-100" : "opacity-0"
+      }`}
       style={{ mixBlendMode: "screen" }}
     />
   );
 }
-

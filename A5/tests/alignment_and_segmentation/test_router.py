@@ -70,12 +70,12 @@ def test_align_audio_success(
         np.array([0, 5, 10])
     )
     mock_downbeat.return_value = 0
-    mock_generate.return_value = [0.0, 4.0] 
+    mock_generate.return_value = ([0.0, 4.0], [[(0.0, 0.5), (0.5, 1.0)]]) 
     
-    # map_segments_to_clips returns list of absolute (start, end) tuples
+    # map_segments_to_clips returns list of absolute (start, end, beat_times) tuples
     mock_map.side_effect = [
-        [(10.0, 14.0)], 
-        [(11.0, 15.0)]
+        [(10.0, 14.0, [(0.0, 0.5), (0.5, 1.0)])], 
+        [(11.0, 15.0, [(0.0, 0.5), (0.5, 1.0)])]
     ]
 
     # Fake file upload
@@ -102,6 +102,10 @@ def test_align_audio_success(
     
     # Check Confidence
     assert data["confidence"]["coefficient_of_variation"] == 0.05
+    
+    # Check Beat Times (now pairs)
+    assert data["clip_a_segments"][0]["beat_times"] == [[0.0, 0.5], [0.5, 1.0]]
+    assert data["clip_b_segments"][0]["beat_times"] == [[0.0, 0.5], [0.5, 1.0]]
 
 @patch("src.alignment_and_segmentation.router.load_audio_files")
 @patch("src.alignment_and_segmentation.router.check_less_than_one_minute")

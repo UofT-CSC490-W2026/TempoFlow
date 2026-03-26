@@ -108,7 +108,7 @@ async def align_audio(
     beats_per_seg = 8
     try:
         downbeat_offset = estimate_downbeat_phase(onset_env, beat_frames, beats_per_seg)
-        segment_points = generate_segments(beat_times, downbeat_offset, beats_per_seg)
+        segment_points, segment_beat_times = generate_segments(beat_times, downbeat_offset, beats_per_seg)
     except ValueError as e:
          raise HTTPException(status_code=422, detail=f"Segmentation failed: {str(e)}")
 
@@ -117,20 +117,20 @@ async def align_audio(
     
     # Map for File A
     # aligned region for A is [start_time_a, end_time_a]
-    segs_a_tuples = map_segments_to_clips(segment_points, start_time_a, end_time_a)
+    segs_a_tuples = map_segments_to_clips(segment_points, start_time_a, end_time_a, segment_beat_times)
     
     # Map for File B
     # aligned region for B is [start_time_b, end_time_b]
     # We assume the time scaling is roughly 1:1 or the best approximation is linear offset 
     # since we are using the beats derived from A.
-    segs_b_tuples = map_segments_to_clips(segment_points, start_time_b, end_time_b)
+    segs_b_tuples = map_segments_to_clips(segment_points, start_time_b, end_time_b, segment_beat_times)
 
     # Convert to Pydantic models
     clip_a_segments_out = [
-        Segment(start_time=s, end_time=e) for s, e in segs_a_tuples
+        Segment(start_time=s, end_time=e, beat_times=bt) for s, e, bt in segs_a_tuples
     ]
     clip_b_segments_out = [
-        Segment(start_time=s, end_time=e) for s, e in segs_b_tuples
+        Segment(start_time=s, end_time=e, beat_times=bt) for s, e, bt in segs_b_tuples
     ]
 
     # Return combined result

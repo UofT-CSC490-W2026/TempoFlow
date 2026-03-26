@@ -53,11 +53,20 @@ BEATS_PER_SEGMENT = 8
 FALLBACK_CHUNK_SEC = 3.0
 ROUNDING_PRECISION = 3
 
+# Alignment buffer — expand the predicted alignment window by this many
+# seconds on each side so that border content is not clipped.
+ALIGNMENT_BUFFER_SEC = 5.0
+
+# Segmentation edge threshold — if the first/last segment boundary is
+# within this many seconds of the alignment start/end, snap it;
+# otherwise insert a new partial segment.
+SEGMENT_EDGE_THRESHOLD_SEC = 0.5
+
 # Beat-confidence thresholds
 MIN_BEATS_FOR_SEGMENT = 9          # ≥9 beats needed for one 8-beat segment
 BEAT_INTERVAL_MIN_SEC = 0.25       # ~240 BPM ceiling
 BEAT_INTERVAL_MAX_SEC = 1.0        # ~60 BPM floor
-BEAT_CV_THRESHOLD = 0.3            # max coefficient of variation
+BEAT_CV_THRESHOLD = 1.0            # max coefficient of variation
 
 PIPELINE_VERSION = "1.1.0"
 
@@ -332,6 +341,42 @@ def auto_align_chroma_sw(
     return alignment
 
 
+def _apply_alignment_buffer(
+    alignment: dict,
+    ref_dur: float,
+    usr_dur: float,
+    buffer_sec: float = ALIGNMENT_BUFFER_SEC,
+) -> dict:
+    """Expand the alignment window by *buffer_sec* on each side.
+
+    Both clips are expanded symmetrically and clamped to ``[0, duration]``.
+    The shared length is recomputed as the minimum of the two expanded
+    windows so that the 1-to-1 correspondence is preserved.
+    """
+    logger = logging.getLogger("ebs")
+
+    c1_start = max(0.0, alignment["clip_1_start_sec"] - buffer_sec)
+    c1_end = min(ref_dur, alignment["clip_1_end_sec"] + buffer_sec)
+    c2_start = max(0.0, alignment["clip_2_start_sec"] - buffer_sec)
+    c2_end = min(usr_dur, alignment["clip_2_end_sec"] + buffer_sec)
+
+    shared_len = min(c1_end - c1_start, c2_end - c2_start)
+    shared_len = max(shared_len, 0.0)
+
+    alignment["clip_1_start_sec"] = round(c1_start, ROUNDING_PRECISION)
+    alignment["clip_1_end_sec"] = round(c1_start + shared_len, ROUNDING_PRECISION)
+    alignment["clip_2_start_sec"] = round(c2_start, ROUNDING_PRECISION)
+    alignment["clip_2_end_sec"] = round(c2_start + shared_len, ROUNDING_PRECISION)
+
+    logger.info(
+        "Applied %.1fs alignment buffer → clip_1=[%.3f,%.3f], clip_2=[%.3f,%.3f]",
+        buffer_sec,
+        alignment["clip_1_start_sec"], alignment["clip_1_end_sec"],
+        alignment["clip_2_start_sec"], alignment["clip_2_end_sec"],
+    )
+    return alignment
+
+
 def auto_align(
     ref_audio: np.ndarray,
     user_audio: np.ndarray,
@@ -346,21 +391,31 @@ def auto_align(
     **Legacy** (``EBS_AUTO_ALIGN_MODE=onset_xcorr``): onset envelopes +
     FFT cross-correlation (single lag).
 
+    A ±5 s buffer is applied around the predicted window so that border
+    content is not accidentally clipped.
+
     Returns an alignment dict compatible with the EBS pipeline:
     ``{clip_1_start_sec, clip_1_end_sec, clip_2_start_sec, clip_2_end_sec}``
     """
     logger = logging.getLogger("ebs")
     mode = _auto_align_mode_from_env()
     if mode == "onset_xcorr":
-        return auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
-    try:
-        return auto_align_chroma_sw(ref_audio, user_audio, sr=sr)
-    except Exception as exc:
-        logger.warning(
-            "chroma_sw auto-align failed (%s); falling back to onset_xcorr",
-            exc,
-        )
-        return auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
+        alignment = auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
+    else:
+        try:
+            alignment = auto_align_chroma_sw(ref_audio, user_audio, sr=sr)
+        except Exception as exc:
+            logger.warning(
+                "chroma_sw auto-align failed (%s); falling back to onset_xcorr",
+                exc,
+            )
+            alignment = auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
+
+    # Expand the predicted window by ±ALIGNMENT_BUFFER_SEC
+    ref_dur = len(ref_audio) / sr
+    usr_dur = len(user_audio) / sr
+    alignment = _apply_alignment_buffer(alignment, ref_dur, usr_dur)
+    return alignment
 
 
 # ---------------------------------------------------------------------------
@@ -505,7 +560,10 @@ def estimate_downbeat_phase(
     n_beats = len(beat_frames)
 
     if n_beats < beats_per_seg:
-        logger.debug("Too few beats for phase estimation; defaulting to 0")
+        logger.debug(
+            f"Not enough beats detected ({n_beats}) to estimate downbeat phase "
+            f"with beats_per_seg={beats_per_seg}."
+        )
         return 0
 
     # Onset strength at each beat position
@@ -541,19 +599,6 @@ def check_beat_confidence(
     """
     reasons: list[str] = []
 
-    if confidence_info["num_beats"] < MIN_BEATS_FOR_SEGMENT:
-        reasons.append(
-            f"Too few beats ({confidence_info['num_beats']} "
-            f"< {MIN_BEATS_FOR_SEGMENT})"
-        )
-
-    med = confidence_info["median_interval_sec"]
-    if med > 0 and not (BEAT_INTERVAL_MIN_SEC <= med <= BEAT_INTERVAL_MAX_SEC):
-        reasons.append(
-            f"Median beat interval {med:.3f}s outside "
-            f"[{BEAT_INTERVAL_MIN_SEC}, {BEAT_INTERVAL_MAX_SEC}]"
-        )
-
     cv = confidence_info["coefficient_of_variation"]
     if cv > BEAT_CV_THRESHOLD:
         reasons.append(
@@ -576,24 +621,37 @@ def segment_by_beats(
     """Split *beats_sec* into groups of *beats_per_seg*.
 
     Iteration begins at *start_idx* so that segments can be aligned
-    with the detected downbeat phase.  Each segment spans
-    ``[beat[i], beat[i + beats_per_seg])``.  Incomplete tails are dropped.
+    with the detected downbeat phase.  Uses ``<=`` boundary and
+    last-interval extrapolation.
     """
     segments: list[dict] = []
     n = len(beats_sec)
     i = start_idx
     seg_id = 0
-    while i + beats_per_seg < n:
+
+    if i + beats_per_seg > n:
+        return []
+
+    while i + beats_per_seg <= n:
+        end_idx = i + beats_per_seg
+        if end_idx < n:
+            end_sec = round(float(beats_sec[end_idx]), ROUNDING_PRECISION)
+        else:
+            # Extrapolate using last beat interval (A5 behavior)
+            if n >= 2:
+                last_interval = float(beats_sec[-1]) - float(beats_sec[-2])
+            else:
+                last_interval = 0.5
+            end_sec = round(float(beats_sec[-1]) + last_interval, ROUNDING_PRECISION)
+
         segments.append(
             {
                 "seg_id": seg_id,
-                "beat_idx_range": [int(i), int(i + beats_per_seg)],
+                "beat_idx_range": [int(i), min(int(end_idx), n - 1)],
                 "shared_start_sec": round(
                     float(beats_sec[i]), ROUNDING_PRECISION
                 ),
-                "shared_end_sec": round(
-                    float(beats_sec[i + beats_per_seg]), ROUNDING_PRECISION
-                ),
+                "shared_end_sec": end_sec,
             }
         )
         seg_id += 1
@@ -705,31 +763,6 @@ def run_ebs_pipeline(
         bpm,
     )
 
-        # ---- extrapolate beats to cover the tail of the shared window ----------
-    # We do NOT prepend synthetic beats before the first detected beat.
-    # Any audio before the first estimated count-1 is kept as intro segment 0.
-    if len(beats_sec) >= 2:
-        med_ivl = confidence_info["median_interval_sec"]
-        n_detected = len(beats_sec)
-
-        # Extrapolate forward only
-        extra_fwd: list[float] = []
-        t = float(beats_sec[-1]) + med_ivl
-        while t <= shared_len_sec:
-            extra_fwd.append(round(t, ROUNDING_PRECISION))
-            t += med_ivl
-
-        if extra_fwd:
-            beats_sec = np.array(
-                [round(float(b), ROUNDING_PRECISION) for b in beats_sec] + extra_fwd
-            )
-            logger.info(
-                "Extrapolated %d beats forward → %d total (was %d detected)",
-                len(extra_fwd), len(beats_sec), n_detected,
-            )
-            confidence_info["num_beats_detected"] = n_detected
-            confidence_info["num_beats"] = int(len(beats_sec))
-
     # ---- confidence gate ---------------------------------------------------
     passed, reasons = check_beat_confidence(confidence_info, shared_len_sec)
 
@@ -738,20 +771,6 @@ def run_ebs_pipeline(
     if passed:
         logger.info("Beat confidence check PASSED")
 
-        # -- downbeat-phase alignment ----------------------------------------
-        # Phase estimation uses the *detected* beat frames (with onset data).
-        # After backward extrapolation the array is shifted by n_extra_bwd,
-        # so we adjust the phase index accordingly.
-        # raw_phase = estimate_downbeat_phase(
-        #     onset_env, beat_frames, BEATS_PER_SEGMENT
-        # )
-        # downbeat_phase = (raw_phase + n_extra_bwd) % BEATS_PER_SEGMENT
-        # first_regular = downbeat_phase + BEATS_PER_SEGMENT
-        # logger.info(
-        #     "Adjusted downbeat phase: raw=%d, bwd_offset=%d, adjusted=%d, "
-        #     "first_regular_idx=%d",
-        #     raw_phase, n_extra_bwd, downbeat_phase, first_regular,
-        # )
         downbeat_phase = estimate_downbeat_phase(
             onset_env, beat_frames, BEATS_PER_SEGMENT
         )
@@ -759,61 +778,13 @@ def run_ebs_pipeline(
             "Estimated downbeat phase: %d",
             downbeat_phase,
         )
-        # if first_regular < len(beats_sec):
-        #     # Intro segment: [0.0, beat[phase + 8])
-        #     intro_seg: dict = {
-        #         "seg_id": 0,
-        #         "beat_idx_range": [0, int(first_regular)],
-        #         "shared_start_sec": 0.0,
-        #         "shared_end_sec": round(
-        #             float(beats_sec[first_regular]), ROUNDING_PRECISION
-        #         ),
-        #     }
-        #     # Regular 8-beat segments starting from the second downbeat
-        #     rest = segment_by_beats(
-        #         beats_sec,
-        #         beats_per_seg=BEATS_PER_SEGMENT,
-        #         start_idx=first_regular,
-        #     )
-        #     # Renumber: intro is 0, rest continue from 1
-        #     for seg in rest:
-        #         seg["seg_id"] += 1
-        #     segments = [intro_seg] + rest
-        # else:
-        #     # Not enough beats after phase for a regular segment;
-        #     # fall back to simple segmentation with seg 0 starting at 0.0
-        #     segments = segment_by_beats(beats_sec)
-        #     if segments:
-        #         segments[0]["shared_start_sec"] = 0.0
-        if downbeat_phase < len(beats_sec):
-            # Segment 0: everything before the first estimated count-1
-            intro_seg: dict = {
-                "seg_id": 0,
-                "beat_idx_range": [0, int(downbeat_phase)] if downbeat_phase > 0 else [0, 0],
-                "shared_start_sec": 0.0,
-                "shared_end_sec": round(
-                    float(beats_sec[downbeat_phase]), ROUNDING_PRECISION
-                ),
-            }
 
-            # Regular 8-beat segments start exactly at the first estimated count-1
-            rest = segment_by_beats(
-                beats_sec,
-                beats_per_seg=BEATS_PER_SEGMENT,
-                start_idx=downbeat_phase,
-            )
-
-            for seg in rest:
-                seg["seg_id"] += 1
-
-            segments = [intro_seg] + rest
-
-            # If the first count-1 is already at time 0, segment 0 is empty.
-            # Drop it to avoid a zero-length intro segment.
-            if intro_seg["shared_end_sec"] <= 0.0:
-                segments = rest
-        else:
-            segments = []
+        # Segments start at the downbeat phase (no intro segment)
+        segments = segment_by_beats(
+            beats_sec,
+            beats_per_seg=BEATS_PER_SEGMENT,
+            start_idx=downbeat_phase,
+        )
 
         segmentation_mode = "eight_beat"
         beats_shared: list[float] = [
@@ -830,6 +801,52 @@ def run_ebs_pipeline(
         segments = segment_fixed_time(shared_len_sec)
         segmentation_mode = "fixed_time"
         beats_shared = []
+
+    # ---- edge adjustment: ensure segments span the full shared window ------
+    if segments:
+        first_start = segments[0]["shared_start_sec"]
+        if first_start > 0.0:
+            gap = first_start
+            if gap <= SEGMENT_EDGE_THRESHOLD_SEC:
+                logger.info("Snapping first segment start %.3fs → 0.0", first_start)
+                segments[0]["shared_start_sec"] = 0.0
+            else:
+                logger.info("Inserting new start segment [0.0, %.3f]", first_start)
+                segments.insert(0, {
+                    "seg_id": 0,
+                    "beat_idx_range": None,
+                    "shared_start_sec": 0.0,
+                    "shared_end_sec": first_start,
+                })
+
+        last_end = segments[-1]["shared_end_sec"]
+        if last_end < shared_len_sec:
+            gap = shared_len_sec - last_end
+            if gap <= SEGMENT_EDGE_THRESHOLD_SEC:
+                logger.info(
+                    "Snapping last segment end %.3fs → %.3fs",
+                    last_end, shared_len_sec,
+                )
+                segments[-1]["shared_end_sec"] = round(
+                    shared_len_sec, ROUNDING_PRECISION
+                )
+            else:
+                logger.info(
+                    "Inserting new tail segment [%.3f, %.3f]",
+                    last_end, shared_len_sec,
+                )
+                segments.append({
+                    "seg_id": 0,
+                    "beat_idx_range": None,
+                    "shared_start_sec": last_end,
+                    "shared_end_sec": round(
+                        shared_len_sec, ROUNDING_PRECISION
+                    ),
+                })
+
+        # Renumber seg_ids after any insertions
+        for idx, seg in enumerate(segments):
+            seg["seg_id"] = idx
 
     # ---- map shared → absolute clip times ----------------------------------
     segments = map_segments_to_clips(segments, clip_1_start, clip_2_start)

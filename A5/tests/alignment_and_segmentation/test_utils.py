@@ -144,12 +144,12 @@ def test_map_segments_to_clips_valid():
     clip_start = 10.0
     clip_end = 20.0
     
-    # Expected: [(10.0, 14.0), (14.0, 18.0)]
+    # Expected: [(10.0, 14.0, []), (14.0, 18.0, [])]
     result = map_segments_to_clips(points, clip_start, clip_end)
     
     assert len(result) == 2
-    assert result[0] == (10.0, 14.0)
-    assert result[1] == (14.0, 18.0)
+    assert result[0] == (10.0, 14.0, [])
+    assert result[1] == (14.0, 18.0, [])
 
 def test_map_segments_to_clips_empty():
     """Test with empty points."""
@@ -164,14 +164,14 @@ def test_map_segments_to_clips_out_of_bounds():
     
     # result[0]: 10->15 (ok)
     # result[1]: 15->25 (starts at 15<20, but ends at 25)
-    # The logic says: if start_final >= clip_end: continue.
+    # The logic says: if abs_start >= clip_end: continue.
     # 15 < 20, so it engages.
     
     result = map_segments_to_clips(points, clip_start, clip_end)
     
     assert len(result) == 2
-    assert result[0] == (10.0, 15.0)
-    assert result[1] == (15.0, 25.0) 
+    assert result[0] == (10.0, 15.0, [])
+    assert result[1] == (15.0, 25.0, [])
 
 def test_map_segments_to_clips_strict_cutoff():
     """Test segments that start after clip end."""
@@ -207,3 +207,39 @@ def test_extract_chroma():
         
         assert chroma.shape == (12, 10)
         mock_chroma.assert_called_once_with(y=y, sr=sr)
+
+
+# --- New tests for map_segments_to_clips with beat times ---
+
+def test_map_segments_to_clips_with_beat_times():
+    """Test that segment_beat_times are passed through correctly."""
+    points = [0.0, 4.0, 8.0]
+    clip_start = 10.0
+    clip_end = 20.0
+    beat_times = [[(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)], [(4.0, 5.0), (5.0, 6.0), (6.0, 7.0)]]
+    
+    result = map_segments_to_clips(points, clip_start, clip_end, segment_beat_times=beat_times)
+    
+    assert len(result) == 2
+    assert result[0] == (10.0, 14.0, [(0.0, 1.0), (1.0, 2.0), (2.0, 3.0)])
+    assert result[1] == (14.0, 18.0, [(4.0, 5.0), (5.0, 6.0), (6.0, 7.0)])
+
+def test_map_segments_to_clips_beat_times_none():
+    """Without beat_times, each tuple has an empty list."""
+    points = [0.0, 4.0]
+    result = map_segments_to_clips(points, 0.0, 10.0)
+    
+    assert len(result) == 1
+    assert result[0] == (0.0, 4.0, [])
+
+def test_map_segments_to_clips_beat_times_filtered():
+    """Beat times for filtered-out segments are skipped."""
+    points = [0.0, 5.0, 15.0]
+    clip_start = 0.0
+    clip_end = 20.0
+    beat_times = [[(0.0, 1.0), (1.0, 2.0)], [(5.0, 6.0), (6.0, 7.0)]]
+    
+    result = map_segments_to_clips(points, clip_start, clip_end, segment_beat_times=beat_times)
+    assert len(result) == 2
+    assert result[0][2] == [(0.0, 1.0), (1.0, 2.0)]
+    assert result[1][2] == [(5.0, 6.0), (6.0, 7.0)]

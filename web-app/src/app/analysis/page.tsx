@@ -275,7 +275,7 @@ function AnalysisPageContent() {
         const friendlyMessage = isSuspended
           ? "Browser network I/O was suspended during upload (often caused by the tab going to background, laptop sleep, or aggressive throttling). Keep this tab active and retry."
           : message.includes("Failed to fetch")
-            ? `Failed to reach the local EBS processor at ${processorUrl}. Keep ebs_server.py running, then retry.`
+            ? `Failed to reach the local EBS processor at ${processorUrl}. Keep the local A5 EBS server running, then retry.`
             : message;
 
         updateSession(session.id, {
@@ -577,7 +577,7 @@ function AnalysisPageContent() {
               </p>
               <p className="mt-2 text-slate-500">
                 Keep this tab active while processing. If the browser suspends the request, retry once after confirming
-                that <code>ebs_server.py</code> is still running.
+                that the local A5 EBS server is still running.
                   </p>
                 </div>
 

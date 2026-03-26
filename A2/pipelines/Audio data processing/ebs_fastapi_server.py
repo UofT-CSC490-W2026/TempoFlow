@@ -31,6 +31,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 
 from ebs_ffmpeg_paths import resolve_ffprobe_executable
+from ebs_gemini_move_feedback import run_move_feedback_pipeline
 from ebs_segment import auto_align, extract_audio_from_video, load_audio, run_ebs_pipeline
 
 logging.basicConfig(
@@ -204,6 +205,246 @@ async def result(session: str | None = None):
     if sid not in SESSION_RESULTS:
         return JSONResponse({"error": "No result for this session yet."}, status_code=404)
     return JSONResponse(SESSION_RESULTS[sid], status_code=200)
+
+
+# ---------------------------------------------------------------------------
+# Gemini micro-timing move feedback
+# ---------------------------------------------------------------------------
+
+MOVE_FEEDBACK_JOBS: dict[str, dict[str, Any]] = {}
+
+
+def _move_feedback_worker(
+    job_id: str,
+    ref_path: str,
+    user_path: str,
+    ebs_data: dict,
+    segment_index: int,
+) -> None:
+    """Background worker that runs the Gemini move-feedback pipeline."""
+    try:
+        MOVE_FEEDBACK_JOBS[job_id]["status"] = "processing"
+        result = run_move_feedback_pipeline(
+            ref_video_path=ref_path,
+            user_video_path=user_path,
+            ebs_artifact=ebs_data,
+            segment_index=segment_index,
+        )
+        MOVE_FEEDBACK_JOBS[job_id]["result"] = result
+        MOVE_FEEDBACK_JOBS[job_id]["status"] = "done"
+    except Exception as exc:
+        logger.exception("Move feedback pipeline error (job %s)", job_id)
+        MOVE_FEEDBACK_JOBS[job_id]["status"] = "error"
+        MOVE_FEEDBACK_JOBS[job_id]["error"] = str(exc)
+    finally:
+        for p in (ref_path, user_path):
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+@app.post("/api/move-feedback/start")
+async def move_feedback_start(
+    ref_video: UploadFile = File(...),
+    user_video: UploadFile = File(...),
+    segment_index: int = Form(...),
+    session_id: str | None = Form(default=None),
+    ebs_data_json: str | None = Form(default=None),
+):
+    """Start an async Gemini move-feedback job for a single EBS segment.
+
+    Accepts the original reference and user videos plus either:
+      - ``ebs_data_json``: the full EBS artifact as a JSON string, **or**
+      - ``session_id``: reuse the EBS result already stored from a prior
+        ``/api/process`` call.
+
+    If neither is supplied, the EBS pipeline runs automatically.
+
+    Returns ``{"job_id": "..."}`` immediately. Poll
+    ``GET /api/move-feedback/status?job_id=<id>`` for progress,
+    then ``GET /api/move-feedback/result?job_id=<id>`` to retrieve
+    the Gemini micro-timing JSON.
+    """
+    sid = (session_id or "").strip() or "default"
+    job_id = str(uuid.uuid4())
+
+    ref_tmp = _save_upload(ref_video, "mf_ref")
+    user_tmp = _save_upload(user_video, "mf_user")
+
+    ebs_data: dict | None = None
+
+    if ebs_data_json:
+        try:
+            ebs_data = json.loads(ebs_data_json)
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"error": "ebs_data_json is not valid JSON"}, status_code=400
+            )
+
+    if ebs_data is None and sid in SESSION_RESULTS:
+        ebs_data = SESSION_RESULTS[sid]
+
+    if ebs_data is None:
+        try:
+            ref_wav = extract_audio_from_video(ref_tmp)
+            user_wav = extract_audio_from_video(user_tmp)
+            ref_audio = load_audio(ref_wav)
+            user_audio = load_audio(user_wav)
+            alignment = auto_align(ref_audio, user_audio)
+            ebs_data = run_ebs_pipeline(
+                ref_audio_path=ref_wav,
+                alignment=alignment,
+                user_audio_path=user_wav,
+            )
+            for p in (ref_wav, user_wav):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        except Exception as exc:
+            for p in (ref_tmp, user_tmp):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return JSONResponse(
+                {"error": f"EBS pipeline failed: {exc}"}, status_code=500
+            )
+
+    n_segments = len(ebs_data.get("segments", []))
+    if segment_index < 0 or segment_index >= n_segments:
+        for p in (ref_tmp, user_tmp):
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+        return JSONResponse(
+            {"error": f"segment_index {segment_index} out of range (0..{n_segments - 1})"},
+            status_code=400,
+        )
+
+    MOVE_FEEDBACK_JOBS[job_id] = {
+        "status": "queued",
+        "result": None,
+        "error": None,
+        "session_id": sid,
+        "segment_index": segment_index,
+    }
+
+    t = threading.Thread(
+        target=_move_feedback_worker,
+        args=(job_id, ref_tmp, user_tmp, ebs_data, segment_index),
+        daemon=True,
+    )
+    t.start()
+
+    return JSONResponse({"job_id": job_id}, status_code=200)
+
+
+@app.post("/api/move-feedback")
+async def move_feedback_sync(
+    ref_video: UploadFile = File(...),
+    user_video: UploadFile = File(...),
+    segment_index: int = Form(...),
+    session_id: str | None = Form(default=None),
+    ebs_data_json: str | None = Form(default=None),
+):
+    """Synchronous variant — blocks until Gemini returns the feedback JSON.
+
+    Same parameter semantics as ``/api/move-feedback/start``.
+    """
+    sid = (session_id or "").strip() or "default"
+
+    ref_tmp = _save_upload(ref_video, "mf_ref")
+    user_tmp = _save_upload(user_video, "mf_user")
+
+    ebs_data: dict | None = None
+
+    if ebs_data_json:
+        try:
+            ebs_data = json.loads(ebs_data_json)
+        except json.JSONDecodeError:
+            return JSONResponse(
+                {"error": "ebs_data_json is not valid JSON"}, status_code=400
+            )
+
+    if ebs_data is None and sid in SESSION_RESULTS:
+        ebs_data = SESSION_RESULTS[sid]
+
+    if ebs_data is None:
+        try:
+            ref_wav = extract_audio_from_video(ref_tmp)
+            user_wav = extract_audio_from_video(user_tmp)
+            ref_audio = load_audio(ref_wav)
+            user_audio = load_audio(user_wav)
+            alignment = auto_align(ref_audio, user_audio)
+            ebs_data = run_ebs_pipeline(
+                ref_audio_path=ref_wav,
+                alignment=alignment,
+                user_audio_path=user_wav,
+            )
+            for p in (ref_wav, user_wav):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+        except Exception as exc:
+            for p in (ref_tmp, user_tmp):
+                try:
+                    Path(p).unlink(missing_ok=True)
+                except OSError:
+                    pass
+            return JSONResponse(
+                {"error": f"EBS pipeline failed: {exc}"}, status_code=500
+            )
+
+    try:
+        feedback = await asyncio.to_thread(
+            run_move_feedback_pipeline,
+            ref_video_path=ref_tmp,
+            user_video_path=user_tmp,
+            ebs_artifact=ebs_data,
+            segment_index=segment_index,
+        )
+        return JSONResponse(feedback, status_code=200)
+    except Exception as exc:
+        logger.exception("Move feedback error")
+        return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        for p in (ref_tmp, user_tmp):
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
+
+
+@app.get("/api/move-feedback/status")
+async def move_feedback_status(job_id: str):
+    job = MOVE_FEEDBACK_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job_id"}, status_code=404)
+    return {
+        "job_id": job_id,
+        "status": job.get("status", "unknown"),
+        "segment_index": job.get("segment_index"),
+        "error": job.get("error"),
+    }
+
+
+@app.get("/api/move-feedback/result")
+async def move_feedback_result(job_id: str):
+    job = MOVE_FEEDBACK_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job_id"}, status_code=404)
+    if job.get("status") != "done":
+        return JSONResponse(
+            {"error": "Job not ready", "status": job.get("status")},
+            status_code=409,
+        )
+    result = job.pop("result", {})
+    MOVE_FEEDBACK_JOBS.pop(job_id, None)
+    return JSONResponse(result, status_code=200)
 
 
 def _hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
