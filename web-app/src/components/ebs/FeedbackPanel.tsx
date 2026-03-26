@@ -4,7 +4,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { EbsSegment } from "./types";
 import {
   compareWithBodyPix,
-  generateSampleTimestamps,
+  DEFAULT_POSE_FPS,
+  FEEDBACK_FEATURE_LABELS,
   type ComparisonProgress,
   type DanceFeedback,
   type FeedbackSeverity,
@@ -86,17 +87,20 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
     hasRun.current = true;
 
     try {
-      const timestamps = generateSampleTimestamps(segments, 1.5);
       const result = await compareWithBodyPix({
         referenceVideoUrl,
         userVideoUrl,
-        timestamps,
+        segments,
+        poseFps: DEFAULT_POSE_FPS,
         onProgress: setProgress,
       });
       const perFramePayload = buildPerFrameCoachPayload(segments, result.refSamples, result.userSamples);
-      const withTimingFlags = result.feedback.map((fb, i) => ({
+      const withTimingFlags = result.feedback.map((fb) => ({
         ...fb,
-        microTimingOff: perFramePayload.frames[fb.frameIndex ?? i]?.microTimingOff ?? false,
+        microTimingOff:
+          fb.featureFamily === "micro_timing"
+            ? fb.deviation >= 0.12
+            : perFramePayload.frames[fb.frameIndex ?? 0]?.microTimingOff ?? false,
       }));
       setFeedback(withTimingFlags);
       onFeedbackReady?.(withTimingFlags);
@@ -223,7 +227,7 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
           <div>
             <h3 className="text-base font-semibold text-slate-900">Pose Comparison Feedback</h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              One row per sampled frame: attack/decay, transition to next pose, micro-timing flags
+              6&nbsp;FPS poses per beat; four feature families vs reference (micro-timing, upper/lower body, attack &amp; transition). Items are ranked by importance (largest deviation first).
             </p>
           </div>
           <button
@@ -274,7 +278,7 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
               <BodyDiagram feedback={feedback} />
               <div className="flex-1 min-w-0">
                 <p className="text-sm font-medium text-slate-800">
-                  {feedback.length} sampled frame{feedback.length === 1 ? "" : "s"}
+                  {feedback.length} finding{feedback.length === 1 ? "" : "s"} (ranked)
                 </p>
                 <p className="text-xs text-slate-500 mt-1">
                   {timingOffCount} timestamp{timingOffCount === 1 ? "" : "s"} flagged for micro-timing vs reference motion
@@ -335,9 +339,10 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
             {filtered.map((fb, i) => {
               const cfg = SEVERITY_CONFIG[fb.severity];
               const isNearCurrent = Math.abs(fb.timestamp - sharedTime) < 0.8;
+              const fam = fb.featureFamily ? FEEDBACK_FEATURE_LABELS[fb.featureFamily] : null;
               return (
                 <button
-                  key={`${fb.frameIndex ?? i}-${fb.timestamp}`}
+                  key={`${fb.importanceRank ?? i}-${fb.segmentIndex}-${fb.featureFamily ?? "legacy"}-${fb.timestamp}`}
                   onClick={() => onSeek(fb.timestamp)}
                   className={`w-full text-left px-5 py-3 transition-all hover:bg-sky-50 ${
                     isNearCurrent ? "bg-sky-50/80 ring-inset ring-1 ring-sky-200" : ""
@@ -352,8 +357,13 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 flex-wrap">
+                        {fb.importanceRank != null && (
+                          <span className="text-[10px] font-mono text-slate-500 tabular-nums">
+                            #{fb.importanceRank}
+                          </span>
+                        )}
                         <span className={`text-[11px] font-semibold uppercase tracking-wide ${cfg.color}`}>
-                          Sample {fb.frameIndex != null ? fb.frameIndex + 1 : i + 1}
+                          {fam ?? "Beat"}
                         </span>
                         <span className={`text-[10px] px-1.5 py-0.5 rounded-full ${cfg.bg} ${cfg.color} font-medium`}>
                           {cfg.label}
@@ -367,6 +377,9 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
                           Seg {fb.segmentIndex}
                         </span>
                       </div>
+                      {fb.message && (
+                        <p className="text-[11px] text-slate-600 mt-1.5 leading-snug">{fb.message}</p>
+                      )}
                       {fb.attackDecay ? (
                         <>
                           <p className="text-[11px] font-semibold text-slate-700 mt-2">Attack &amp; decay</p>
@@ -379,7 +392,9 @@ export function FeedbackPanel(props: FeedbackPanelProps) {
                           )}
                         </>
                       ) : (
-                        <p className="text-xs text-slate-500 mt-1 italic">Coaching text loading or unavailable.</p>
+                        !fb.message && (
+                          <p className="text-xs text-slate-500 mt-1 italic">Coaching text loading or unavailable.</p>
+                        )
                       )}
                     </div>
                   </div>
