@@ -5,7 +5,8 @@ import type { ReactNode } from "react";
 import { useEbsViewer } from "./useEbsViewer";
 import type { EbsData } from "./types";
 import { BodyPixOverlay } from "../BodyPixOverlay";
-import { ProgressiveOverlay } from "../ProgressiveOverlay";
+import { PrecomputedFrameOverlay } from "../PrecomputedFrameOverlay";
+import { PrecomputedVideoOverlay } from "../PrecomputedVideoOverlay";
 import { generateMoveNetOverlayFrames } from "../../lib/movenetOverlayGenerator";
 import { generateYoloOverlayFrames, type YoloExecutionProvider } from "../../lib/yoloOverlayGenerator";
 import { generateFastSamOverlayFrames } from "../../lib/fastSamOverlayGenerator";
@@ -14,6 +15,7 @@ import { buildOverlayKey, getSessionOverlay, storeSessionOverlay, type OverlayAr
 import { getSessionVideo } from "../../lib/videoStorage";
 import { FeedbackPanel } from "./FeedbackPanel";
 import { FeedbackOverlay } from "./FeedbackOverlay";
+import { GeminiFeedbackPanel, TIMING_LABEL_COLORS, type GeminiFlatMove } from "./GeminiFeedbackPanel";
 import type { DanceFeedback } from "../../lib/bodyPixComparison";
 
 type ManualViewerProps = {
@@ -92,6 +94,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [showFastSam, setShowFastSam] = useState(false);
   const [showFeedback, setShowFeedback] = useState(true);
   const [danceFeedback, setDanceFeedback] = useState<DanceFeedback[]>([]);
+  const [geminiFeedback, setGeminiFeedback] = useState<GeminiFlatMove[]>([]);
   const [overlayMethod, setOverlayMethod] = useState<"pose-fill" | "sam3-experimental" | "sam3-roboflow">("pose-fill");
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
@@ -111,22 +114,20 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [userBodyPixArtifact, setUserBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   // Lower FPS dramatically reduces precompute time (model + WebP encode).
   const OVERLAY_FPS = 12;
-  const yoloVariant = `${segGenerator}-${segProvider}`;
-  const bodyPixVariant = "bodypix24-browser";
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
     const variant = overlayMethod;
     const [rp, ry, rpa, rpl, rbp, up, uy, upa, upl, ubp, rf, uf] = await Promise.all([
       getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "reference", fps: OVERLAY_FPS, variant })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS, variant: yoloVariant })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS, variant: segProvider })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-arms", side: "reference", fps: OVERLAY_FPS, variant: "python" })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-legs", side: "reference", fps: OVERLAY_FPS, variant: "python" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "bodypix", side: "reference", fps: OVERLAY_FPS, variant: bodyPixVariant })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "bodypix", side: "reference", fps: OVERLAY_FPS, variant: "bodypix24" })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "practice", fps: OVERLAY_FPS, variant })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS, variant: yoloVariant })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS, variant: segProvider })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-arms", side: "practice", fps: OVERLAY_FPS, variant: "python" })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-legs", side: "practice", fps: OVERLAY_FPS, variant: "python" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "bodypix", side: "practice", fps: OVERLAY_FPS, variant: bodyPixVariant })),
+      getSessionOverlay(buildOverlayKey({ sessionId, type: "bodypix", side: "practice", fps: OVERLAY_FPS, variant: "bodypix24" })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "fastsam", side: "reference", fps: OVERLAY_FPS, variant: "wasm" })),
       getSessionOverlay(buildOverlayKey({ sessionId, type: "fastsam", side: "practice", fps: OVERLAY_FPS, variant: "wasm" })),
     ]);
@@ -142,10 +143,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
     setUserBodyPixArtifact(ubp);
     setRefFastSamArtifact(rf);
     setUserFastSamArtifact(uf);
-  }, [bodyPixVariant, overlayMethod, sessionId, yoloVariant]);
+  }, [overlayMethod, segProvider, sessionId]);
   
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     void loadCachedOverlays();
   }, [loadCachedOverlays]);
 
@@ -391,7 +391,21 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
                 {sessionMode && showBodyPix ? (
                   overlayMode === "precomputed" ? (
-                    <ProgressiveOverlay videoRef={refVideo} artifact={refBodyPixArtifact} />
+                    refBodyPixArtifact ? (
+                      refBodyPixArtifact.video ? (
+                        <PrecomputedVideoOverlay
+                          videoRef={refVideo}
+                          overlayBlob={refBodyPixArtifact.video}
+                          mimeType={refBodyPixArtifact.videoMime}
+                        />
+                      ) : refBodyPixArtifact.frames ? (
+                        <PrecomputedFrameOverlay
+                          videoRef={refVideo}
+                          frames={refBodyPixArtifact.frames ?? []}
+                          fps={refBodyPixArtifact.fps}
+                        />
+                      ) : null
+                    ) : null
                   ) : (
                     <BodyPixOverlay videoRef={refVideo} opacity={0.68} />
                   )
@@ -416,7 +430,21 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
                 {sessionMode && showBodyPix ? (
                   overlayMode === "precomputed" ? (
-                    <ProgressiveOverlay videoRef={userVideo} artifact={userBodyPixArtifact} />
+                    userBodyPixArtifact ? (
+                      userBodyPixArtifact.video ? (
+                        <PrecomputedVideoOverlay
+                          videoRef={userVideo}
+                          overlayBlob={userBodyPixArtifact.video}
+                          mimeType={userBodyPixArtifact.videoMime}
+                        />
+                      ) : userBodyPixArtifact.frames ? (
+                        <PrecomputedFrameOverlay
+                          videoRef={userVideo}
+                          frames={userBodyPixArtifact.frames ?? []}
+                          fps={userBodyPixArtifact.fps}
+                        />
+                      ) : null
+                    ) : null
                   ) : (
                     <BodyPixOverlay videoRef={userVideo} opacity={0.68} />
                   )
@@ -440,6 +468,18 @@ export function FeedbackViewer(props: EbsViewerProps) {
               </div>
             </div>
           </div>
+          {sessionMode && showFeedback && sessionId && sessionEbsData && state.segments.length > 0 && (
+            <div className="mt-4 mb-2">
+              <GeminiFeedbackPanel
+                sessionId={sessionId}
+                ebsData={sessionEbsData}
+                segments={state.segments}
+                sharedTime={state.sharedTime}
+                onSeek={seekToShared}
+                onFeedbackReady={setGeminiFeedback}
+              />
+            </div>
+          )}
           {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
             <div className="mt-4 mb-2">
               <FeedbackPanel
@@ -451,7 +491,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 onFeedbackReady={setDanceFeedback}
               />
             </div>
-          )} 
+          )}
 
           {!state.practice.enabled && hasSegments && (
             <>
@@ -500,7 +540,28 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
               <div className="timeline">
                 <div className="timeline-track relative overflow-hidden" ref={timelineTrackRef} onClick={handleTimelineClick}>
-                    {/* 1. HEATMAP LAYER (Bottom Layer) */}
+                    {/* 0. GEMINI MOVE BANDS (Bottom-most layer) */}
+                    {showFeedback && geminiFeedback.map((m, i) => {
+                      const start = m.shared_start_sec ?? 0;
+                      const end = m.shared_end_sec ?? start;
+                      const color = TIMING_LABEL_COLORS[m.micro_timing_label] ?? "#94a3b8";
+                      if (sharedLen <= 0) return null;
+                      return (
+                        <div
+                          key={`gmove-${i}`}
+                          className="absolute top-0 bottom-0 z-0 opacity-30 hover:opacity-60 transition-opacity cursor-pointer"
+                          title={`Move ${m.move_index}: ${m.micro_timing_label}`}
+                          style={{
+                            left: `${(start / sharedLen) * 100}%`,
+                            width: `${(Math.max(end - start, 0.05) / sharedLen) * 100}%`,
+                            backgroundColor: color,
+                          }}
+                          onClick={(e) => { e.stopPropagation(); seekToShared(start); }}
+                        />
+                      );
+                    })}
+
+                    {/* 1. HEATMAP LAYER (BodyPix strips) */}
                     {showFeedback && danceFeedback.map((fb, i) => (
                       <div
                         key={`heat-${i}`}
@@ -791,3 +852,4 @@ export function FeedbackViewer(props: EbsViewerProps) {
     </div>
   );
 }
+
