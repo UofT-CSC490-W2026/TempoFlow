@@ -1,6 +1,6 @@
 # Web App Test Coverage Report
 
-*Last Updated: Fri Mar 27 00:11:03 UTC 2026*
+*Last Updated: Fri Mar 27 01:01:28 UTC 2026*
 
 ```text
 
@@ -11,23 +11,23 @@
 [1m[46m RUN [49m[22m [36mv4.1.2 [39m[90m/home/runner/work/TempoFlow/TempoFlow/web-app[39m
       [2mCoverage enabled with [22m[33mv8[39m
 
- [32m✓[39m src/lib/bodyPix/compare.integration.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 226[2mms[22m[39m
- [32m✓[39m src/lib/analysis.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 31[2mms[22m[39m
- [32m✓[39m src/lib/ebsTemporalLlm.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 35[2mms[22m[39m
- [32m✓[39m src/lib/bodyPix/pure.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 28[2mms[22m[39m
- [32m✓[39m src/lib/sessionStorage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 28[2mms[22m[39m
- [32m✓[39m src/app/dashboard/page.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 562[2mms[22m[39m
-     [33m[2m✓[22m[39m renders the empty state when there are no saved sessions [33m 327[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPix/compare.integration.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 214[2mms[22m[39m
+ [32m✓[39m src/lib/analysis.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 26[2mms[22m[39m
+ [32m✓[39m src/lib/ebsTemporalLlm.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 39[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPix/pure.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/lib/sessionStorage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/app/dashboard/page.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[33m 557[2mms[22m[39m
+     [33m[2m✓[22m[39m renders the empty state when there are no saved sessions [33m 308[2mms[22m[39m
  [32m✓[39m src/lib/overlaySegments.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
- [32m✓[39m src/lib/bodyPixComparison.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 10[2mms[22m[39m
- [32m✓[39m src/lib/videoStorage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
- [32m✓[39m src/lib/overlayStorage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
- [32m✓[39m src/app/page.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 206[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPixComparison.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 15[2mms[22m[39m
+ [32m✓[39m src/lib/videoStorage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 29[2mms[22m[39m
+ [32m✓[39m src/lib/overlayStorage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/app/page.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 210[2mms[22m[39m
 
 [2m Test Files [22m [1m[32m11 passed[39m[22m[90m (11)[39m
 [2m      Tests [22m [1m[32m112 passed[39m[22m[90m (112)[39m
-[2m   Start at [22m 00:10:55
-[2m   Duration [22m 7.32s[2m (transform 506ms, setup 2.59s, import 562ms, tests 1.18s, environment 10.99s)[22m
+[2m   Start at [22m 01:01:20
+[2m   Duration [22m 7.26s[2m (transform 507ms, setup 2.46s, import 530ms, tests 1.16s, environment 10.65s)[22m
 
 [34m % [39m[2mCoverage report from [22m[33mv8[39m
 -------------------|---------|----------|---------|---------|-------------------
