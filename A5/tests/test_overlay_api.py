@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import io
 import sys
+import types
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -182,7 +183,7 @@ def test_overlay_bodypix_result_paths(overlay_client):
 
 @patch("src.overlay_api.save_upload", return_value="/tmp/in.mp4")
 def test_overlay_yolo_start_returns_job_id(mock_save, overlay_client):
-    vid = ("v.mp4", io.BytesIO(b"fake"), "video/mp4")
+    vid = ("v.mp4", io.BytesIO(b"mock"), "video/mp4")
     r = overlay_client.post(
         "/api/overlay/yolo/start",
         data={"color": "#ff0000", "fps": 12, "session_id": "s", "side": "left", "backend": "wasm"},
@@ -257,7 +258,7 @@ def test_overlay_yolo_result_200_serves_file_and_pops_job(overlay_client, tmp_pa
 
 @patch("src.overlay_api.save_upload", return_value="/tmp/pose_in.mp4")
 def test_overlay_yolo_pose_start_returns_job_id(mock_save, overlay_client):
-    vid = ("v.mp4", io.BytesIO(b"fake"), "video/mp4")
+    vid = ("v.mp4", io.BytesIO(b"mock"), "video/mp4")
     r = overlay_client.post(
         "/api/overlay/yolo-pose/start",
         data={
@@ -366,9 +367,27 @@ def test_overlay_yolo_pose_result_served_layers_not_a_set(overlay_client, tmp_pa
         oa.POSE_JOBS.pop(jid, None)
 
 
+def test_overlay_yolo_pose_result_missing_job_and_not_ready_and_missing_output(overlay_client):
+    assert overlay_client.get("/api/overlay/yolo-pose/result?job_id=none&layer=arms").status_code == 404
+
+    jid = "pose-not-ready"
+    oa.POSE_JOBS[jid] = {"status": "processing", "served_layers": set()}
+    try:
+        assert overlay_client.get(f"/api/overlay/yolo-pose/result?job_id={jid}&layer=arms").status_code == 409
+    finally:
+        oa.POSE_JOBS.pop(jid, None)
+
+    jid = "pose-missing-output"
+    oa.POSE_JOBS[jid] = {"status": "done", "arms_out": None, "legs_out": None, "served_layers": set()}
+    try:
+        assert overlay_client.get(f"/api/overlay/yolo-pose/result?job_id={jid}&layer=arms").status_code == 500
+    finally:
+        oa.POSE_JOBS.pop(jid, None)
+
+
 @patch("src.overlay_api.save_upload", return_value="/tmp/body_in.mp4")
 def test_overlay_bodypix_start_returns_job_id(mock_save, overlay_client):
-    vid = ("v.mp4", io.BytesIO(b"fake"), "video/mp4")
+    vid = ("v.mp4", io.BytesIO(b"mock"), "video/mp4")
     r = overlay_client.post(
         "/api/overlay/bodypix/start",
         data={
@@ -406,6 +425,205 @@ def test_overlay_bodypix_status_200(overlay_client):
         assert body["progress"] == 1.0
     finally:
         oa.BODYPX_JOBS.pop(jid, None)
+
+
+class _MockTensor:
+    def __init__(self, arr):
+        self._arr = np.asarray(arr)
+
+    def detach(self):
+        return self
+
+    def cpu(self):
+        return self
+
+    def numpy(self):
+        return self._arr
+
+    def __getitem__(self, idx):
+        return _MockTensor(self._arr[idx])
+
+    def __len__(self):
+        return len(self._arr)
+
+
+class _MockMasks:
+    def __init__(self, h: int, w: int):
+        self.data = _MockTensor(np.ones((1, h, w), dtype=np.float32))
+
+
+class _MockKeypoints:
+    def __init__(self):
+        xy = np.zeros((1, 17, 2), dtype=np.float32)
+        conf = np.ones((1, 17), dtype=np.float32)
+        xy[0, 5] = [10, 10]
+        xy[0, 6] = [30, 10]
+        xy[0, 11] = [12, 35]
+        xy[0, 12] = [28, 35]
+        xy[0, 0] = [20, 8]
+        self.xy = _MockTensor(xy)
+        self.conf = _MockTensor(conf)
+
+
+class _MockResult:
+    def __init__(self, h: int, w: int, with_masks: bool = False, with_keypoints: bool = False):
+        self.masks = _MockMasks(h, w) if with_masks else None
+        self.keypoints = _MockKeypoints() if with_keypoints else None
+
+
+class _MockYOLO:
+    def __init__(self, mode: str, h: int, w: int):
+        self._mode = mode
+        self._h = h
+        self._w = w
+
+    def predict(self, frame, **kwargs):
+        if self._mode == "seg":
+            return [_MockResult(self._h, self._w, with_masks=True)]
+        if self._mode == "pose":
+            return [_MockResult(self._h, self._w, with_keypoints=True)]
+        return [_MockResult(self._h, self._w)]
+
+
+class _MockWriter:
+    def __init__(self, opened: bool = True):
+        self._opened = opened
+        self.frames = []
+
+    def isOpened(self):
+        return self._opened
+
+    def write(self, frame):
+        self.frames.append(frame)
+
+    def release(self):
+        return None
+
+
+class _MockCapture:
+    def __init__(self, w: int = 64, h: int = 48, fps: float = 30.0, opened: bool = True, frames: int = 1):
+        self._w = w
+        self._h = h
+        self._fps = fps
+        self._opened = opened
+        self._idx = 0
+        self._frames = [np.zeros((h, w, 3), dtype=np.uint8) for _ in range(frames)]
+        self._pos_msec = 0.0
+
+    def isOpened(self):
+        return self._opened
+
+    def get(self, prop):
+        if prop == 3:
+            return self._w
+        if prop == 4:
+            return self._h
+        if prop == 5:
+            return self._fps
+        if prop == 0:
+            return self._pos_msec
+        return 0
+
+    def set(self, prop, value):
+        if prop == 0:
+            self._pos_msec = float(value)
+        return True
+
+    def read(self):
+        if self._idx >= len(self._frames):
+            return False, None
+        frame = self._frames[self._idx]
+        self._idx += 1
+        self._pos_msec += 1000.0 / max(self._fps, 1.0)
+        return True, frame
+
+    def release(self):
+        return None
+
+
+def _install_mock_cv2_and_ultralytics(monkeypatch, mode: str, opened_capture: bool = True, opened_writer: bool = True):
+    cap = _MockCapture(opened=opened_capture, frames=1)
+    writer = _MockWriter(opened=opened_writer)
+    cv2 = types.SimpleNamespace(
+        CAP_PROP_POS_MSEC=0,
+        CAP_PROP_FRAME_WIDTH=3,
+        CAP_PROP_FRAME_HEIGHT=4,
+        CAP_PROP_FPS=5,
+        LINE_AA=16,
+        INTER_CUBIC=2,
+        VideoCapture=lambda path: cap,
+        VideoWriter=lambda *args, **kwargs: writer,
+        VideoWriter_fourcc=lambda *args: 42,
+        resize=lambda arr, size, interpolation=None: arr,
+        GaussianBlur=lambda arr, ksize, sigmaX=0.0, sigmaY=0.0: arr,
+        line=lambda *args, **kwargs: None,
+        circle=lambda *args, **kwargs: None,
+        fillConvexPoly=lambda *args, **kwargs: None,
+    )
+    ultralytics = types.SimpleNamespace(YOLO=lambda path: _MockYOLO(mode, 48, 64))
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+    monkeypatch.setitem(sys.modules, "ultralytics", ultralytics)
+    return cap, writer
+
+
+def test_run_yolo_overlay_job_success(monkeypatch, tmp_path):
+    _, writer = _install_mock_cv2_and_ultralytics(monkeypatch, mode="seg")
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    weights = tmp_path / "yolo26n-seg.pt"
+    weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda _: weights)
+    jid = "yolo-success"
+    oa.OVERLAY_JOBS[jid] = {"status": "queued"}
+    oa._run_yolo_overlay_job(jid, "/tmp/in.mp4", "/tmp/out.webm", "#38bdf8", 1, None, None)
+    assert oa.OVERLAY_JOBS[jid]["status"] == "done"
+    assert oa.OVERLAY_JOBS[jid]["frames_written"] == 1
+    assert len(writer.frames) == 1
+    oa.OVERLAY_JOBS.pop(jid, None)
+
+
+def test_run_yolo_overlay_job_writer_open_error(monkeypatch, tmp_path):
+    _install_mock_cv2_and_ultralytics(monkeypatch, mode="seg", opened_writer=False)
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    weights = tmp_path / "yolo26n-seg.pt"
+    weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda _: weights)
+    jid = "yolo-writer-error"
+    oa.OVERLAY_JOBS[jid] = {"status": "queued"}
+    oa._run_yolo_overlay_job(jid, "/tmp/in.mp4", "/tmp/out.webm", "#fff", 12, None, None)
+    assert oa.OVERLAY_JOBS[jid]["status"] == "error"
+    assert "VideoWriter" in oa.OVERLAY_JOBS[jid]["error"]
+    oa.OVERLAY_JOBS.pop(jid, None)
+
+
+def test_run_pose_overlay_job_success(monkeypatch, tmp_path):
+    _, writer = _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose")
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    weights = tmp_path / "yolo26n-pose.pt"
+    weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda _: weights)
+    jid = "pose-success"
+    oa.POSE_JOBS[jid] = {"status": "queued"}
+    oa._run_pose_overlay_job(jid, "/tmp/in.mp4", "/tmp/arms.webm", "/tmp/legs.webm", "#f00", "#0f0", 1)
+    assert oa.POSE_JOBS[jid]["status"] == "done"
+    assert oa.POSE_JOBS[jid]["frames_written"] == 1
+    # Both arms and legs writes go through writers in this mocked path.
+    assert len(writer.frames) >= 1
+    oa.POSE_JOBS.pop(jid, None)
+
+
+def test_run_bodypx_job_success(monkeypatch, tmp_path):
+    _, writer = _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose")
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    weights = tmp_path / "yolo26n-pose.pt"
+    weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda _: weights)
+    jid = "bodypx-success"
+    oa.BODYPX_JOBS[jid] = {"status": "queued"}
+    oa._run_bodypx_job(jid, "/tmp/in.mp4", "/tmp/out.webm", "#f00", "#0f0", "#00f", "#ff0", 1, None, None)
+    assert oa.BODYPX_JOBS[jid]["status"] == "done"
+    assert oa.BODYPX_JOBS[jid]["frames_written"] == 1
+    assert len(writer.frames) >= 1
+    oa.BODYPX_JOBS.pop(jid, None)
 
 
 def test_overlay_bodypix_result_200_serves_file_and_pops_job(overlay_client, tmp_path):

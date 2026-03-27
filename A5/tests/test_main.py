@@ -204,14 +204,14 @@ def test_move_feedback_worker_error(mock_pipeline, tmp_path):
     del main_mod.MOVE_FEEDBACK_JOBS[jid]
 
 
-def _fake_move_feedback_worker(job_id, ref_path, user_path, ebs_data, segment_index):
+def _stub_move_feedback_worker(job_id, ref_path, user_path, ebs_data, segment_index):
     import src.main as main_mod
 
     main_mod.MOVE_FEEDBACK_JOBS[job_id]["status"] = "done"
     main_mod.MOVE_FEEDBACK_JOBS[job_id]["result"] = {"piped": True}
 
 
-@patch("src.main._move_feedback_worker", new=_fake_move_feedback_worker)
+@patch("src.main._move_feedback_worker", new=_stub_move_feedback_worker)
 @patch("src.main.save_upload")
 def test_move_feedback_start_success(mock_save, tmp_path):
     p1 = tmp_path / "mf_ref.mp4"
@@ -238,7 +238,7 @@ def test_move_feedback_start_success(mock_save, tmp_path):
     main_mod.MOVE_FEEDBACK_JOBS.pop(jid, None)
 
 
-@patch("src.main._move_feedback_worker", new=_fake_move_feedback_worker)
+@patch("src.main._move_feedback_worker", new=_stub_move_feedback_worker)
 @patch("src.main.save_upload")
 def test_move_feedback_start_uses_session_results(mock_save, tmp_path):
     import src.main as main_mod
@@ -264,7 +264,7 @@ def test_move_feedback_start_uses_session_results(mock_save, tmp_path):
         main_mod.SESSION_RESULTS.pop("sess_reuse", None)
 
 
-@patch("src.main._move_feedback_worker", new=_fake_move_feedback_worker)
+@patch("src.main._move_feedback_worker", new=_stub_move_feedback_worker)
 @patch("src.main.asyncio.to_thread", new_callable=AsyncMock, return_value={"segments": [{"seg": 1}]})
 @patch("src.main.save_upload")
 def test_move_feedback_start_calls_process_videos_from_paths(
@@ -376,7 +376,7 @@ def test_move_feedback_sync_segment_out_of_range(mock_save, tmp_path):
 @patch("src.main.save_upload")
 @patch("src.main.asyncio.to_thread", new_callable=AsyncMock)
 def test_move_feedback_sync_success(mock_to_thread, mock_save, tmp_path):
-    async def fake_to_thread(fn, /, *args, **kwargs):
+    async def mock_to_thread_impl(fn, /, *args, **kwargs):
         name = getattr(fn, "__name__", "")
         if name == "process_videos_from_paths":
             return {"segments": [{"seg": 1}]}
@@ -384,7 +384,7 @@ def test_move_feedback_sync_success(mock_to_thread, mock_save, tmp_path):
             return {"sync": {"ok": True}}
         raise AssertionError(f"unexpected fn {fn!r}")
 
-    mock_to_thread.side_effect = fake_to_thread
+    mock_to_thread.side_effect = mock_to_thread_impl
     mock_save.side_effect = [str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")]
     (tmp_path / "a.mp4").write_bytes(b"x")
     (tmp_path / "b.mp4").write_bytes(b"y")
@@ -406,14 +406,14 @@ def test_move_feedback_sync_generic_exception(mock_to_thread, mock_save, tmp_pat
     (tmp_path / "a.mp4").write_bytes(b"x")
     (tmp_path / "b.mp4").write_bytes(b"y")
 
-    async def fake_to_thread(fn, /, *args, **kwargs):
+    async def mock_to_thread_impl(fn, /, *args, **kwargs):
         if getattr(fn, "__name__", "") == "process_videos_from_paths":
             return {"segments": [{"seg": 1}]}
         if getattr(fn, "__name__", "") == "run_move_feedback_pipeline":
             raise RuntimeError("gemini failed")
         raise AssertionError(fn)
 
-    mock_to_thread.side_effect = fake_to_thread
+    mock_to_thread.side_effect = mock_to_thread_impl
     files = {
         "ref_video": ("a.mp4", b"x", "video/mp4"),
         "user_video": ("b.mp4", b"y", "video/mp4"),
@@ -487,11 +487,11 @@ def test_move_feedback_sync_uses_session_results(mock_to_thread, mock_save, tmp_
 
     main_mod.SESSION_RESULTS["sync_sess"] = {"segments": [{"seg": 1}]}
 
-    async def fake_to_thread(fn, /, *args, **kwargs):
+    async def mock_to_thread_impl(fn, /, *args, **kwargs):
         assert getattr(fn, "__name__", "") == "run_move_feedback_pipeline"
         return {"from": "session"}
 
-    mock_to_thread.side_effect = fake_to_thread
+    mock_to_thread.side_effect = mock_to_thread_impl
     mock_save.side_effect = [str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")]
     (tmp_path / "a.mp4").write_bytes(b"x")
     (tmp_path / "b.mp4").write_bytes(b"y")
@@ -516,7 +516,7 @@ def test_move_feedback_sync_finally_swallows_unlink_oserror(
     mock_to_thread, mock_save, tmp_path,
 ):
     """Covers OSError in sync route finally (main.py ~253–254)."""
-    async def fake_to_thread(fn, /, *args, **kwargs):
+    async def mock_to_thread_impl(fn, /, *args, **kwargs):
         name = getattr(fn, "__name__", "")
         if name == "process_videos_from_paths":
             return {"segments": [{"seg": 1}]}
@@ -524,7 +524,7 @@ def test_move_feedback_sync_finally_swallows_unlink_oserror(
             return {"ok": True}
         raise AssertionError(f"unexpected fn {fn!r}")
 
-    mock_to_thread.side_effect = fake_to_thread
+    mock_to_thread.side_effect = mock_to_thread_impl
     mock_save.side_effect = [str(tmp_path / "a.mp4"), str(tmp_path / "b.mp4")]
     (tmp_path / "a.mp4").write_bytes(b"x")
     (tmp_path / "b.mp4").write_bytes(b"y")

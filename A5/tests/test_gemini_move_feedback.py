@@ -66,7 +66,7 @@ def test_prepare_clip_ffmpeg_raises_on_error(monkeypatch, tmp_path):
         gm._prepare_clip_ffmpeg("in.mp4", 0.0, 1.0, str(out), 360, "ffmpeg")
 
 
-def _install_fake_cv2(
+def _install_mock_cv2(
     monkeypatch,
     *,
     open_ok=True,
@@ -77,7 +77,7 @@ def _install_fake_cv2(
     src_h=720,
     msec_step=200.0,
 ):
-    class FakeCap:
+    class MockCap:
         def __init__(self, _path):
             self._opened = open_ok
             self._msec = 0.0
@@ -87,18 +87,18 @@ def _install_fake_cv2(
             return self._opened
 
         def get(self, prop):
-            if prop == fake_cv2.CAP_PROP_FPS:
+            if prop == mock_cv2.CAP_PROP_FPS:
                 return fps
-            if prop == fake_cv2.CAP_PROP_FRAME_WIDTH:
+            if prop == mock_cv2.CAP_PROP_FRAME_WIDTH:
                 return src_w
-            if prop == fake_cv2.CAP_PROP_FRAME_HEIGHT:
+            if prop == mock_cv2.CAP_PROP_FRAME_HEIGHT:
                 return src_h
-            if prop == fake_cv2.CAP_PROP_POS_MSEC:
+            if prop == mock_cv2.CAP_PROP_POS_MSEC:
                 return self._msec
             return 0.0
 
         def set(self, prop, value):
-            if prop == fake_cv2.CAP_PROP_POS_MSEC:
+            if prop == mock_cv2.CAP_PROP_POS_MSEC:
                 self._msec = float(value)
 
         def read(self):
@@ -111,7 +111,7 @@ def _install_fake_cv2(
         def release(self):
             return None
 
-    class FakeWriter:
+    class MockWriter:
         def __init__(self, *_a, **_k):
             self._opened = writer_ok
             self.writes = 0
@@ -125,9 +125,9 @@ def _install_fake_cv2(
         def release(self):
             return None
 
-    fake_cv2 = types.SimpleNamespace(
-        VideoCapture=FakeCap,
-        VideoWriter=FakeWriter,
+    mock_cv2 = types.SimpleNamespace(
+        VideoCapture=MockCap,
+        VideoWriter=MockWriter,
         VideoWriter_fourcc=lambda *a: 1234,
         resize=MagicMock(side_effect=lambda frame, size, interpolation=None: frame),
         INTER_AREA=1,
@@ -136,33 +136,33 @@ def _install_fake_cv2(
         CAP_PROP_FRAME_HEIGHT=4,
         CAP_PROP_POS_MSEC=0,
     )
-    monkeypatch.setitem(sys.modules, "cv2", fake_cv2)
-    return fake_cv2
+    monkeypatch.setitem(sys.modules, "cv2", mock_cv2)
+    return mock_cv2
 
 
 def test_prepare_clip_opencv_raises_when_cannot_open(monkeypatch, tmp_path):
-    _install_fake_cv2(monkeypatch, open_ok=False)
+    _install_mock_cv2(monkeypatch, open_ok=False)
     with pytest.raises(RuntimeError, match="OpenCV cannot open"):
         gm._prepare_clip_opencv("in.mp4", 0.0, 1.0, str(tmp_path / "o.mp4"), 360)
 
 
 def test_prepare_clip_opencv_writer_open_fail(monkeypatch, tmp_path):
-    _install_fake_cv2(monkeypatch, open_ok=True, writer_ok=False)
+    _install_mock_cv2(monkeypatch, open_ok=True, writer_ok=False)
     with pytest.raises(RuntimeError, match="VideoWriter failed to open"):
         gm._prepare_clip_opencv("in.mp4", 0.0, 1.0, str(tmp_path / "o.mp4"), 360)
 
 
 def test_prepare_clip_opencv_resizes_when_scaling_down(monkeypatch, tmp_path):
-    fake_cv2 = _install_fake_cv2(monkeypatch, open_ok=True, writer_ok=True, frames=2)
+    mock_cv2 = _install_mock_cv2(monkeypatch, open_ok=True, writer_ok=True, frames=2)
     out = gm._prepare_clip_opencv("in.mp4", 0.0, 10.0, str(tmp_path / "o.mp4"), height=360)
     assert out.endswith(".mp4")
-    assert fake_cv2.resize.called
+    assert mock_cv2.resize.called
 
 
 def test_prepare_clip_opencv_rounds_width_to_even_and_stops_at_end(monkeypatch, tmp_path):
     # Pick src_h such that scale makes out_w odd:
     # scale = 360 / 721 ~= 0.4993; out_w=int(640*scale)=319 (odd) -> +1 branch
-    fake_cv2 = _install_fake_cv2(
+    mock_cv2 = _install_mock_cv2(
         monkeypatch,
         open_ok=True,
         writer_ok=True,
@@ -174,7 +174,7 @@ def test_prepare_clip_opencv_rounds_width_to_even_and_stops_at_end(monkeypatch, 
     # end_sec small so pos_sec > end_sec triggers the early break
     out = gm._prepare_clip_opencv("in.mp4", 0.0, 0.1, str(tmp_path / "o.mp4"), height=360)
     assert out.endswith(".mp4")
-    assert not fake_cv2.resize.called
+    assert not mock_cv2.resize.called
 
 
 def test_prepare_segment_clip_uses_ffmpeg_when_available(monkeypatch, tmp_path):
@@ -292,7 +292,7 @@ def test_parse_gemini_json_variants():
 
 
 def test_call_gemini_move_feedback_happy_path_and_cleanup(monkeypatch):
-    class FakeModel:
+    class MockModel:
         def __init__(self, *a, **k):
             pass
 
@@ -311,7 +311,7 @@ def test_call_gemini_move_feedback_happy_path_and_cleanup(monkeypatch):
         upload_file=MagicMock(side_effect=[SimpleNamespace(name="ref", state=SimpleNamespace(name="ACTIVE")), SimpleNamespace(name="user", state=SimpleNamespace(name="ACTIVE"))]),
         delete_file=_delete_file,
         get_file=MagicMock(),
-        GenerativeModel=FakeModel,
+        GenerativeModel=MockModel,
         GenerationConfig=lambda **k: k,
     )
     monkeypatch.setitem(sys.modules, "google.generativeai", genai)

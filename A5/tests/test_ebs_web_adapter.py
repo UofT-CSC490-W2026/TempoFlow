@@ -8,19 +8,19 @@ from types import SimpleNamespace
 import pytest
 
 
-def _install_fake_numpy_and_librosa(monkeypatch):
+def _install_mock_numpy_and_librosa(monkeypatch):
     """
     This repo's Python environment can hard-crash when importing the real numpy.
     `src/ebs_web_adapter.py` imports numpy+librosa at import time, so we provide
-    minimal fakes sufficient for unit tests and branch coverage.
+    minimal mocks sufficient for unit tests and branch coverage.
     """
 
-    class _FakeNDArray(list):
+    class _MockNDArray(list):
         # Just enough to support len() and slicing used in the module
         pass
 
     def _zeros(n, dtype=None):
-        return _FakeNDArray([0.0] * int(n))
+        return _MockNDArray([0.0] * int(n))
 
     def _clip(x, a, b):
         # x may be scalar
@@ -42,38 +42,38 @@ def _install_fake_numpy_and_librosa(monkeypatch):
         step = (float(end) - float(start)) / (num - 1)
         return [float(start) + i * step for i in range(num)]
 
-    fake_np = types.ModuleType("numpy")
-    fake_np.ndarray = _FakeNDArray
-    fake_np.zeros = _zeros
-    fake_np.clip = _clip
-    fake_np.searchsorted = _searchsorted
-    fake_np.linspace = _linspace
+    mock_np = types.ModuleType("numpy")
+    mock_np.ndarray = _MockNDArray
+    mock_np.zeros = _zeros
+    mock_np.clip = _clip
+    mock_np.searchsorted = _searchsorted
+    mock_np.linspace = _linspace
 
-    fake_librosa = types.ModuleType("librosa")
-    fake_librosa.feature = types.SimpleNamespace(
+    mock_librosa = types.ModuleType("librosa")
+    mock_librosa.feature = types.SimpleNamespace(
         chroma_stft=lambda **_k: types.SimpleNamespace(shape=(12, 5))
     )
-    fake_librosa.frames_to_time = lambda frame, **_k: float(frame) * 0.1
-    fake_librosa.load = lambda *_a, **_k: (_zeros(10), 22050)
+    mock_librosa.frames_to_time = lambda frame, **_k: float(frame) * 0.1
+    mock_librosa.load = lambda *_a, **_k: (_zeros(10), 22050)
 
-    monkeypatch.setitem(sys.modules, "numpy", fake_np)
-    monkeypatch.setitem(sys.modules, "librosa", fake_librosa)
+    monkeypatch.setitem(sys.modules, "numpy", mock_np)
+    monkeypatch.setitem(sys.modules, "librosa", mock_librosa)
 
 
 def _import_ebs_web_adapter(monkeypatch):
-    _install_fake_numpy_and_librosa(monkeypatch)
+    _install_mock_numpy_and_librosa(monkeypatch)
 
     # Prevent importing heavy deps (sklearn/scipy) by stubbing the internal
     # alignment/segmentation modules that `ebs_web_adapter` imports.
-    fake_alignment_core = types.ModuleType("src.alignment_and_segmentation.alignment_core")
-    fake_alignment_core.perform_alignment = lambda *_a, **_k: (0, 1, 0, 1)
-    monkeypatch.setitem(sys.modules, "src.alignment_and_segmentation.alignment_core", fake_alignment_core)
+    mock_alignment_core = types.ModuleType("src.alignment_and_segmentation.alignment_core")
+    mock_alignment_core.perform_alignment = lambda *_a, **_k: (0, 1, 0, 1)
+    monkeypatch.setitem(sys.modules, "src.alignment_and_segmentation.alignment_core", mock_alignment_core)
 
-    fake_segmentation_core = types.ModuleType("src.alignment_and_segmentation.segmentation_core")
-    fake_segmentation_core.estimate_downbeat_phase = lambda *_a, **_k: 0
-    fake_segmentation_core.generate_segments = lambda *_a, **_k: ([], [])
-    fake_segmentation_core.track_beats = lambda *_a, **_k: ([], 0.0, {"coefficient_of_variation": 1.0}, [], [])
-    monkeypatch.setitem(sys.modules, "src.alignment_and_segmentation.segmentation_core", fake_segmentation_core)
+    mock_segmentation_core = types.ModuleType("src.alignment_and_segmentation.segmentation_core")
+    mock_segmentation_core.estimate_downbeat_phase = lambda *_a, **_k: 0
+    mock_segmentation_core.generate_segments = lambda *_a, **_k: ([], [])
+    mock_segmentation_core.track_beats = lambda *_a, **_k: ([], 0.0, {"coefficient_of_variation": 1.0}, [], [])
+    monkeypatch.setitem(sys.modules, "src.alignment_and_segmentation.segmentation_core", mock_segmentation_core)
 
     import src.ebs_web_adapter as mod
 
@@ -306,7 +306,7 @@ def test_build_segments_from_beats_branches():
         mp.undo()
 
 
-def _fake_pipeline_deps(monkeypatch, *, eight_beat=True, segs_nonempty=True, generate_raises=False):
+def _mock_pipeline_deps(monkeypatch, *, eight_beat=True, segs_nonempty=True, generate_raises=False):
     ewa = _import_ebs_web_adapter(monkeypatch)
     # Avoid touching real filesystem in finally blocks.
     monkeypatch.setattr(ewa, "save_upload", lambda *_a, **_k: "ref.mp4")
@@ -352,7 +352,7 @@ def _fake_pipeline_deps(monkeypatch, *, eight_beat=True, segs_nonempty=True, gen
 
 
 def test_process_uploads_fallback_segmentation_and_cleanup(monkeypatch):
-    ewa = _fake_pipeline_deps(monkeypatch, eight_beat=False)
+    ewa = _mock_pipeline_deps(monkeypatch, eight_beat=False)
 
     unlinked = []
 
@@ -371,7 +371,7 @@ def test_process_uploads_fallback_segmentation_and_cleanup(monkeypatch):
 
 
 def test_process_uploads_eight_beat_mode(monkeypatch):
-    ewa = _fake_pipeline_deps(monkeypatch, eight_beat=True, segs_nonempty=True)
+    ewa = _mock_pipeline_deps(monkeypatch, eight_beat=True, segs_nonempty=True)
     ref = SimpleNamespace(filename="a.mp4", file=io.BytesIO(b"x"))
     usr = SimpleNamespace(filename="b.mp4", file=io.BytesIO(b"y"))
     artifact = ewa.process_uploads(ref, usr)
@@ -384,7 +384,7 @@ def test_process_uploads_eight_beat_mode(monkeypatch):
 
 def test_process_uploads_segmentation_try_except_swallows(monkeypatch):
     # generate_segments raises -> should silently fall back to fixed_time segments
-    ewa = _fake_pipeline_deps(monkeypatch, eight_beat=True, generate_raises=True)
+    ewa = _mock_pipeline_deps(monkeypatch, eight_beat=True, generate_raises=True)
     ref = SimpleNamespace(filename="a.mp4", file=io.BytesIO(b"x"))
     usr = SimpleNamespace(filename="b.mp4", file=io.BytesIO(b"y"))
     artifact = ewa.process_uploads(ref, usr)

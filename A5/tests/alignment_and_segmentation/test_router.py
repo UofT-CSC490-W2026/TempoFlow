@@ -78,7 +78,7 @@ def test_align_audio_success(
         [(11.0, 15.0, [(0.0, 0.5), (0.5, 1.0)])]
     ]
 
-    # Fake file upload
+    # Mock file upload
     files = {
         "file_a": ("a.mp4", b"content", "video/mp4"),
         "file_b": ("b.mp4", b"content", "video/mp4")
