@@ -2,6 +2,7 @@ import json
 import re
 
 import matplotlib.pyplot as plt
+import numpy as np
 import pandas as pd
 
 FINAL_ANSWER_RE = re.compile(r"####\s*(-?\d[\d,]*(?:\.\d+)?)")
@@ -11,9 +12,9 @@ TRAILING_OP_RE = re.compile(r"[\+\-\*\/=]$")
 ARROW_LINE_RE = re.compile(r"\[CALC\]\s*([^\n\r]*?)\s*->\s*([^\n\r]+)", re.IGNORECASE)
 
 RUN_INPUTS = [
-    ("baseline.json", "baseline_rl"),
-    ("reward_a (1).json", "baseline_plus_reward_a"),
-    ("reward_b (1).json", "baseline_plus_reward_b"),
+    ("baseline.json", "baseline_rl", "Baseline"),
+    ("reward_a (1).json", "baseline_plus_reward_a", "baseline_plus_reward_a"),
+    ("reward_b (1).json", "baseline_plus_reward_b", "baseline_plus_reward_b"),
 ]
 
 CATEGORY_ORDER = [
@@ -25,6 +26,21 @@ CATEGORY_ORDER = [
     "Arithmetic-consistency anomaly",
     "Wrong answer other",
 ]
+ERROR_CATEGORY_ORDER = [c for c in CATEGORY_ORDER if c != "Correct"]
+
+RUN_COLORS = {
+    "baseline_rl": "#1f77b4",
+    "baseline_plus_reward_a": "#ff7f0e",
+    "baseline_plus_reward_b": "#9467bd",
+}
+ERROR_COLORS = {
+    "Formatting failure": "#f1c40f",
+    "Incomplete / unresolved calc": "#e67e22",
+    "Shallow reasoning": "#c0392b",
+    "Overlong / padded reasoning": "#9b59b6",
+    "Arithmetic-consistency anomaly": "#16a085",
+    "Wrong answer other": "#7f8c8d",
+}
 
 
 def count_equation_signals(text):
@@ -149,14 +165,30 @@ def build_rows(raw_data, run_name):
     return rows
 
 
+def complexity_bin(q_equations):
+    if q_equations <= 1:
+        return "1 step"
+    if q_equations == 2:
+        return "2 steps"
+    if q_equations == 3:
+        return "3 steps"
+    if q_equations == 4:
+        return "4 steps"
+    return "5+ steps"
+
+
 # 1) Load and combine all runs with explicit run labels.
 all_rows = []
-for file_name, run_name in RUN_INPUTS:
+run_display_map = {}
+for file_name, run_name, run_label in RUN_INPUTS:
+    run_display_map[run_name] = run_label
     with open(file_name, "r", encoding="utf-8") as f:
         raw = json.load(f)
     all_rows.extend(build_rows(raw, run_name))
 
 df = pd.DataFrame(all_rows)
+df["run_label"] = df["run"].map(run_display_map)
+df["complexity_bin"] = df["q_equations"].apply(complexity_bin)
 
 # 2) Export combined per-sample audit artifacts.
 audit_csv_path = "gsm8k_results_with_categories_by_run.csv"
@@ -176,14 +208,18 @@ print(f"Overall correct questions: {num_correct}")
 print(f"Overall incorrect questions: {num_incorrect}")
 print(f"Overall accuracy: {accuracy:.2f}%")
 
-for run_name, run_df in df.groupby("run"):
+for run_name, run_df in df.groupby("run", sort=False):
     run_total = len(run_df)
     run_correct = int(run_df["is_correct"].sum())
     run_incorrect = run_total - run_correct
     run_acc = (run_correct / run_total * 100.0) if run_total else 0.0
-    print(f"[{run_name}] total={run_total}, correct={run_correct}, incorrect={run_incorrect}, accuracy={run_acc:.2f}%")
+    print(f"[{run_display_map[run_name]}] total={run_total}, correct={run_correct}, incorrect={run_incorrect}, accuracy={run_acc:.2f}%")
 
-# 4) Comparison error distribution chart (counts by run x category).
+runs = [run_name for _, run_name, _ in RUN_INPUTS]
+run_labels = [run_display_map[r] for r in runs]
+overall_acc = df.groupby("run")["is_correct"].mean().reindex(runs).fillna(0) * 100
+
+# Original comparison error distribution chart (counts by run x category)
 pivot_counts = (
     df.groupby(["error_category", "run"])
     .size()
@@ -191,19 +227,22 @@ pivot_counts = (
     .reindex(CATEGORY_ORDER)
 )
 
-runs = [run_name for _, run_name in RUN_INPUTS]
-x = list(range(len(CATEGORY_ORDER)))
+x = np.arange(len(CATEGORY_ORDER))
 width = 0.24
-
-fig, ax = plt.subplots(figsize=(18, 8))
-colors = ["#1f77b4", "#ff7f0e", "#9467bd"]
-
+fig1, ax1 = plt.subplots(figsize=(18, 8))
 for i, run_name in enumerate(runs):
     vals = [int(pivot_counts.loc[cat, run_name]) for cat in CATEGORY_ORDER]
-    x_shifted = [xi + (i - 1) * width for xi in x]
-    bars = ax.bar(x_shifted, vals, width=width, label=run_name, color=colors[i], alpha=0.85)
+    x_shifted = x + (i - 1) * width
+    bars = ax1.bar(
+        x_shifted,
+        vals,
+        width=width,
+        label=run_display_map[run_name],
+        color=RUN_COLORS[run_name],
+        alpha=0.85,
+    )
     for bar, v in zip(bars, vals):
-        ax.text(
+        ax1.text(
             bar.get_x() + bar.get_width() / 2,
             bar.get_height() + 3,
             str(v),
@@ -212,14 +251,60 @@ for i, run_name in enumerate(runs):
             fontsize=8,
         )
 
-ax.set_xticks(x)
-ax.set_xticklabels(CATEGORY_ORDER, rotation=25, ha="right")
-ax.set_ylabel("Number of Questions")
-ax.set_title("GSM8K Error Category Distribution Comparison by Run", fontweight="bold", fontsize=14)
-ax.legend(title="Run")
-ax.grid(axis="y", alpha=0.2)
+ax1.set_xticks(x)
+ax1.set_xticklabels(CATEGORY_ORDER, rotation=25, ha="right")
+ax1.set_ylabel("Number of Questions")
+ax1.set_title("GSM8K Error Category Distribution Comparison by Run", fontweight="bold", fontsize=14)
+ax1.legend(title="Run")
+ax1.grid(axis="y", linestyle="--", color="#cfcfcf", alpha=0.7)
+fig1.tight_layout()
+fig1.savefig("gsm8k_error_distribution_comparison.png")
+print("Saved chart: gsm8k_error_distribution_comparison.png")
 
-plt.tight_layout()
-comparison_plot_path = "gsm8k_error_distribution_comparison.png"
-plt.savefig(comparison_plot_path)
-print(f"Saved comparison chart to {comparison_plot_path}")
+# Chart 2: GSM8K Accuracy by Problem Complexity
+complexity_order = ["1 step", "2 steps", "3 steps", "4 steps", "5+ steps"]
+complexity_stats = (
+    df.groupby(["complexity_bin", "run"])["is_correct"]
+    .agg(["mean", "count"])
+    .reindex(pd.MultiIndex.from_product([complexity_order, runs], names=["complexity_bin", "run"]))
+    .fillna(0)
+    .reset_index()
+)
+
+fig2, ax2 = plt.subplots(figsize=(13, 7))
+x = np.arange(len(complexity_order))
+width = 0.24
+for i, run in enumerate(runs):
+    run_df = complexity_stats[complexity_stats["run"] == run]
+    vals = run_df["mean"].values * 100
+    ns = run_df["count"].astype(int).values
+    offset = (i - 1) * width
+    bars = ax2.bar(
+        x + offset,
+        vals,
+        width=width,
+        label=run_display_map[run],
+        color=RUN_COLORS[run],
+        alpha=0.9,
+    )
+    for j, bar in enumerate(bars):
+        ax2.text(
+            bar.get_x() + bar.get_width() / 2,
+            bar.get_height() + 1.2,
+            f"n={ns[j]}",
+            ha="center",
+            va="bottom",
+            fontsize=8,
+        )
+    ax2.axhline(overall_acc[run], linestyle="--", linewidth=1.3, color=RUN_COLORS[run], alpha=0.85)
+
+ax2.set_xticks(x)
+ax2.set_xticklabels(complexity_order)
+ax2.set_ylim(0, 60)
+ax2.set_ylabel("Accuracy (%)")
+ax2.set_title("GSM8K Accuracy by Problem Complexity", fontweight="bold")
+ax2.grid(axis="y", linestyle="--", color="#cfcfcf", alpha=0.7)
+ax2.legend(loc="upper right")
+fig2.tight_layout()
+fig2.savefig("gsm8k_chart2_accuracy_by_complexity.png")
+print("Saved chart: gsm8k_chart2_accuracy_by_complexity.png")
