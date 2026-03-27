@@ -1,12 +1,12 @@
 # A5 Test Coverage Report
 
-*Last Updated: Fri Mar 27 01:00:22 UTC 2026*
+*Last Updated: Fri Mar 27 01:59:54 UTC 2026*
 
 ```text
 ============================= test session starts ==============================
 platform linux -- Python 3.12.13, pytest-9.0.2, pluggy-1.6.0
 rootdir: /home/runner/work/TempoFlow/TempoFlow/A5
-plugins: anyio-4.13.0, cov-7.1.0
+plugins: cov-7.1.0, anyio-4.13.0
 collected 187 items
 
 tests/alignment_and_segmentation/test_alignment_algo_accuracy.py s       [  0%]
@@ -41,5 +41,5 @@ src/main.py                                             153      0   100%
 src/overlay_api.py                                      474     68    86%
 -------------------------------------------------------------------------
 TOTAL                                                  1318     68    95%
-======================= 186 passed, 1 skipped in 39.45s ========================
+======================= 186 passed, 1 skipped in 38.01s ========================
 ```
