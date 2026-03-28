@@ -121,17 +121,21 @@ export class A5BackendStack extends cdk.Stack {
     });
     ebEnv.node.addDependency(appVersion);
 
+    // CloudFormation often no longer exposes `EndpointURL` on newer EB environments; `CNAME` is the
+    // stable attribute (hostname or single-instance public DNS / IP — prefix http:// for clients).
+    const ebHttpBase = cdk.Fn.join('', ['http://', cdk.Token.asString(ebEnv.getAtt('CNAME'))]);
+
     new cdk.CfnOutput(this, 'A5BackendStage', { value: stage });
     new cdk.CfnOutput(this, 'A5EbEndpointUrl', {
-      value: ebEnv.attrEndpointUrl,
-      description: 'HTTP URL for the A5 API (use with web-app EBS_BACKEND_URL + NEXT_PUBLIC_EBS_PROXY if frontend is HTTPS)',
+      value: ebHttpBase,
+      description: 'HTTP base URL for the A5 API (EBS_BACKEND_URL / proxy setup)',
     });
     new cdk.CfnOutput(this, 'A5BackendBaseUrl', {
-      value: ebEnv.attrEndpointUrl,
-      description: 'Same as endpoint — http://… elasticbeanstalk or single-instance URL',
+      value: ebHttpBase,
+      description: 'Same as A5EbEndpointUrl',
     });
     new cdk.CfnOutput(this, 'A5ProcessorUrl', {
-      value: cdk.Fn.join('', [ebEnv.attrEndpointUrl, '/api/process']),
+      value: cdk.Fn.join('', [ebHttpBase, '/api/process']),
       description: 'Full /api/process URL (HTTP)',
     });
   }
