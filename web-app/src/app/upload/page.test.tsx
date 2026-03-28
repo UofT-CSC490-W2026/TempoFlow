@@ -2,6 +2,8 @@ import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/re
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import UploadPage from "./page";
 import React from "react";
+import * as sessionStorage from '../../lib/sessionStorage';
+import * as videoStorage from '../../lib/videoStorage';
 
 // 1. Mock Next.js Navigation
 const mockPush = vi.fn();
@@ -9,61 +11,58 @@ vi.mock('next/navigation', () => ({
   useRouter: () => ({ push: mockPush }),
 }));
 
-// 2. Mock Session & Video Storage
+// 2. Mock Storage Libs
 vi.mock('../../lib/sessionStorage', () => ({
-  createSession: vi.fn(() => ({ id: 'mock-session-id' })),
-  getAnalysisMode: vi.fn(() => 'api'),
-  getStorageMode: vi.fn(() => 'aws'),
+  createSession: vi.fn(),
+  getAnalysisMode: vi.fn(),
+  getStorageMode: vi.fn(),
   updateSession: vi.fn(),
 }));
 
 vi.mock('../../lib/videoStorage', () => ({
-  storeSessionVideo: vi.fn().mockResolvedValue(undefined),
+  storeSessionVideo: vi.fn(),
 }));
 
 describe("UploadPage", () => {
-  // Define event handlers at the top level so we can trigger them manually
   let recorderHandlers: Record<string, any> = {};
 
   beforeEach(() => {
-    // A. Mock MediaRecorder with Event Support
-    global.MediaRecorder = vi.fn().mockImplementation(() => ({
-      start: vi.fn(),
-      stop: vi.fn().mockImplementation(function(this: any) {
-        // When stop is called, manually trigger the data and stop handlers
+    // FIX: Use 'function' so it can be used as a constructor
+    global.MediaRecorder = vi.fn().mockImplementation(function(this: any) {
+      this.start = vi.fn();
+      this.stop = vi.fn(() => {
         if (recorderHandlers['dataavailable']) {
-          recorderHandlers['dataavailable']({ data: new Blob(["rec"], { type: "video/webm" }) });
+          recorderHandlers['dataavailable']({ data: new Blob(["test"], { type: "video/webm" }) });
         }
-        if (recorderHandlers['stop']) {
-          recorderHandlers['stop']();
-        }
-      }),
-      state: 'inactive',
-      set ondataavailable(fn: any) { recorderHandlers['dataavailable'] = fn; },
-      set onstop(fn: any) { recorderHandlers['stop'] = fn; },
-      mimeType: 'video/webm',
-    })) as any;
+        if (recorderHandlers['stop']) recorderHandlers['stop']();
+      });
+      this.state = 'inactive';
+      this.addEventListener = vi.fn((ev, cb) => { recorderHandlers[ev] = cb; });
+    }) as any;
     (global.MediaRecorder as any).isTypeSupported = vi.fn().mockReturnValue(true);
 
-    // B. Mock navigator.mediaDevices
+    // FIX: Provide a "real" MediaStream structure for Happy DOM
     const mockStream = {
-      getTracks: () => [{ stop: vi.fn() }],
+      getTracks: () => [{ stop: vi.fn(), enabled: true }],
+      active: true,
     };
+    
     vi.stubGlobal('navigator', {
       mediaDevices: {
         getUserMedia: vi.fn().mockResolvedValue(mockStream),
       },
     });
 
-    // C. Mock URL & Blobs
     global.URL.createObjectURL = vi.fn(() => "blob:mock-url");
     global.URL.revokeObjectURL = vi.fn();
-
-    // D. Mock Global Fetch (for AWS uploads)
     global.fetch = vi.fn().mockResolvedValue({
       ok: true,
       json: () => Promise.resolve({ url: 'https://aws.com', fields: { key: 'val' } }),
     });
+
+    vi.mocked(sessionStorage.createSession).mockReturnValue({ id: 'mock-id' } as any);
+    vi.mocked(sessionStorage.getAnalysisMode).mockReturnValue('api');
+    vi.mocked(sessionStorage.getStorageMode).mockReturnValue('aws');
   });
 
   afterEach(() => {
@@ -74,11 +73,13 @@ describe("UploadPage", () => {
 
   it("handles camera access rejection gracefully", async () => {
     vi.mocked(navigator.mediaDevices.getUserMedia).mockRejectedValueOnce(new Error("Permission Denied"));
-    
     render(<UploadPage />);
-    fireEvent.click(screen.getByRole("button", { name: /record practice video/i }));
+    
+    const recordBtn = screen.getByRole("button", { name: /record practice video/i });
+    fireEvent.click(recordBtn);
 
     await waitFor(() => {
+      // Adjusted matcher to be case-insensitive to match your UI output
       expect(screen.getByText(/access was blocked/i)).toBeInTheDocument();
     });
   });
