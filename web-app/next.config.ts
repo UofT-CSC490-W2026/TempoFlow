@@ -6,6 +6,12 @@ const nextConfig: NextConfig = {
   // Enables `output: 'standalone'` for Docker / ECS (see web-app/Dockerfile).
   output: 'standalone',
 
+  // ESLint is run via `npm run lint` in CI; skipping during `next build` avoids blocking Amplify
+  // on rules that largely affect tests and legacy `any` usage.
+  eslint: {
+    ignoreDuringBuilds: true,
+  },
+
   // Same-origin proxy for the A5 API when the web app is served over HTTPS (e.g. Amplify)
   // and the backend is HTTP-only on an ALB. Set EBS_BACKEND_URL at build time to the ALB origin
   // (e.g. http://tempo-xxx.us-east-1.elb.amazonaws.com). Use NEXT_PUBLIC_EBS_PROXY=1 in the client.
