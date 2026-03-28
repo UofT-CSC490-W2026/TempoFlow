@@ -13,8 +13,8 @@ export interface A5BackendStackProps extends cdk.StackProps {
  * A5 FastAPI on **Elastic Beanstalk** (Python platform).
  * CDK uploads a **zip of `A5/`** to S3 during deploy — no GitHub/CodeStar/CodeConnections and **no Docker**.
  *
- * Pass `GeminiApiKey` as a NoEcho CloudFormation parameter. Optionally override `EbSolutionStack` if the
- * default platform string is stale in your region (see Elastic Beanstalk supported platforms).
+ * Pass `GeminiApiKey` as a NoEcho CloudFormation parameter. Pass `EbSolutionStack` (full platform name for
+ * your **region**); `./scripts/deploy_infra.sh` resolves it automatically via the AWS CLI when unset.
  */
 export class A5BackendStack extends cdk.Stack {
   constructor(scope: Construct, id: string, props: A5BackendStackProps) {
@@ -30,9 +30,8 @@ export class A5BackendStack extends cdk.Stack {
 
     const solutionStack = new cdk.CfnParameter(this, 'EbSolutionStack', {
       type: 'String',
-      default: '64bit Amazon Linux 2023 v4.3.4 running Python 3.12',
       description:
-        'Elastic Beanstalk solution stack string. If create fails, run: aws elasticbeanstalk list-available-solution-stacks and pick a current "Amazon Linux 2023" + Python row.',
+        'Exact Elastic Beanstalk solution stack name in this region (changes when AWS updates platforms). deploy_infra.sh sets this via list-available-solution-stacks unless A5_EB_SOLUTION_STACK is set.',
     });
 
     const a5Path = path.join(__dirname, '..', '..', '..', 'A5');
