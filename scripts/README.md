@@ -53,6 +53,8 @@ export GEMINI_API_KEY="..."   # do not commit; avoid pasting in chat
 DEPLOY_A5_BACKEND_STACK=1 ./scripts/deploy_infra.sh dev
 ```
 
+The script resolves the EB **solution stack name** for `AWS_DEFAULT_REGION` automatically. To pin one explicitly: `export A5_EB_SOLUTION_STACK='64bit Amazon Linux 2023 v…. running Python 3.12'`.
+
 You can combine flags in one run (for example Amplify + A5 + core infra): export `DEPLOY_AMPLIFY_WEB_STACK=1`, `DEPLOY_A5_BACKEND_STACK=1`, and the Amplify PAT/repo vars plus `GEMINI_API_KEY`, then run the script once.
 
 See `A2/infrastructure/README.md` for details.
