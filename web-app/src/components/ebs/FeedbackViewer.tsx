@@ -351,36 +351,28 @@ export function FeedbackViewer(props: EbsViewerProps) {
     return null; // No errors
   }, [danceFeedback]);
   return (
-    <div className="ebs-viewer-root">
-      {viewerVisible && (
-        <div className="ebs-viewer visible">
-          <div className="ebs-top-bar">
-          {hasSegments ? (
-            <div className="ebs-toggle flex items-center w-full">
-              <label htmlFor="chk-pause">Pause at segment end</label>
-              <input
-                id="chk-pause"
-                type="checkbox"
-                className="ebs-toggle-switch"
-                checked={state.pauseAtSegmentEnd}
-                onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
-              />
-              <>
+    <div className="ebs-viewer-root ebs-viewer-root--feedback-content">
+      <>
+          {/* Original ebs-top-bar (session meta). Set to `true` to show again. */}
+          {false &&
+            (hasSegments ? (
+              <div className="mb-3 flex flex-wrap items-center gap-2 shrink-0">
                 {sessionNameTags}
                 <span className="ebs-tag green">{bpm} BPM</span>
                 <span className="ebs-tag">{nb} beats</span>
                 <span className="ebs-tag">{state.segments.length} segments</span>
                 <span className="ebs-tag orange">{mode}</span>
-              </>
-              <div className="flex-1" />
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                currently using BodyPix
-              </p>
-            </div>
-          ) : (
-            <div className="ebs-inline-note">Aligned videos loaded...</div>
-          )}
-        </div>
+                <div className="flex-1 min-w-[8px]" />
+                <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
+                  currently using BodyPix
+                </p>
+              </div>
+            ) : (
+              <div className="ebs-inline-note mb-2 shrink-0">Aligned videos loaded...</div>
+            ))}
+          {!hasSegments ? (
+            <div className="ebs-inline-note mb-2 shrink-0">Aligned videos loaded...</div>
+          ) : null}
           <div className="videos">
             <div className="video-panel">
               <div className="video-label">
@@ -480,7 +472,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
               />
             </div>
           )}
-          {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
+          {/* {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
             <div className="mt-4 mb-2">
               <FeedbackPanel
                 referenceVideoUrl={activeReferenceVideoUrl}
@@ -491,8 +483,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 onFeedbackReady={setDanceFeedback}
               />
             </div>
-          )}
+          )} */}
 
+          <div className="timeline-section">
           {!state.practice.enabled && hasSegments && (
             <>
               <div className="transport">
@@ -522,6 +515,16 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   >
                     Practice
                   </button>
+                  <div className="ebs-toggle ebs-toggle--transport">
+                    <label htmlFor="chk-pause">Pause at segment end</label>
+                    <input
+                      id="chk-pause"
+                      type="checkbox"
+                      className="ebs-toggle-switch"
+                      checked={state.pauseAtSegmentEnd}
+                      onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
+                    />
+                  </div>
                   <div className="transport-info">
                     <div className="current-segment">
                       {currentSegment ? (
@@ -847,9 +850,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
               </div>
             </div>
           )}
-        </div>
-      )}
+          </div>
+      </>
     </div>
   );
 }
-

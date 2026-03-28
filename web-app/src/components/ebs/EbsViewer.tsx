@@ -1669,154 +1669,123 @@ export function EbsViewer(props: EbsViewerProps) {
       )}
       {viewerVisible && (
         <div className="ebs-viewer visible">
-          <div className="ebs-top-bar">
-            {sessionMode ? (
-            <div className="flex flex-col gap-3 items-end">
-              <div className="flex flex-wrap items-center gap-2 justify-end">
-                <select
-                  value={overlayMode}
-                  onChange={(e) => setOverlayMode(e.target.value as "precomputed" | "live")}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  aria-label="Overlay mode"
-                >
-                  <option value="precomputed">Precomputed</option>
-                  <option value="live">Live</option>
-                </select>
-                <select
-                  value={segGenerator}
-                  onChange={(e) => setSegGenerator(e.target.value as "python" | "browser")}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  aria-label="Overlay generator"
-                >
-                  <option value="python">Python (fast)</option>
-                  <option value="browser">Browser (slow)</option>
-                </select>
-                <select
-                  value={segProvider}
-                  onChange={(e) => setSegProvider(e.target.value as YoloExecutionProvider)}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  aria-label="Segmentation backend"
-                >
-                  <option value="wasm">CPU (WASM)</option>
-                  <option value="webgpu">WebGPU (experimental)</option>
-                </select>
-                <button
-                  onClick={() => setShowMoveNet((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showMoveNet ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  MoveNet
-                </button>
-                <button
-                  onClick={() => setShowYolo((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showYolo ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  YOLO
-                </button>
-                <button
-                  onClick={() => setShowYoloPose((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showYoloPose ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  YOLO Pose
-                </button>
-                <button
-                  onClick={() => setShowBodyPix((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showBodyPix ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  BodyPix
-                </button>
-                <button
-                  onClick={() => setShowFastSam((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showFastSam ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  FastSAM
-                </button>                
-                {/* moved to new tab 
-                <button
-                  onClick={() => setShowFeedback((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showFeedback ? "bg-violet-600 text-white border-violet-600" : "bg-white text-violet-700 border-violet-200 hover:bg-violet-50"
-                  }`}
-                >
-                  Feedback
-                </button>*/}
-                {/*do we have options for this tho
-                 <select
-                  value={overlayMethod}
-                  onChange={(e) =>
-                    setOverlayMethod(e.target.value as "pose-fill" | "sam3-experimental" | "sam3-roboflow")
-                  }
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  disabled={!showMoveNet || overlayMode !== "live"}
-                  aria-label="Pose overlay style"
-                >
-                  <option value="pose-fill">Pose fill</option>
-                  <option value="sam3-experimental">SAM3-style</option>
-                  <option value="sam3-roboflow">Roboflow SAM3</option>
-                </select> */}
-                {/* Generation Buttons (Sky themed) */}
-                <div className="flex gap-1 ml-2 pl-2 border-l border-slate-200">
-                  <button
-                    onClick={() => void generateOverlays("movenet")}
-                    disabled={overlayBusy || !showMoveNet}
-                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                  >
-                    Gen MoveNet
-                  </button>
-                  <button
-                    onClick={() => void generateOverlays("yolo")}
-                    disabled={overlayBusy || !showYolo}
-                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                  >
-                    Gen YOLO
-                  </button>
-                  <button
-                    onClick={() => void generateOverlays("bodypix")}
-                    disabled={overlayBusy || !showBodyPix}
-                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                  >
-                    Gen BodyPix
-                  </button>
+            {/* Original ebs-top-bar (model / overlay selection). Set to `true` to show again. */}
+            {false &&
+              (sessionMode ? (
+                <div className="mb-3 flex flex-col gap-2 items-end shrink-0">
+                  <div className="flex flex-wrap items-center gap-2 justify-end">
+                    <select
+                      value={overlayMode}
+                      onChange={(e) => setOverlayMode(e.target.value as "precomputed" | "live")}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                      aria-label="Overlay mode"
+                    >
+                      <option value="precomputed">Precomputed</option>
+                      <option value="live">Live</option>
+                    </select>
+                    <select
+                      value={segGenerator}
+                      onChange={(e) => setSegGenerator(e.target.value as "python" | "browser")}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                      aria-label="Overlay generator"
+                    >
+                      <option value="python">Python (fast)</option>
+                      <option value="browser">Browser (slow)</option>
+                    </select>
+                    <select
+                      value={segProvider}
+                      onChange={(e) => setSegProvider(e.target.value as YoloExecutionProvider)}
+                      className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
+                      aria-label="Segmentation backend"
+                    >
+                      <option value="wasm">CPU (WASM)</option>
+                      <option value="webgpu">WebGPU (experimental)</option>
+                    </select>
+                    <button
+                      onClick={() => setShowMoveNet((v) => !v)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                        showMoveNet ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                      }`}
+                    >
+                      MoveNet
+                    </button>
+                    <button
+                      onClick={() => setShowYolo((v) => !v)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                        showYolo ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                      }`}
+                    >
+                      YOLO
+                    </button>
+                    <button
+                      onClick={() => setShowYoloPose((v) => !v)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                        showYoloPose ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                      }`}
+                    >
+                      YOLO Pose
+                    </button>
+                    <button
+                      onClick={() => setShowBodyPix((v) => !v)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                        showBodyPix ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                      }`}
+                    >
+                      BodyPix
+                    </button>
+                    <button
+                      onClick={() => setShowFastSam((v) => !v)}
+                      className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
+                        showFastSam ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
+                      }`}
+                    >
+                      FastSAM
+                    </button>
+                    <div className="flex gap-1 ml-2 pl-2 border-l border-slate-200">
+                      <button
+                        onClick={() => void generateOverlays("movenet")}
+                        disabled={overlayBusy || !showMoveNet}
+                        className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                      >
+                        Gen MoveNet
+                      </button>
+                      <button
+                        onClick={() => void generateOverlays("yolo")}
+                        disabled={overlayBusy || !showYolo}
+                        className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                      >
+                        Gen YOLO
+                      </button>
+                      <button
+                        onClick={() => void generateOverlays("bodypix")}
+                        disabled={overlayBusy || !showBodyPix}
+                        className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
+                      >
+                        Gen BodyPix
+                      </button>
+                    </div>
+                  </div>
                 </div>
-                </div>
+              ) : null)}
+            {!hasSegments ? (
+              <div className="ebs-inline-note mb-2 shrink-0">
+                Aligned videos loaded. No playable segments were detected.
               </div>
             ) : null}
-            {hasSegments ? (
-              <div className="ebs-toggle">
-                <label htmlFor="chk-pause">Pause at segment end</label>
-                <input
-                  id="chk-pause"
-                  type="checkbox"
-                  className="ebs-toggle-switch"
-                  checked={state.pauseAtSegmentEnd}
-                  onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
-                />
-              </div>
-            ) : (
-              <div className="ebs-inline-note">Aligned videos loaded. No playable segments were detected.</div>
-            )}
-          </div>
           {overlayStatus ? (
             <div className="mb-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-2 text-xs text-slate-700">
               {overlayStatus}
             </div>
           ) : null}
-          {sessionMode && missingPrecomputed ? (
-            <div className="mb-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-              Precomputed overlays are enabled, but frames haven’t been generated yet. Click <b>Gen MoveNet</b> /{" "}
-              <b>Gen YOLO</b> / <b>Gen YOLO Pose</b> / <b>Gen BodyPix</b> once, then playback will be synced
-              (no realtime lag).
-            </div>
-          ) : null}
+          {false &&
+            sessionMode &&
+            missingPrecomputed && (
+              <div className="mb-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-900">
+                Precomputed overlays are enabled, but frames haven’t been generated yet. Click <b>Gen MoveNet</b> /{" "}
+                <b>Gen YOLO</b> / <b>Gen YOLO Pose</b> / <b>Gen BodyPix</b> once, then playback will be synced
+                (no realtime lag).
+              </div>
+            )}
 
           <div className="videos">
             <div className="video-panel">
@@ -1944,6 +1913,7 @@ export function EbsViewer(props: EbsViewerProps) {
             </div>
           )} */}
 
+          <div className="timeline-section">
           {!state.practice.enabled && hasSegments && (
             <>
               <div className="transport">
@@ -1973,6 +1943,16 @@ export function EbsViewer(props: EbsViewerProps) {
                   >
                     Practice
                   </button>
+                  <div className="ebs-toggle ebs-toggle--transport">
+                    <label htmlFor="chk-pause">Pause at segment end</label>
+                    <input
+                      id="chk-pause"
+                      type="checkbox"
+                      className="ebs-toggle-switch"
+                      checked={state.pauseAtSegmentEnd}
+                      onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
+                    />
+                  </div>
                   <div className="transport-info">
                     <div className="current-segment">
                       {currentSegment ? (
@@ -2250,6 +2230,7 @@ export function EbsViewer(props: EbsViewerProps) {
               </div>
             </div>
           )}
+          </div>
         </div>
       )}
     </div>
