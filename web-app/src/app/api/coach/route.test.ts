@@ -1,63 +1,136 @@
-import { describe, expect, it, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { POST } from './route';
+import * as analysis from '../../../lib/analysis';
+import { NextResponse } from 'next/server';
 
-import { POST } from "./route";
+// 1. Mock the fallback library
+vi.mock('../../../lib/analysis', () => ({
+  buildFallbackCoachResponse: vi.fn().mockReturnValue(['Fallback 1', 'Fallback 2', 'Fallback 3']),
+}));
 
-const summary = {
-  scores: { overall: 80, timing: 75, positioning: 82, smoothness: 79, energy: 84 },
-  strongestArea: "energy",
-  focusArea: "timing",
-  timingOffsetMs: 120,
-  durationSec: 10,
-  segments: [{ id: "s1", label: "seg0", startSec: 0, endSec: 2, focusArea: "timing", score: 72 }],
-  insights: [{ id: "i1", tone: "tip", title: "Timing", body: "Hit accents cleaner." }],
-  generatedAt: new Date().toISOString(),
-};
+describe('Coach API Route (POST)', () => {
+  const mockSummary = {
+    scores: { overall: 80, timing: 70, positioning: 85, smoothness: 75, energy: 90 },
+    strongestArea: 'Energy',
+    focusArea: 'Timing',
+    timingOffsetMs: 120,
+    segments: [{ label: 'Intro', startSec: 0, endSec: 5, focusArea: 'Timing', score: 70 }],
+  };
 
-describe("api/coach route", () => {
-  it("returns 400 when summary is missing", async () => {
-    const req = new Request("http://localhost/api/coach", {
-      method: "POST",
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default env setup
+    process.env.OPENAI_API_KEY = 'test-key';
+    process.env.OPENAI_MODEL = 'gpt-4.1-mini';
+    
+    // Mock global fetch
+    global.fetch = vi.fn();
+  });
+
+  afterEach(() => {
+    delete process.env.OPENAI_API_KEY;
+  });
+
+  it('returns 400 if summary is missing', async () => {
+    const request = new Request('http://localhost/api/coach', {
+      method: 'POST',
       body: JSON.stringify({}),
     });
-    const res = await POST(req);
-    expect(res.status).toBe(400);
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(400);
+    expect(data.error).toBe('Missing summary payload.');
   });
 
-  it("returns local fallback when OPENAI_API_KEY is missing", async () => {
-    vi.unstubAllEnvs();
-    const req = new Request("http://localhost/api/coach", {
-      method: "POST",
-      body: JSON.stringify({ summary }),
-      headers: { "Content-Type": "application/json" },
+  it('returns OpenAI insights on successful API call', async () => {
+    const mockAiResponse = {
+      output_text: JSON.stringify({ 
+        insights: ['AI Insight 1', 'AI Insight 2', 'AI Insight 3'] 
+      })
+    };
+
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => mockAiResponse,
     });
-    const res = await POST(req);
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({ source: "local-fallback" });
+
+    const request = new Request('http://localhost/api/coach', {
+      method: 'POST',
+      body: JSON.stringify({ summary: mockSummary }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(data.source).toBe('openai');
+    expect(data.insights).toHaveLength(3);
+    expect(data.insights[0]).toBe('AI Insight 1');
   });
 
-  it("returns openai source when upstream returns parseable insights", async () => {
-    vi.stubEnv("OPENAI_API_KEY", "k");
-    vi.stubEnv("OPENAI_MODEL", "gpt-test");
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        new Response(JSON.stringify({ output_text: JSON.stringify({ insights: ["a", "b", "c"] }) }), {
-          status: 200,
-        }),
-      ),
-    );
+  it('returns local-fallback if OPENAI_API_KEY is missing', async () => {
+    delete process.env.OPENAI_API_KEY;
 
-    const req = new Request("http://localhost/api/coach", {
-      method: "POST",
-      body: JSON.stringify({ summary }),
-      headers: { "Content-Type": "application/json" },
+    const request = new Request('http://localhost/api/coach', {
+      method: 'POST',
+      body: JSON.stringify({ summary: mockSummary }),
     });
-    const res = await POST(req);
-    expect(res.status).toBe(200);
-    await expect(res.json()).resolves.toMatchObject({
-      source: "openai",
-      insights: ["a", "b", "c"],
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(data.source).toBe('local-fallback');
+    expect(data.insights).toEqual(['Fallback 1', 'Fallback 2', 'Fallback 3']);
+    expect(global.fetch).not.toHaveBeenCalled();
+  });
+
+  it('returns local-fallback if OpenAI API returns an error (non-ok response)', async () => {
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: false,
+      text: async () => 'Rate limit exceeded',
     });
+
+    const request = new Request('http://localhost/api/coach', {
+      method: 'POST',
+      body: JSON.stringify({ summary: mockSummary }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(data.source).toBe('local-fallback');
+    expect(analysis.buildFallbackCoachResponse).toHaveBeenCalledWith(mockSummary);
+  });
+
+  it('returns local-fallback if AI returns malformed JSON', async () => {
+    (global.fetch as any).mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ output_text: 'Not JSON at all' }),
+    });
+
+    const request = new Request('http://localhost/api/coach', {
+      method: 'POST',
+      body: JSON.stringify({ summary: mockSummary }),
+    });
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(data.source).toBe('openai'); // Code enters the try-catch for JSON.parse
+    expect(data.insights).toEqual(['Fallback 1', 'Fallback 2', 'Fallback 3']);
+  });
+
+  it('returns 500 if an unhandled exception occurs', async () => {
+    // Force an error by making request.json throw
+    const request = {
+      json: vi.fn().mockRejectedValue(new Error('Internal Crash')),
+    } as any;
+
+    const response = await POST(request);
+    const data = await response.json();
+
+    expect(response.status).toBe(500);
+    expect(data.error).toBe('Failed to generate coaching summary.');
   });
 });
-

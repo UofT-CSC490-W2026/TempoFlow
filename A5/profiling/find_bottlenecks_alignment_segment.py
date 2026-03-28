@@ -86,11 +86,25 @@ def run_alignment_pipeline():
     except ValueError:
         downbeat_offset = 0
 
-    segments = generate_segments(beat_times, downbeat_offset, beats_per_seg)
+    segment_boundaries, segment_beat_times = generate_segments(
+        beat_times,
+        downbeat_offset,
+        beats_per_seg,
+    )
     
     # 5. Map segments
-    clip_segments_a = map_segments_to_clips(segments, start_time_a, end_time_a)
-    clip_segments_b = map_segments_to_clips(segments, start_time_b, end_time_b)
+    clip_segments_a = map_segments_to_clips(
+        segment_boundaries,
+        start_time_a,
+        end_time_a,
+        segment_beat_times=segment_beat_times,
+    )
+    clip_segments_b = map_segments_to_clips(
+        segment_boundaries,
+        start_time_b,
+        end_time_b,
+        segment_beat_times=segment_beat_times,
+    )
     
     print("Pipeline complete.")
 
