@@ -212,7 +212,9 @@ direct video input with automatic alignment.
   shared window through the first downbeat-aligned 8-count boundary, capturing
   any pre-beat lead-in.
 - **Auto-alignment** — when given two video files, computes the shared content
-  window automatically via onset-envelope cross-correlation.
+  window automatically. **Default:** chroma features + local match (A5-style),
+  with automatic fallback to onset-envelope cross-correlation if chroma fails.
+  Set ``EBS_AUTO_ALIGN_MODE=onset_xcorr`` to force the legacy global-lag method only.
 - **Robust fallback** — if beat detection fails confidence checks, falls back
   to fixed-time 3.0 s chunks.
 
@@ -246,7 +248,8 @@ python ebs_segment.py \
 | **Alignment** | | |
 | `--alignment` | — | Path to alignment JSON (manifest.json or single-entry object) |
 | `--test-id` | — | Select entry from a multi-entry manifest array |
-| `--auto-align` | — | Compute alignment via onset-envelope cross-correlation |
+| `--auto-align` | — | Compute alignment automatically (default: chroma + local match) |
+| `--auto-align-mode` | env default | `chroma_sw` (default) or `onset_xcorr` (legacy); same as ``EBS_AUTO_ALIGN_MODE`` |
 | **Output** | | |
 | `--out` | `ebs_segments.json` | Output JSON path |
 | `--verbose` | — | Enable DEBUG-level logging |
@@ -255,12 +258,23 @@ At minimum, provide `--ref-audio` or `--ref-video`, plus either `--alignment`
 or `--auto-align`. Auto-alignment additionally requires a user clip
 (`--user-audio` / `--user-video`).
 
+### FFmpeg / ffprobe (all platforms)
+
+Video extraction and metadata use **ffmpeg** and **ffprobe**. Resolution order:
+
+1. **`EBS_FFMPEG_PATH`** / **`EBS_FFPROBE_PATH`** — full path to each binary (use when they are not on `PATH`, e.g. some Windows installs).
+2. **`shutil.which`** — standard `PATH` lookup.
+3. **Windows** — if still missing, common folders are checked: `%ProgramFiles%\ffmpeg\bin`, `%ProgramFiles(x86)%\ffmpeg\bin`, `C:\ffmpeg\bin`.
+
+If ffmpeg is missing, the pipeline falls back to **librosa/audioread** for audio (slower). If ffprobe is missing, `video_meta` in the API may fail; set **`EBS_FFPROBE_PATH`** or install FFmpeg and add it to `PATH`.
+
 ### How it works
 
 1. **Audio extraction** — if video inputs are provided, audio is extracted via
    ffmpeg (preferred) or librosa/audioread (fallback).
-2. **Alignment** — either loaded from a JSON manifest or computed
-   automatically via onset-envelope cross-correlation (`scipy.signal.fftconvolve`).
+2. **Alignment** — either loaded from a JSON manifest or computed automatically:
+   chroma STFT + local scoring (default), with fallback to onset-envelope
+   cross-correlation (`scipy.signal.fftconvolve`) if needed.
 3. **Beat tracking** — `librosa.beat.beat_track` runs on the reference clip's
    shared window (mono, 22050 Hz). Returns beat times, onset envelope, and
    beat frame positions.

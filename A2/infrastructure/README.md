@@ -27,6 +27,23 @@ If Part 3 is "how data is processed," Part 4 is "where it lives and how environm
   - Users table
   - Sessions table
 
+### Optional: Next.js web app (`web-app/`) on ECS Fargate
+
+For course requirements that ask for **infrastructure as code**, this repo already satisfies that: **AWS CDK** compiles to **CloudFormation** (`cdk synth` prints stack templates you can archive or submit).
+
+The optional stack **`TempoFlow-Web-<stage>`** (see `lib/web-app-stack.ts`) provisions:
+
+- A small VPC (public subnets only, no NAT gateway)
+- An ECS cluster and **Fargate** service running the Next.js **standalone** Docker image from `web-app/`
+- An **Application Load Balancer** with a public HTTP URL
+
+It is **opt-in** so routine `cdk deploy` does not create billable load balancer capacity by surprise.
+
+- Enable the web stack: set **`DEPLOY_WEB_STACK=1`** when you run `cdk deploy` or `cdk synth`.
+- Skip it (S3 + DynamoDB only): omit the variable or set **`DEPLOY_WEB_STACK=0`**.
+
+The web task receives **`USER_VIDEO_BUCKET_NAME`** and an IAM role that can read/write the user video bucket from `InfrastructureStack`, so `/api/upload` can use the **ECS task role** (no static `AWS_ACCESS_KEY_ID` in the container). Local development can still use access keys in `.env.local`.
+
 ## Environments (`dev` and `prod`)
 
 Environment is controlled by `STAGE`.
@@ -43,6 +60,8 @@ Stack names:
 
 - `TempoFlow-Infra-dev`
 - `TempoFlow-Infra-prod`
+- `TempoFlow-Web-dev` / `TempoFlow-Web-prod` (only when `DEPLOY_WEB_STACK=1`)
+- `TempoFlow-AmplifyWeb-dev` / `TempoFlow-AmplifyWeb-prod` (only when `DEPLOY_AMPLIFY_WEB_STACK=1`)
 
 ## Command runbook (copy-paste)
 
@@ -114,6 +133,28 @@ STAGE=dev npx cdk deploy
 What it does:
 
 - Compiles CDK app and deploys stack `TempoFlow-Infra-dev`.
+
+To also deploy the **Next.js web app** (ECS Fargate + ALB), opt in and have **Docker** available (CDK builds `web-app/` into a container image locally):
+
+```bash
+cd /Users/yehyunlee/Documents/Repositories/TempoFlow
+DEPLOY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+CloudFormation outputs include **`WebUrl`** (HTTP URL to the load balancer). First deploy can take several minutes while the container image builds and pushes.
+
+To deploy the **Next.js web app with AWS Amplify Hosting** (no local Docker required), opt in and provide your GitHub repo + a GitHub classic PAT at deploy time:
+
+```bash
+cd /Users/yehyunlee/Documents/Repositories/TempoFlow
+export AMPLIFY_GITHUB_REPO="owner/repo"
+export AMPLIFY_GITHUB_BRANCH="main"                 # optional
+export AMPLIFY_GITHUB_ACCESS_TOKEN="ghp_..."         # classic PAT (do not commit; do not paste in chat)
+
+DEPLOY_AMPLIFY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+After the stack is created, Amplify will start pulling and building the app; CloudFormation outputs include the Amplify URL.
 
 Shortcut helper (optional):
 

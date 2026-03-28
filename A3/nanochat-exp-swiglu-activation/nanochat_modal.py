@@ -609,6 +609,45 @@ def stage_chat_sample(identity: str = "base", prompt: str | None = None, model_t
 
 
 # =============================================================================
+# STAGE 7: rl
+# =============================================================================
+
+@app.function(
+    image=image,
+    secrets=[secret],
+    volumes={VOLUME_MOUNT: volume},
+    gpu="H100:4",
+    timeout=60 * 150,
+)
+def stage_rl(wandb_run: str, model_tag: str | None = None) -> None:
+    """Launch scripts.chat_cli against a checkpoint (default = latest base pretrain)."""
+    _setup_cache()
+    print(f"Starting chat_rl with model_tag={model_tag} ...")
+    args = ["--model-tag", model_tag,  "--run", wandb_run, "--modal"] 
+    
+    _torchrun(
+        "scripts.chat_rl",
+        args, nproc=4
+    )
+    volume.commit()
+    print("RL complete.")
+
+@app.function(
+    image=image,
+    secrets=[secret],
+    volumes={VOLUME_MOUNT: volume},
+    gpu="H100:4",
+    timeout=60 * 150,)
+def stage_eval() -> None:
+    # speedrun.sh: torchrun ... -m scripts.chat_eval -- -i sft
+    print("Evaluating rl checkpoint on task benchmarks...")
+    args = ["-i rl -a GSM8K"]
+    _torchrun("scripts.chat_eval", args, nproc=4)
+
+    volume.commit()
+    print("RL eval complete.")
+
+# =============================================================================
 # FULL SPEEDRUN PIPELINE (main entrypoint)
 # =============================================================================
 

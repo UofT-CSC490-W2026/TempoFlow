@@ -25,7 +25,7 @@ Output: ebs_segments.json (see README for full schema).
 """
 
 import json
-import shutil
+import os
 import argparse
 import logging
 import subprocess
@@ -36,24 +36,39 @@ import numpy as np
 import librosa
 from scipy.signal import fftconvolve
 
+from ebs_alignment_chroma import perform_alignment as chroma_perform_alignment
+from ebs_ffmpeg_paths import resolve_ffmpeg_executable
+
 # ---------------------------------------------------------------------------
 # Constants – match existing audio pipeline conventions
 # ---------------------------------------------------------------------------
 
 SAMPLE_RATE = 22050
 
+# Chroma STFT hop (must match librosa.feature.chroma_stft default used below)
+CHROMA_HOP_LENGTH = 512
+
 # EBS parameters
 BEATS_PER_SEGMENT = 8
 FALLBACK_CHUNK_SEC = 3.0
 ROUNDING_PRECISION = 3
 
+# Alignment buffer — expand the predicted alignment window by this many
+# seconds on each side so that border content is not clipped.
+ALIGNMENT_BUFFER_SEC = 5.0
+
+# Segmentation edge threshold — if the first/last segment boundary is
+# within this many seconds of the alignment start/end, snap it;
+# otherwise insert a new partial segment.
+SEGMENT_EDGE_THRESHOLD_SEC = 0.5
+
 # Beat-confidence thresholds
 MIN_BEATS_FOR_SEGMENT = 9          # ≥9 beats needed for one 8-beat segment
 BEAT_INTERVAL_MIN_SEC = 0.25       # ~240 BPM ceiling
 BEAT_INTERVAL_MAX_SEC = 1.0        # ~60 BPM floor
-BEAT_CV_THRESHOLD = 0.3            # max coefficient of variation
+BEAT_CV_THRESHOLD = 1.0            # max coefficient of variation
 
-PIPELINE_VERSION = "1.0.0"
+PIPELINE_VERSION = "1.1.0"
 
 # ---------------------------------------------------------------------------
 # Audio helpers
@@ -106,25 +121,40 @@ def extract_audio_from_video(
         output_wav = tmp.name
         tmp.close()
 
-    # --- try ffmpeg --------------------------------------------------------
-    if shutil.which("ffmpeg"):
-        logger.info("Extracting audio via ffmpeg: %s", video_path)
-        cmd = [
-            "ffmpeg", "-y", "-i", video_path,
-            "-vn",                         # drop video
-            "-acodec", "pcm_s16le",        # 16-bit PCM
-            "-ar", str(sr),                # target sample rate
-            "-ac", "1",                    # mono
-            output_wav,
-        ]
+    # --- try ffmpeg (PATH, EBS_FFMPEG_PATH, or common Windows locations) ---
+    ffmpeg_exe = resolve_ffmpeg_executable()
+    logger.info("Extracting audio via ffmpeg (%s): %s", ffmpeg_exe, video_path)
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i",
+        video_path,
+        "-vn",  # drop video
+        "-acodec",
+        "pcm_s16le",  # 16-bit PCM
+        "-ar",
+        str(sr),  # target sample rate
+        "-ac",
+        "1",  # mono
+        output_wav,
+    ]
+    try:
         result = subprocess.run(
             cmd, capture_output=True, text=True, timeout=120
         )
-        if result.returncode == 0:
-            logger.info("ffmpeg extraction OK → %s", output_wav)
-            return output_wav
-        logger.warning("ffmpeg failed (rc=%d), trying librosa fallback",
-                       result.returncode)
+    except FileNotFoundError:
+        logger.warning(
+            "ffmpeg not found (%s); add to PATH or set EBS_FFMPEG_PATH — using librosa",
+            ffmpeg_exe,
+        )
+        result = None
+    if result is not None and result.returncode == 0:
+        logger.info("ffmpeg extraction OK → %s", output_wav)
+        return output_wav
+    if result is not None:
+        logger.warning(
+            "ffmpeg failed (rc=%d), trying librosa fallback", result.returncode
+        )
 
     # --- librosa / audioread fallback --------------------------------------
     logger.info("Extracting audio via librosa/audioread: %s", video_path)
@@ -137,24 +167,29 @@ def extract_audio_from_video(
 
 
 # ---------------------------------------------------------------------------
-# Auto-alignment via onset-envelope cross-correlation
+# Auto-alignment: chroma + local match (default) or onset cross-correlation
 # ---------------------------------------------------------------------------
 
 
-def auto_align(
+def _auto_align_mode_from_env() -> str:
+    """Read ``EBS_AUTO_ALIGN_MODE``: ``chroma_sw`` (default) or ``onset_xcorr``."""
+    raw = (os.environ.get("EBS_AUTO_ALIGN_MODE") or "chroma_sw").strip().lower()
+    if raw in ("chroma_sw", "chroma", "sw", "a5"):
+        return "chroma_sw"
+    if raw in ("onset_xcorr", "onset", "legacy", "xcorr"):
+        return "onset_xcorr"
+    logging.getLogger("ebs").warning(
+        "Unknown EBS_AUTO_ALIGN_MODE=%r — using chroma_sw", raw
+    )
+    return "chroma_sw"
+
+
+def auto_align_onset_xcorr(
     ref_audio: np.ndarray,
     user_audio: np.ndarray,
     sr: int = SAMPLE_RATE,
 ) -> dict:
-    """Compute the shared-content window between two clips.
-
-    Uses onset-strength envelopes (compact, tempo-aware representation)
-    and FFT-based cross-correlation to find the lag that best aligns the
-    two signals.
-
-    Returns an alignment dict compatible with the EBS pipeline:
-    ``{clip_1_start_sec, clip_1_end_sec, clip_2_start_sec, clip_2_end_sec}``
-    """
+    """Global lag alignment via onset envelopes + FFT cross-correlation (legacy)."""
     logger = logging.getLogger("ebs")
 
     # Onset envelopes (one value per hop ≈ 23 ms at sr=22050, hop=512)
@@ -201,17 +236,185 @@ def auto_align(
         "clip_2_start_sec": round(c2_start, ROUNDING_PRECISION),
         "clip_2_end_sec": round(c2_start + shared_len, ROUNDING_PRECISION),
         "auto_align": True,
+        "auto_align_mode": "onset_xcorr",
         "lag_sec": round(lag_sec, ROUNDING_PRECISION),
         "correlation_peak": round(float(corr[peak_idx]), ROUNDING_PRECISION),
     }
 
     logger.info(
-        "Auto-alignment: lag=%.3fs, shared=%.3fs, "
+        "Auto-alignment (onset_xcorr): lag=%.3fs, shared=%.3fs, "
         "clip_1=[%.3f,%.3f], clip_2=[%.3f,%.3f]",
         lag_sec, shared_len,
         alignment["clip_1_start_sec"], alignment["clip_1_end_sec"],
         alignment["clip_2_start_sec"], alignment["clip_2_end_sec"],
     )
+    return alignment
+
+
+def auto_align_chroma_sw(
+    ref_audio: np.ndarray,
+    user_audio: np.ndarray,
+    sr: int = SAMPLE_RATE,
+    match_score_bias: float = 0.5,
+) -> dict:
+    """Local alignment via chroma + Smith–Waterman-style scoring (A5-style)."""
+    logger = logging.getLogger("ebs")
+
+    chroma_a = librosa.feature.chroma_stft(
+        y=ref_audio, sr=sr, hop_length=CHROMA_HOP_LENGTH
+    )
+    chroma_b = librosa.feature.chroma_stft(
+        y=user_audio, sr=sr, hop_length=CHROMA_HOP_LENGTH
+    )
+    ta, tb = chroma_a.shape[1], chroma_b.shape[1]
+    if ta < 4 or tb < 4:
+        raise ValueError(f"chroma too short for alignment (frames {ta}, {tb})")
+
+    start_a, end_a, start_b, end_b = chroma_perform_alignment(
+        chroma_a, chroma_b, match_score_bias=match_score_bias
+    )
+
+    # Normalize / order indices
+    if end_a < start_a:
+        start_a, end_a = end_a, start_a
+    if end_b < start_b:
+        start_b, end_b = end_b, start_b
+
+    start_a = int(np.clip(start_a, 0, ta - 1))
+    end_a = int(np.clip(end_a, 0, ta - 1))
+    start_b = int(np.clip(start_b, 0, tb - 1))
+    end_b = int(np.clip(end_b, 0, tb - 1))
+    if end_a < start_a:
+        start_a, end_a = end_a, start_a
+    if end_b < start_b:
+        start_b, end_b = end_b, start_b
+
+    start_time_a = float(
+        librosa.frames_to_time(start_a, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+    end_time_a = float(
+        librosa.frames_to_time(end_a, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+    start_time_b = float(
+        librosa.frames_to_time(start_b, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+    end_time_b = float(
+        librosa.frames_to_time(end_b, sr=sr, hop_length=CHROMA_HOP_LENGTH)
+    )
+
+    ref_dur = len(ref_audio) / sr
+    usr_dur = len(user_audio) / sr
+
+    c1_start = float(np.clip(start_time_a, 0.0, ref_dur))
+    c1_end_raw = float(np.clip(end_time_a, 0.0, ref_dur))
+    c2_start = float(np.clip(start_time_b, 0.0, usr_dur))
+    c2_end_raw = float(np.clip(end_time_b, 0.0, usr_dur))
+
+    if c1_end_raw <= c1_start or c2_end_raw <= c2_start:
+        raise ValueError("degenerate chroma alignment window after clamping")
+
+    len1 = c1_end_raw - c1_start
+    len2 = c2_end_raw - c2_start
+    shared_len = min(len1, len2, ref_dur - c1_start, usr_dur - c2_start)
+    shared_len = max(float(shared_len), 0.0)
+
+    if shared_len < 0.05:
+        raise ValueError(f"chroma alignment window too short ({shared_len:.3f}s)")
+
+    alignment = {
+        "clip_1_start_sec": round(c1_start, ROUNDING_PRECISION),
+        "clip_1_end_sec": round(c1_start + shared_len, ROUNDING_PRECISION),
+        "clip_2_start_sec": round(c2_start, ROUNDING_PRECISION),
+        "clip_2_end_sec": round(c2_start + shared_len, ROUNDING_PRECISION),
+        "auto_align": True,
+        "auto_align_mode": "chroma_sw",
+    }
+
+    logger.info(
+        "Auto-alignment (chroma_sw): shared=%.3fs, clip_1=[%.3f,%.3f], clip_2=[%.3f,%.3f]",
+        shared_len,
+        alignment["clip_1_start_sec"],
+        alignment["clip_1_end_sec"],
+        alignment["clip_2_start_sec"],
+        alignment["clip_2_end_sec"],
+    )
+    return alignment
+
+
+def _apply_alignment_buffer(
+    alignment: dict,
+    ref_dur: float,
+    usr_dur: float,
+    buffer_sec: float = ALIGNMENT_BUFFER_SEC,
+) -> dict:
+    """Expand the alignment window by *buffer_sec* on each side.
+
+    Both clips are expanded symmetrically and clamped to ``[0, duration]``.
+    The shared length is recomputed as the minimum of the two expanded
+    windows so that the 1-to-1 correspondence is preserved.
+    """
+    logger = logging.getLogger("ebs")
+
+    c1_start = max(0.0, alignment["clip_1_start_sec"] - buffer_sec)
+    c1_end = min(ref_dur, alignment["clip_1_end_sec"] + buffer_sec)
+    c2_start = max(0.0, alignment["clip_2_start_sec"] - buffer_sec)
+    c2_end = min(usr_dur, alignment["clip_2_end_sec"] + buffer_sec)
+
+    shared_len = min(c1_end - c1_start, c2_end - c2_start)
+    shared_len = max(shared_len, 0.0)
+
+    alignment["clip_1_start_sec"] = round(c1_start, ROUNDING_PRECISION)
+    alignment["clip_1_end_sec"] = round(c1_start + shared_len, ROUNDING_PRECISION)
+    alignment["clip_2_start_sec"] = round(c2_start, ROUNDING_PRECISION)
+    alignment["clip_2_end_sec"] = round(c2_start + shared_len, ROUNDING_PRECISION)
+
+    logger.info(
+        "Applied %.1fs alignment buffer → clip_1=[%.3f,%.3f], clip_2=[%.3f,%.3f]",
+        buffer_sec,
+        alignment["clip_1_start_sec"], alignment["clip_1_end_sec"],
+        alignment["clip_2_start_sec"], alignment["clip_2_end_sec"],
+    )
+    return alignment
+
+
+def auto_align(
+    ref_audio: np.ndarray,
+    user_audio: np.ndarray,
+    sr: int = SAMPLE_RATE,
+) -> dict:
+    """Compute the shared-content window between two clips.
+
+    **Default** (``EBS_AUTO_ALIGN_MODE=chroma_sw``): chroma features + local
+    scoring (A5-style), better when the match is a *segment* rather than a
+    single global time shift.
+
+    **Legacy** (``EBS_AUTO_ALIGN_MODE=onset_xcorr``): onset envelopes +
+    FFT cross-correlation (single lag).
+
+    A ±5 s buffer is applied around the predicted window so that border
+    content is not accidentally clipped.
+
+    Returns an alignment dict compatible with the EBS pipeline:
+    ``{clip_1_start_sec, clip_1_end_sec, clip_2_start_sec, clip_2_end_sec}``
+    """
+    logger = logging.getLogger("ebs")
+    mode = _auto_align_mode_from_env()
+    if mode == "onset_xcorr":
+        alignment = auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
+    else:
+        try:
+            alignment = auto_align_chroma_sw(ref_audio, user_audio, sr=sr)
+        except Exception as exc:
+            logger.warning(
+                "chroma_sw auto-align failed (%s); falling back to onset_xcorr",
+                exc,
+            )
+            alignment = auto_align_onset_xcorr(ref_audio, user_audio, sr=sr)
+
+    # Expand the predicted window by ±ALIGNMENT_BUFFER_SEC
+    ref_dur = len(ref_audio) / sr
+    usr_dur = len(user_audio) / sr
+    alignment = _apply_alignment_buffer(alignment, ref_dur, usr_dur)
     return alignment
 
 
@@ -357,7 +560,10 @@ def estimate_downbeat_phase(
     n_beats = len(beat_frames)
 
     if n_beats < beats_per_seg:
-        logger.debug("Too few beats for phase estimation; defaulting to 0")
+        logger.debug(
+            f"Not enough beats detected ({n_beats}) to estimate downbeat phase "
+            f"with beats_per_seg={beats_per_seg}."
+        )
         return 0
 
     # Onset strength at each beat position
@@ -393,19 +599,6 @@ def check_beat_confidence(
     """
     reasons: list[str] = []
 
-    if confidence_info["num_beats"] < MIN_BEATS_FOR_SEGMENT:
-        reasons.append(
-            f"Too few beats ({confidence_info['num_beats']} "
-            f"< {MIN_BEATS_FOR_SEGMENT})"
-        )
-
-    med = confidence_info["median_interval_sec"]
-    if med > 0 and not (BEAT_INTERVAL_MIN_SEC <= med <= BEAT_INTERVAL_MAX_SEC):
-        reasons.append(
-            f"Median beat interval {med:.3f}s outside "
-            f"[{BEAT_INTERVAL_MIN_SEC}, {BEAT_INTERVAL_MAX_SEC}]"
-        )
-
     cv = confidence_info["coefficient_of_variation"]
     if cv > BEAT_CV_THRESHOLD:
         reasons.append(
@@ -428,24 +621,37 @@ def segment_by_beats(
     """Split *beats_sec* into groups of *beats_per_seg*.
 
     Iteration begins at *start_idx* so that segments can be aligned
-    with the detected downbeat phase.  Each segment spans
-    ``[beat[i], beat[i + beats_per_seg])``.  Incomplete tails are dropped.
+    with the detected downbeat phase.  Uses ``<=`` boundary and
+    last-interval extrapolation.
     """
     segments: list[dict] = []
     n = len(beats_sec)
     i = start_idx
     seg_id = 0
-    while i + beats_per_seg < n:
+
+    if i + beats_per_seg > n:
+        return []
+
+    while i + beats_per_seg <= n:
+        end_idx = i + beats_per_seg
+        if end_idx < n:
+            end_sec = round(float(beats_sec[end_idx]), ROUNDING_PRECISION)
+        else:
+            # Extrapolate using last beat interval (A5 behavior)
+            if n >= 2:
+                last_interval = float(beats_sec[-1]) - float(beats_sec[-2])
+            else:
+                last_interval = 0.5
+            end_sec = round(float(beats_sec[-1]) + last_interval, ROUNDING_PRECISION)
+
         segments.append(
             {
                 "seg_id": seg_id,
-                "beat_idx_range": [int(i), int(i + beats_per_seg)],
+                "beat_idx_range": [int(i), min(int(end_idx), n - 1)],
                 "shared_start_sec": round(
                     float(beats_sec[i]), ROUNDING_PRECISION
                 ),
-                "shared_end_sec": round(
-                    float(beats_sec[i + beats_per_seg]), ROUNDING_PRECISION
-                ),
+                "shared_end_sec": end_sec,
             }
         )
         seg_id += 1
@@ -557,48 +763,6 @@ def run_ebs_pipeline(
         bpm,
     )
 
-    # ---- extrapolate beats to cover the full shared window -----------------
-    # librosa's beat tracker often misses beats near the signal boundaries.
-    # If the beat grid is regular (low CV) we extrapolate using the median
-    # interval so that segments can span the entire shared window.
-    n_extra_bwd = 0  # track how many beats prepended (shifts indices)
-
-    if len(beats_sec) >= 2:
-        med_ivl = confidence_info["median_interval_sec"]
-        n_detected = len(beats_sec)
-
-        # Extrapolate forward
-        extra_fwd: list[float] = []
-        t = float(beats_sec[-1]) + med_ivl
-        while t <= shared_len_sec:
-            extra_fwd.append(round(t, ROUNDING_PRECISION))
-            t += med_ivl
-
-        # Extrapolate backward (before first detected beat)
-        extra_bwd: list[float] = []
-        t = float(beats_sec[0]) - med_ivl
-        while t >= 0:
-            extra_bwd.append(round(t, ROUNDING_PRECISION))
-            t -= med_ivl
-        extra_bwd.reverse()
-
-        if extra_fwd or extra_bwd:
-            n_extra_bwd = len(extra_bwd)
-            beats_sec = np.array(
-                extra_bwd
-                + [round(float(b), ROUNDING_PRECISION) for b in beats_sec]
-                + extra_fwd
-            )
-            logger.info(
-                "Extrapolated %d beats backward + %d forward → %d total "
-                "(was %d detected)",
-                n_extra_bwd, len(extra_fwd),
-                len(beats_sec), n_detected,
-            )
-            # Update count in confidence_info for the artifact
-            confidence_info["num_beats_detected"] = n_detected
-            confidence_info["num_beats"] = int(len(beats_sec))
-
     # ---- confidence gate ---------------------------------------------------
     passed, reasons = check_beat_confidence(confidence_info, shared_len_sec)
 
@@ -607,47 +771,20 @@ def run_ebs_pipeline(
     if passed:
         logger.info("Beat confidence check PASSED")
 
-        # -- downbeat-phase alignment ----------------------------------------
-        # Phase estimation uses the *detected* beat frames (with onset data).
-        # After backward extrapolation the array is shifted by n_extra_bwd,
-        # so we adjust the phase index accordingly.
-        raw_phase = estimate_downbeat_phase(
+        downbeat_phase = estimate_downbeat_phase(
             onset_env, beat_frames, BEATS_PER_SEGMENT
         )
-        downbeat_phase = (raw_phase + n_extra_bwd) % BEATS_PER_SEGMENT
-        first_regular = downbeat_phase + BEATS_PER_SEGMENT
         logger.info(
-            "Adjusted downbeat phase: raw=%d, bwd_offset=%d, adjusted=%d, "
-            "first_regular_idx=%d",
-            raw_phase, n_extra_bwd, downbeat_phase, first_regular,
+            "Estimated downbeat phase: %d",
+            downbeat_phase,
         )
 
-        if first_regular < len(beats_sec):
-            # Intro segment: [0.0, beat[phase + 8])
-            intro_seg: dict = {
-                "seg_id": 0,
-                "beat_idx_range": [0, int(first_regular)],
-                "shared_start_sec": 0.0,
-                "shared_end_sec": round(
-                    float(beats_sec[first_regular]), ROUNDING_PRECISION
-                ),
-            }
-            # Regular 8-beat segments starting from the second downbeat
-            rest = segment_by_beats(
-                beats_sec,
-                beats_per_seg=BEATS_PER_SEGMENT,
-                start_idx=first_regular,
-            )
-            # Renumber: intro is 0, rest continue from 1
-            for seg in rest:
-                seg["seg_id"] += 1
-            segments = [intro_seg] + rest
-        else:
-            # Not enough beats after phase for a regular segment;
-            # fall back to simple segmentation with seg 0 starting at 0.0
-            segments = segment_by_beats(beats_sec)
-            if segments:
-                segments[0]["shared_start_sec"] = 0.0
+        # Segments start at the downbeat phase (no intro segment)
+        segments = segment_by_beats(
+            beats_sec,
+            beats_per_seg=BEATS_PER_SEGMENT,
+            start_idx=downbeat_phase,
+        )
 
         segmentation_mode = "eight_beat"
         beats_shared: list[float] = [
@@ -664,6 +801,52 @@ def run_ebs_pipeline(
         segments = segment_fixed_time(shared_len_sec)
         segmentation_mode = "fixed_time"
         beats_shared = []
+
+    # ---- edge adjustment: ensure segments span the full shared window ------
+    if segments:
+        first_start = segments[0]["shared_start_sec"]
+        if first_start > 0.0:
+            gap = first_start
+            if gap <= SEGMENT_EDGE_THRESHOLD_SEC:
+                logger.info("Snapping first segment start %.3fs → 0.0", first_start)
+                segments[0]["shared_start_sec"] = 0.0
+            else:
+                logger.info("Inserting new start segment [0.0, %.3f]", first_start)
+                segments.insert(0, {
+                    "seg_id": 0,
+                    "beat_idx_range": None,
+                    "shared_start_sec": 0.0,
+                    "shared_end_sec": first_start,
+                })
+
+        last_end = segments[-1]["shared_end_sec"]
+        if last_end < shared_len_sec:
+            gap = shared_len_sec - last_end
+            if gap <= SEGMENT_EDGE_THRESHOLD_SEC:
+                logger.info(
+                    "Snapping last segment end %.3fs → %.3fs",
+                    last_end, shared_len_sec,
+                )
+                segments[-1]["shared_end_sec"] = round(
+                    shared_len_sec, ROUNDING_PRECISION
+                )
+            else:
+                logger.info(
+                    "Inserting new tail segment [%.3f, %.3f]",
+                    last_end, shared_len_sec,
+                )
+                segments.append({
+                    "seg_id": 0,
+                    "beat_idx_range": None,
+                    "shared_start_sec": last_end,
+                    "shared_end_sec": round(
+                        shared_len_sec, ROUNDING_PRECISION
+                    ),
+                })
+
+        # Renumber seg_ids after any insertions
+        for idx, seg in enumerate(segments):
+            seg["seg_id"] = idx
 
     # ---- map shared → absolute clip times ----------------------------------
     segments = map_segments_to_clips(segments, clip_1_start, clip_2_start)
@@ -691,6 +874,11 @@ def run_ebs_pipeline(
             "clip_2_start_sec": clip_2_start,
             "clip_2_end_sec": clip_2_end,
             "shared_len_sec": shared_len_sec,
+            **(
+                {"auto_align_mode": alignment["auto_align_mode"]}
+                if alignment.get("auto_align_mode")
+                else {}
+            ),
         },
         "beat_tracking": {
             "estimated_bpm": confidence_info["estimated_bpm"],
@@ -778,8 +966,18 @@ def main() -> int:
         "--auto-align",
         action="store_true",
         help=(
-            "Compute alignment automatically via onset-envelope "
-            "cross-correlation (requires both ref and user audio/video)"
+            "Compute alignment automatically (default: chroma + local match; "
+            "override with --auto-align-mode or env EBS_AUTO_ALIGN_MODE)"
+        ),
+    )
+    align_grp.add_argument(
+        "--auto-align-mode",
+        type=str,
+        choices=("chroma_sw", "onset_xcorr"),
+        default=None,
+        help=(
+            "Auto-align algorithm: chroma_sw (default) or onset_xcorr (legacy). "
+            "Same as env EBS_AUTO_ALIGN_MODE."
         ),
     )
 
@@ -837,6 +1035,8 @@ def main() -> int:
 
         # -- resolve alignment -----------------------------------------------
         if args.auto_align:
+            if args.auto_align_mode:
+                os.environ["EBS_AUTO_ALIGN_MODE"] = args.auto_align_mode
             if user_audio_path is None:
                 logger.error(
                     "--auto-align requires a user clip "
