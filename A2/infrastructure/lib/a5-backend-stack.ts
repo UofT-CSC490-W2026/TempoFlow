@@ -202,7 +202,8 @@ export class A5BackendStack extends cdk.Stack {
     const cfOrigin = new origins.HttpOrigin(ebHttpHostname, {
       protocolPolicy: cloudfront.OriginProtocolPolicy.HTTP_ONLY,
       httpPort: 80,
-      readTimeout: cdk.Duration.seconds(180),
+      // CloudFormation rejects 180s for many accounts; custom-origin max is often 60s until quota increase.
+      readTimeout: cdk.Duration.seconds(60),
       keepaliveTimeout: cdk.Duration.seconds(60),
     });
 
