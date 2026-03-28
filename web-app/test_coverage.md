@@ -1,6 +1,6 @@
 # Web App Test Coverage Report
 
-*Last Updated: Sat Mar 28 00:31:00 UTC 2026*
+*Last Updated: Sat Mar 28 00:46:30 UTC 2026*
 
 ```text
 
@@ -11,59 +11,59 @@
 [1m[46m RUN [49m[22m [36mv4.1.2 [39m[90m/home/runner/work/TempoFlow/TempoFlow/web-app[39m
       [2mCoverage enabled with [22m[33mv8[39m
 
- [32m✓[39m src/lib/analysis.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/lib/analysis.test.ts [2m([22m[2m11 tests[22m[2m)[22m[32m 26[2mms[22m[39m
  [32m✓[39m src/lib/ebsTemporalLlm.test.ts [2m([22m[2m27 tests[22m[2m)[22m[32m 29[2mms[22m[39m
- [32m✓[39m src/lib/bodyPix/compare.integration.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 165[2mms[22m[39m
- [32m✓[39m src/lib/bodyPix/pure.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 23[2mms[22m[39m
- [32m✓[39m src/components/ebs/FeedbackViewer.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[32m 175[2mms[22m[39m
- [32m✓[39m src/lib/yoloOverlayGenerator.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 199[2mms[22m[39m
- [32m✓[39m src/lib/fastSamOverlayGenerator.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1553[2mms[22m[39m
-     [33m[2m✓[22m[39m generates frames at 30 FPS for the full duration [33m 317[2mms[22m[39m
-     [33m[2m✓[22m[39m generates frames at 30 FPS for the full duration [33m 327[2mms[22m[39m
- [32m✓[39m src/lib/movenetOverlayGenerator.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 275[2mms[22m[39m
- [32m✓[39m src/app/dashboard/page.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 105[2mms[22m[39m
- [32m✓[39m src/components/ebs/useEbsViewer.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 65[2mms[22m[39m
- [32m✓[39m src/app/api/coach/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 28[2mms[22m[39m
- [32m✓[39m src/lib/poseAnalysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 183[2mms[22m[39m
- [32m✓[39m src/app/api/sam3/video/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1310[2mms[22m[39m
-     [33m[2m✓[22m[39m returns 400 if video exceeds MAX_VIDEO_MB [33m 979[2mms[22m[39m
- [32m✓[39m src/app/api/sam3/frame/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 33[2mms[22m[39m
- [32m✓[39m src/lib/sessionStorage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 25[2mms[22m[39m
- [32m✓[39m src/components/RoboflowVideoOverlay.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 75[2mms[22m[39m
- [32m✓[39m src/app/api/ebs-pose-feedback/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 26[2mms[22m[39m
- [32m✓[39m src/lib/bodyPixOverlayGenerator.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 36[2mms[22m[39m
- [32m✓[39m src/lib/overlaySegments.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 13[2mms[22m[39m
- [32m✓[39m src/components/SegmentOverlay.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 71[2mms[22m[39m
- [32m✓[39m src/components/BodyPixOverlay.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 76[2mms[22m[39m
- [32m✓[39m src/components/ProgressiveOverlay.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 58[2mms[22m[39m
- [32m✓[39m src/components/ebs/types.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 12[2mms[22m[39m
- [32m✓[39m src/lib/bodyPixComparison.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 12[2mms[22m[39m
- [32m✓[39m src/app/api/process/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 26[2mms[22m[39m
- [32m✓[39m src/app/upload/page.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 133[2mms[22m[39m
- [32m✓[39m src/app/api/init-webrtc/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 20[2mms[22m[39m
- [32m✓[39m src/components/ebs/ebsViewerLogic.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 15[2mms[22m[39m
- [32m✓[39m src/lib/videoStorage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 19[2mms[22m[39m
- [32m✓[39m src/app/analysis/page.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 51[2mms[22m[39m
- [32m✓[39m src/lib/useDiffmap.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 38[2mms[22m[39m
- [32m✓[39m src/lib/sam3OverlayStorage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 28[2mms[22m[39m
- [32m✓[39m src/lib/normalization.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
- [32m✓[39m src/components/ebs/FeedbackOverlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 51[2mms[22m[39m
- [32m✓[39m src/app/api/upload/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 16[2mms[22m[39m
- [32m✓[39m src/app/layout.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 60[2mms[22m[39m
- [32m✓[39m src/lib/overlayStorage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 19[2mms[22m[39m
- [32m✓[39m src/components/PoseOverlay.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 67[2mms[22m[39m
- [32m✓[39m src/lib/yoloOverlayStorage.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 20[2mms[22m[39m
- [32m✓[39m src/app/page.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 78[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPix/compare.integration.test.ts [2m([22m[2m19 tests[22m[2m)[22m[32m 160[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPix/pure.test.ts [2m([22m[2m30 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/components/ebs/FeedbackViewer.test.tsx [2m([22m[2m9 tests[22m[2m)[22m[32m 180[2mms[22m[39m
+ [32m✓[39m src/lib/yoloOverlayGenerator.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 185[2mms[22m[39m
+ [32m✓[39m src/lib/fastSamOverlayGenerator.test.ts [2m([22m[2m9 tests[22m[2m)[22m[33m 1593[2mms[22m[39m
+     [33m[2m✓[22m[39m generates frames at 30 FPS for the full duration [33m 338[2mms[22m[39m
+     [33m[2m✓[22m[39m generates frames at 30 FPS for the full duration [33m 321[2mms[22m[39m
+ [32m✓[39m src/lib/movenetOverlayGenerator.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 260[2mms[22m[39m
+ [32m✓[39m src/app/dashboard/page.test.tsx [2m([22m[2m3 tests[22m[2m)[22m[32m 128[2mms[22m[39m
+ [32m✓[39m src/components/ebs/useEbsViewer.test.ts [2m([22m[2m7 tests[22m[2m)[22m[32m 61[2mms[22m[39m
+ [32m✓[39m src/app/api/coach/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/app/api/sam3/video/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[33m 1190[2mms[22m[39m
+     [33m[2m✓[22m[39m returns 400 if video exceeds MAX_VIDEO_MB [33m 928[2mms[22m[39m
+ [32m✓[39m src/lib/poseAnalysis.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 170[2mms[22m[39m
+ [32m✓[39m src/app/api/sam3/frame/route.test.ts [2m([22m[2m6 tests[22m[2m)[22m[32m 28[2mms[22m[39m
+ [32m✓[39m src/lib/sessionStorage.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 23[2mms[22m[39m
+ [32m✓[39m src/components/RoboflowVideoOverlay.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 69[2mms[22m[39m
+ [32m✓[39m src/app/api/ebs-pose-feedback/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 22[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPixOverlayGenerator.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/lib/overlaySegments.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 11[2mms[22m[39m
+ [32m✓[39m src/components/SegmentOverlay.test.tsx [2m([22m[2m4 tests[22m[2m)[22m[32m 91[2mms[22m[39m
+ [32m✓[39m src/components/BodyPixOverlay.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 73[2mms[22m[39m
+ [32m✓[39m src/components/ProgressiveOverlay.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 53[2mms[22m[39m
+ [32m✓[39m src/components/ebs/types.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 13[2mms[22m[39m
+ [32m✓[39m src/lib/bodyPixComparison.test.ts [2m([22m[2m5 tests[22m[2m)[22m[32m 8[2mms[22m[39m
+ [32m✓[39m src/app/upload/page.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 121[2mms[22m[39m
+ [32m✓[39m src/app/api/process/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/app/api/init-webrtc/route.test.ts [2m([22m[2m4 tests[22m[2m)[22m[32m 21[2mms[22m[39m
+ [32m✓[39m src/components/ebs/ebsViewerLogic.test.ts [2m([22m[2m8 tests[22m[2m)[22m[32m 14[2mms[22m[39m
+ [32m✓[39m src/lib/videoStorage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 24[2mms[22m[39m
+ [32m✓[39m src/lib/sam3OverlayStorage.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 27[2mms[22m[39m
+ [32m✓[39m src/app/analysis/page.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/lib/useDiffmap.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 40[2mms[22m[39m
+ [32m✓[39m src/lib/normalization.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 12[2mms[22m[39m
+ [32m✓[39m src/components/ebs/FeedbackOverlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 44[2mms[22m[39m
+ [32m✓[39m src/app/api/upload/route.test.ts [2m([22m[2m3 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/app/layout.test.tsx [2m([22m[2m5 tests[22m[2m)[22m[32m 49[2mms[22m[39m
+ [32m✓[39m src/components/PoseOverlay.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 66[2mms[22m[39m
+ [32m✓[39m src/lib/overlayStorage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
+ [32m✓[39m src/lib/yoloOverlayStorage.test.ts [2m([22m[2m1 test[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/app/page.test.tsx [2m([22m[2m2 tests[22m[2m)[22m[32m 77[2mms[22m[39m
  [32m✓[39m src/components/ebs/DifferenceViewer.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 70[2mms[22m[39m
- [32m✓[39m src/components/PrecomputedVideoOverlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 42[2mms[22m[39m
+ [32m✓[39m src/components/PrecomputedVideoOverlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 48[2mms[22m[39m
+ [32m✓[39m src/lib/ebsStorage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 14[2mms[22m[39m
  [32m✓[39m src/components/PrecomputedFrameOverlay.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 41[2mms[22m[39m
- [32m✓[39m src/lib/ebsStorage.test.ts [2m([22m[2m2 tests[22m[2m)[22m[32m 17[2mms[22m[39m
- [32m✓[39m src/app/ebs-viewer/page.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 19[2mms[22m[39m
+ [32m✓[39m src/app/ebs-viewer/page.test.tsx [2m([22m[2m1 test[22m[2m)[22m[32m 20[2mms[22m[39m
 
 [2m Test Files [22m [1m[32m45 passed[39m[22m[90m (45)[39m
 [2m      Tests [22m [1m[32m240 passed[39m[22m[90m (240)[39m
-[2m   Start at [22m 00:30:44
-[2m   Duration [22m 16.70s[2m (transform 1.56s, setup 10.85s, import 2.73s, tests 5.41s, environment 17.40s)[22m
+[2m   Start at [22m 00:46:13
+[2m   Duration [22m 16.91s[2m (transform 1.62s, setup 10.96s, import 2.81s, tests 5.29s, environment 17.28s)[22m
 
 [34m % [39m[2mCoverage report from [22m[33mv8[39m
 -------------------|---------|----------|---------|---------|-------------------
