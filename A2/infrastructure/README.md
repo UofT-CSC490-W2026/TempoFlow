@@ -62,6 +62,7 @@ Stack names:
 - `TempoFlow-Infra-prod`
 - `TempoFlow-Web-dev` / `TempoFlow-Web-prod` (only when `DEPLOY_WEB_STACK=1`)
 - `TempoFlow-AmplifyWeb-dev` / `TempoFlow-AmplifyWeb-prod` (only when `DEPLOY_AMPLIFY_WEB_STACK=1`)
+- `TempoFlow-A5Backend-dev` / `TempoFlow-A5Backend-prod` (only when `DEPLOY_A5_BACKEND_STACK=1`)
 
 ## Command runbook (copy-paste)
 
@@ -155,6 +156,14 @@ DEPLOY_AMPLIFY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
 ```
 
 After the stack is created, Amplify will start pulling and building the app; CloudFormation outputs include the Amplify URL.
+
+### Optional: A5 FastAPI backend (`A5/`) on Elastic Beanstalk
+
+The stack **`TempoFlow-A5Backend-<stage>`** (see `lib/a5-backend-stack.ts`) provisions an **Elastic Beanstalk** web environment. CDK uploads a **zip of your local `A5/` tree** to S3 and deploys it — **no Docker**, **no GitHub**, and **no CodeStar/CodeConnections** (works when org SCPs block `codeconnections:*`).
+
+- **Deploy:** set **`DEPLOY_A5_BACKEND_STACK=1`** and **`GEMINI_API_KEY`** when you run `./scripts/deploy_infra.sh`. Push your latest `A5/` code before deploy so the bundle is current.
+- **Platform string:** the template defaults to a recent **Amazon Linux 2023 + Python 3.12** solution stack. If CloudFormation fails with an invalid stack name, run `aws elasticbeanstalk list-available-solution-stacks`, pick a current row, and redeploy with `--parameters TempoFlow-A5Backend-<stage>:EbSolutionStack=...`.
+- **Outputs:** **`A5EbEndpointUrl`**, **`A5ProcessorUrl`** (HTTP). Elastic Beanstalk’s URL is usually **HTTP**, so an **HTTPS** Amplify site should use **`EBS_BACKEND_URL`** + **`NEXT_PUBLIC_EBS_PROXY=1`** at build time (see `web-app/next.config.ts`), plus **`EBS_PROCESSOR_URL`** pointing at the same HTTP origin for server-side `/api/process`.
 
 Shortcut helper (optional):
 
