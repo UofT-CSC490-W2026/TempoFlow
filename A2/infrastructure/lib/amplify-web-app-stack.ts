@@ -2,6 +2,18 @@ import * as cdk from 'aws-cdk-lib';
 import * as amplify from 'aws-cdk-lib/aws-amplify';
 import { Construct } from 'constructs';
 
+/** Amplify branch URLs use a DNS-safe label (slashes and other chars are not valid in subdomains). */
+function amplifyBranchSubdomain(branch: string): string {
+  const s = branch
+    .trim()
+    .toLowerCase()
+    .replace(/\//g, '-')
+    .replace(/[^a-z0-9-]/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+  return s.length > 0 ? s : 'app';
+}
+
 export interface AmplifyWebAppStackProps extends cdk.StackProps {
   stage: string;
   /**
@@ -34,6 +46,7 @@ export class AmplifyWebAppStack extends cdk.Stack {
       throw new Error(`githubRepo must be "owner/repo" (got: ${githubRepo})`);
     }
     const [owner, repo] = repoParts;
+    const branchSubdomain = amplifyBranchSubdomain(githubBranch);
 
     const githubAccessToken = new cdk.CfnParameter(this, 'GitHubAccessToken', {
       type: 'String',
@@ -91,8 +104,9 @@ export class AmplifyWebAppStack extends cdk.Stack {
     new cdk.CfnOutput(this, 'AmplifyBranchOutput', { value: githubBranch });
     new cdk.CfnOutput(this, 'AmplifyAppId', { value: app.attrAppId });
     new cdk.CfnOutput(this, 'AmplifyBranchUrl', {
-      value: `https://${githubBranch}.${app.attrDefaultDomain}`,
-      description: 'Amplify-hosted URL (after first successful build)',
+      value: `https://${branchSubdomain}.${app.attrDefaultDomain}`,
+      description:
+        'Amplify-hosted URL after first successful build (branch name sanitized for DNS, e.g. feat/be-hosting → feat-be-hosting)',
     });
     new cdk.CfnOutput(this, 'AmplifyDefaultDomain', { value: app.attrDefaultDomain });
     new cdk.CfnOutput(this, 'AmplifyBranchName', { value: branch.branchName });

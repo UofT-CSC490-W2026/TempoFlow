@@ -55,6 +55,7 @@ export class A5BackendStack extends cdk.Stack {
     const instanceProfile = new iam.CfnInstanceProfile(this, 'A5EbInstanceProfile', {
       roles: [instanceRole.roleName],
     });
+    instanceProfile.node.addDependency(instanceRole);
 
     const asset = new s3assets.Asset(this, 'A5SourceBundle', {
       path: a5Path,

@@ -164,6 +164,8 @@ The stack **`TempoFlow-A5Backend-<stage>`** (see `lib/a5-backend-stack.ts`) prov
 - **Deploy:** set **`DEPLOY_A5_BACKEND_STACK=1`** and **`GEMINI_API_KEY`** when you run `./scripts/deploy_infra.sh`. Push your latest `A5/` code before deploy so the bundle is current.
 - **Platform string:** Elastic Beanstalk **solution stack names are region-specific and change when AWS updates platforms** — they cannot be hardcoded. `./scripts/deploy_infra.sh` calls `list-available-solution-stacks` and picks **Amazon Linux 2023 + Python 3.12** (then 3.11, then any Python 3). Override with **`A5_EB_SOLUTION_STACK`** if you need a specific row, or pass `--parameters TempoFlow-A5Backend-<stage>:EbSolutionStack=...` to `cdk deploy`.
 - **Outputs:** **`A5EbEndpointUrl`**, **`A5ProcessorUrl`** (HTTP). Elastic Beanstalk’s URL is usually **HTTP**, so an **HTTPS** Amplify site should use **`EBS_BACKEND_URL`** + **`NEXT_PUBLIC_EBS_PROXY=1`** at build time (see `web-app/next.config.ts`), plus **`EBS_PROCESSOR_URL`** pointing at the same HTTP origin for server-side `/api/process`.
+- **Same region for bootstrap + deploy:** the app zip lands in the CDK asset bucket for the stack **region**. Elastic Beanstalk requires the bundle in the **same region** as the environment. Use one **`AWS_DEFAULT_REGION`** (e.g. `us-east-1`) for both `cdk bootstrap aws://ACCOUNT/REGION` and `./scripts/deploy_infra.sh`.
+- **If the stack rolls back:** the CDK summary often omits the real reason. In **CloudFormation** → stack **`TempoFlow-A5Backend-<stage>`** → **Events**, open the first **CREATE_FAILED** row and read **Status reason**. Optionally: **Elastic Beanstalk** → environment **`tf-a5-<stage>`** → **Events**.
 
 Shortcut helper (optional):
 
