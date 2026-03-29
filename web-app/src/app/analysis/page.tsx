@@ -15,12 +15,9 @@ import {
   type TempoFlowSession,
   updateSession,
 } from "../../lib/sessionStorage";
-import { DifferenceViewer } from "../../components/ebs/DifferenceViewer";
 import { getSessionVideo } from "../../lib/videoStorage";
 import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 const MAX_EBS_PROCESSING_SECONDS = 5 * 60;
-
-type AnalysisTab = "analysis" | "diff";
 
 function getProcessorBaseUrl(processorUrl: string) {
   return processorUrl.replace(/\/api\/process\/?$/, "");
@@ -58,7 +55,6 @@ function AnalysisPageContent() {
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const generationRequestRef = useRef<string | null>(null);
   const ebsViewerRef = useRef<{ seekTo: (time: number) => void } | null>(null);
-  const [activeTab, setActiveTab] = useState<AnalysisTab>("analysis");
   const [sharedTime, setSharedTime] = useState(0);
   const processorUrl = getPublicEbsProcessorUrl();
 
@@ -441,29 +437,10 @@ function AnalysisPageContent() {
           </Link>
         </div>
 
-        {/* 2. Middle Section: Centered Tabs */}
-        <nav className="flex-none flex items-center bg-slate-100/80 p-1 rounded-xl border border-slate-200/60 shadow-inner">
-          <button
-            onClick={() => setActiveTab("analysis")}
-            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "analysis"
-                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
-            }`}
-          >
-            ANALYSIS
-          </button>
-          <button
-            onClick={() => setActiveTab("diff")}
-            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "diff"
-                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
-            }`}
-          >
-            OVERLAY DIFFERENCE
-          </button>
-        </nav>
+        {/* 2. Middle Section: Title */}
+        <div className="flex-none flex items-center">
+          <span className="text-sm font-medium text-slate-600">Analysis</span>
+        </div>
 
         {/* 3. Right Section: Actions (Flex-1 + justify-end) */}
         <div className="flex-1 flex justify-end items-center gap-3">
@@ -638,35 +615,21 @@ return (
   <div className="min-h-screen bg-sky-50">
     {header}
     <div className="pt-20 px-6 pb-12">
-      {/* --- Analysis: EBS playback + BodyPix + Gemini feedback --- */}
-      {activeTab === "analysis" && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <FeedbackViewer
-            mode="session"
-            sessionId={session.id}
-            title="TempoFlow EBS Session"
-            referenceVideoUrl={referenceVideoUrl}
-            userVideoUrl={practiceVideoUrl}
-            ebsData={ebsData}
-            referenceName={session.referenceName}
-            practiceName={session.practiceName}
-            footerSlot={
-              <Link href="/upload" className="dl-btn">New Session</Link>
-            }
-          />
-        </div>
-      )}
-
-      {/* --- DIFFERENCE TAB --- */}
-      {activeTab === "diff" && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <DifferenceViewer 
+      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <FeedbackViewer
+          mode="session"
+          sessionId={session.id}
+          title="TempoFlow EBS Session"
           referenceVideoUrl={referenceVideoUrl}
           userVideoUrl={practiceVideoUrl}
           ebsData={ebsData}
+          referenceName={session.referenceName}
+          practiceName={session.practiceName}
+          footerSlot={
+            <Link href="/upload" className="dl-btn">New Session</Link>
+          }
         />
-        </div>
-      )}
+      </div>
     </div>
   </div>
 );

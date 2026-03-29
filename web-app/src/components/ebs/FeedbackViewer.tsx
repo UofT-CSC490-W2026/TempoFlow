@@ -111,6 +111,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const geminiFeedbackRef = useRef<GeminiFeedbackPanelHandle>(null);
   const autoGeminiQueuedRef = useRef<Set<number>>(new Set());
   const ebsFingerprint = useMemo(() => (sessionEbsData ? hashEbsData(sessionEbsData) : ""), [sessionEbsData]);
+  const [viewMode, setViewMode] = useState<"side" | "overlay">("side");
+  const overlayVideoRef = useRef<HTMLVideoElement>(null);
+  const [overlayCurrentTime, setOverlayCurrentTime] = useState(0);
 
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
@@ -473,6 +476,55 @@ export function FeedbackViewer(props: EbsViewerProps) {
         </>
       );
     }, [sessionMode, sessionPracticeName, sessionReferenceName]);
+
+  // Overlay diff: get frame from per-segment BodyPix artifacts for current time
+  const getOverlayDiffFrame = useCallback((
+    artifact: OverlayArtifact | null,
+    currentTimeSec: number
+  ): string | Blob | null => {
+    if (!artifact?.segments?.length) return null;
+    
+    // Find which segment contains this time
+    for (const seg of artifact.segments) {
+      if (currentTimeSec >= seg.startSec && currentTimeSec < seg.endSec) {
+        if (!seg.frames?.length) return null;
+        const segTime = currentTimeSec - seg.startSec;
+        const frameIdx = Math.floor(segTime * seg.fps);
+        const clampedIdx = Math.max(0, Math.min(frameIdx, seg.frames.length - 1));
+        return seg.frames[clampedIdx] ?? null;
+      }
+    }
+    return null;
+  }, []);
+
+  const refOverlayFrame = viewMode === "overlay" 
+    ? getOverlayDiffFrame(refBodyPixArtifact, overlayCurrentTime)
+    : null;
+  const userOverlayFrame = viewMode === "overlay"
+    ? getOverlayDiffFrame(userBodyPixArtifact, overlayCurrentTime)
+    : null;
+
+  // Sync overlay video time with shared time when playing
+  useEffect(() => {
+    if (viewMode !== "overlay" || !overlayVideoRef.current) return;
+    const video = overlayVideoRef.current;
+    
+    const handleTimeUpdate = () => {
+      setOverlayCurrentTime(video.currentTime);
+    };
+    
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    return () => video.removeEventListener("timeupdate", handleTimeUpdate);
+  }, [viewMode]);
+
+  // Sync shared time to overlay video when switching modes or seeking
+  useEffect(() => {
+    if (viewMode === "overlay" && overlayVideoRef.current) {
+      overlayVideoRef.current.currentTime = state.sharedTime;
+      setOverlayCurrentTime(state.sharedTime);
+    }
+  }, [viewMode, state.sharedTime]);
+
   return (
     <div className="ebs-viewer-root">
       {viewerVisible && (
@@ -496,6 +548,32 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 <span className="ebs-tag orange">{mode}</span>
               </>
               <div className="flex-1" />
+              {/* View mode toggle */}
+              <div className="flex items-center gap-2 mr-4">
+                <span className="text-xs text-slate-500">View:</span>
+                <button
+                  onClick={() => setViewMode("side")}
+                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                    viewMode === "side"
+                      ? "bg-slate-800 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                  title="Side-by-side view"
+                >
+                  Side
+                </button>
+                <button
+                  onClick={() => setViewMode("overlay")}
+                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                    viewMode === "overlay"
+                      ? "bg-slate-800 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                  title="Overlay diff view (uses existing BodyPix)"
+                >
+                  Overlay
+                </button>
+              </div>
             </div>
           ) : (
             <div className="ebs-inline-note">Aligned videos loaded...</div>
@@ -506,57 +584,118 @@ export function FeedbackViewer(props: EbsViewerProps) {
               {overlayBusy ? `${overlayStatus ?? "Working…"}` : overlayStatus}
             </div>
           ) : null}
-          <div className="videos">
-            <div className="video-panel">
-              <div className="video-label">
-                Reference (Clip 1)
-                <span className="time-display">{fmtTimeFull(state.refTime)}</span>
+          {viewMode === "side" ? (
+            <div className="videos">
+              <div className="video-panel">
+                <div className="video-label">
+                  Reference (Clip 1)
+                  <span className="time-display">{fmtTimeFull(state.refTime)}</span>
+                </div>
+                <div className="relative">
+                  <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
+                  {sessionMode && showBodyPix ? (
+                    overlayMode === "precomputed" ? (
+                      <ProgressiveOverlay videoRef={refVideo} artifact={refBodyPixArtifact} />
+                    ) : (
+                      <BodyPixOverlay videoRef={refVideo} opacity={0.68} />
+                    )
+                  ) : null}
+                </div>
+                <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
+                <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
+                  <div className="seg-pause-card">
+                    <div className="seg-done-num">{state.pauseOverlay.label}</div>
+                    <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
+                    <div className="seg-done-hint">Space to continue · → next section</div>
+                  </div>
+                </div>
               </div>
-              <div className="relative">
-                <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
-                {sessionMode && showBodyPix ? (
-                  overlayMode === "precomputed" ? (
-                    <ProgressiveOverlay videoRef={refVideo} artifact={refBodyPixArtifact} />
-                  ) : (
-                    <BodyPixOverlay videoRef={refVideo} opacity={0.68} />
-                  )
-                ) : null}
-                
-              </div>
-              <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
-              <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
-                <div className="seg-pause-card">
-                  <div className="seg-done-num">{state.pauseOverlay.label}</div>
-                  <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
-                  <div className="seg-done-hint">Space to continue · → next section</div>
+              <div className="video-panel">
+                <div className="video-label">
+                  User (Clip 2)
+                  <span className="time-display">{fmtTimeFull(state.userTime)}</span>
+                </div>
+                <div className="relative">
+                  <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
+                  {sessionMode && showBodyPix ? (
+                    overlayMode === "precomputed" ? (
+                      <ProgressiveOverlay videoRef={userVideo} artifact={userBodyPixArtifact} />
+                    ) : (
+                      <BodyPixOverlay videoRef={userVideo} opacity={0.68} />
+                    )
+                  ) : null}
+                </div>
+                <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
+                <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
+                  <div className="seg-pause-card">
+                    <div className="seg-done-num">{state.pauseOverlay.label}</div>
+                    <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
+                    <div className="seg-done-hint">Space to continue · → next section</div>
+                  </div>
                 </div>
               </div>
             </div>
-            <div className="video-panel">
-              <div className="video-label">
-                User (Clip 2)
-                <span className="time-display">{fmtTimeFull(state.userTime)}</span>
-              </div>
-              <div className="relative">
-                <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
-                {sessionMode && showBodyPix ? (
-                  overlayMode === "precomputed" ? (
-                    <ProgressiveOverlay videoRef={userVideo} artifact={userBodyPixArtifact} />
-                  ) : (
-                    <BodyPixOverlay videoRef={userVideo} opacity={0.68} />
-                  )
-                ) : null}
-              </div>
-              <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
-              <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
-                <div className="seg-pause-card">
-                  <div className="seg-done-num">{state.pauseOverlay.label}</div>
-                  <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
-                  <div className="seg-done-hint">Space to continue · → next section</div>
+          ) : (
+            /* Overlay diff view - reuses existing BodyPix per-segment data */
+            <div className="videos single-view">
+              <div className="video-panel" style={{ maxWidth: "100%", width: "100%" }}>
+                <div className="video-label flex justify-between">
+                  <span>Overlay Diff (Reference + User)</span>
+                  <span className="time-display">{fmtTimeFull(overlayCurrentTime)}</span>
+                </div>
+                <div className="relative" style={{ aspectRatio: "16/9", background: "#000" }}>
+                  {/* Base: User video */}
+                  <video
+                    ref={overlayVideoRef}
+                    src={activeUserVideoUrl ?? undefined}
+                    className="absolute inset-0 w-full h-full object-contain z-0"
+                    controls
+                    playsInline
+                  />
+                  {/* Layer 1: Reference ghost (BodyPix overlay) */}
+                  {refOverlayFrame && (
+                    <img
+                      src={refOverlayFrame instanceof Blob ? URL.createObjectURL(refOverlayFrame) : refOverlayFrame}
+                      alt="Reference ghost"
+                      className="absolute inset-0 w-full h-full object-contain pointer-events-none z-50"
+                      style={{
+                        mixBlendMode: "difference",
+                        filter: "brightness(1.5) saturate(2)",
+                        opacity: 0.8,
+                      }}
+                    />
+                  )}
+                  {/* Layer 2: User BodyPix overlay */}
+                  {userOverlayFrame && (
+                    <img
+                      src={userOverlayFrame instanceof Blob ? URL.createObjectURL(userOverlayFrame) : userOverlayFrame}
+                      alt="User overlay"
+                      className="absolute inset-0 w-full h-full object-contain pointer-events-none z-[60]"
+                      style={{
+                        mixBlendMode: "multiply",
+                        opacity: 0.6,
+                      }}
+                    />
+                  )}
+                  {/* Status indicators */}
+                  <div className="absolute top-3 right-3 flex gap-2 z-[70]">
+                    <div
+                      className={`w-3 h-3 rounded-full border border-white/30 ${
+                        refOverlayFrame ? "bg-cyan-400 shadow-[0_0_8px_cyan]" : "bg-red-900"
+                      }`}
+                      title="Ref BodyPix"
+                    />
+                    <div
+                      className={`w-3 h-3 rounded-full border border-white/30 ${
+                        userOverlayFrame ? "bg-emerald-400 shadow-[0_0_8px_emerald]" : "bg-red-900"
+                      }`}
+                      title="User BodyPix"
+                    />
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          )}
           {sessionMode && showFeedback && sessionId && sessionEbsData && state.segments.length > 0 && (
             <div className="mt-4 mb-2">
               <GeminiFeedbackPanel
