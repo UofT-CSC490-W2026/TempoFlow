@@ -1,3 +1,9 @@
+/**
+ * Browser-side pose timing priors for Gemini move-feedback.
+ * Uses TensorFlow.js BodyPix (`loadBodyPix` / `sampleFrame`) — same stack as overlay masks,
+ * not YOLO/MoveNet. Per move window we sample keypoints, build a motion-energy curve,
+ * compare ref vs user peak times → phase_offset_ms and ahead/behind hints for the backend.
+ */
 import type { EbsData, EbsSegment } from "../components/ebs/types";
 import { buildMovesForSegment } from "../components/ebs/ebsViewerLogic";
 import { loadBodyPix, sampleFrame } from "./bodyPix/segmentation";

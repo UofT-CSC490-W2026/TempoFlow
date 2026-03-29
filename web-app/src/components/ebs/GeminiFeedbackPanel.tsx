@@ -87,6 +87,8 @@ type GeminiFeedbackPanelProps = {
   /** When set, pose-based timing priors are computed client-side and sent with each segment request. */
   referenceVideoUrl?: string | null;
   userVideoUrl?: string | null;
+  /** When false, Gemini run is disabled until browser BodyPix precompute has finished (same stack as pose priors). */
+  bodyPixReady?: boolean;
 };
 
 export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
@@ -99,6 +101,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
     onFeedbackReady,
     referenceVideoUrl,
     userVideoUrl,
+    bodyPixReady = true,
   } = props;
 
   const [running, setRunning] = useState(false);
@@ -159,7 +162,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
   }, [sharedTime, filtered, flatMoves]);
 
   const runAnalysis = useCallback(async () => {
-    if (running || segments.length === 0 || !sessionId) return;
+    if (running || segments.length === 0 || !sessionId || !bodyPixReady) return;
     setRunning(true);
     setError(null);
     setResults([]);
@@ -269,6 +272,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
     userVideoUrl,
     burnInLabels,
     includeAudio,
+    bodyPixReady,
   ]);
 
   const progressPercent =
@@ -297,19 +301,30 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
               Sends each segment as a low-res video pair to Gemini 2.5 Flash-Lite for move-level micro-timing comparison.
-              Optional pose priors and REFERENCE/USER burn-in labels reduce role confusion.
+              Optional <strong className="font-medium text-slate-600">BodyPix</strong> pose priors (browser TF.js) send peak
+              motion timing vs the reference; optional REFERENCE/USER burn-in needs ffmpeg with{" "}
+              <code className="text-[10px]">drawtext</code> (otherwise labels are skipped automatically).
             </p>
           </div>
           <button
             onClick={runAnalysis}
-            disabled={running || segments.length === 0}
+            disabled={running || segments.length === 0 || !bodyPixReady}
             className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {running ? "Analyzing..." : hasRun.current ? "Re-run" : "Run Analysis"}
           </button>
         </div>
+        {!bodyPixReady && (
+          <p className="mt-2 text-xs text-amber-700">
+            Finish BodyPix overlay precompute (runs automatically when you open this session) before running Gemini
+            analysis—feedback uses the same BodyPix-based pose priors.
+          </p>
+        )}
         <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600">
-          <label className="flex items-center gap-2 cursor-pointer">
+          <label
+            className="flex items-center gap-2 cursor-pointer"
+            title="Requires ffmpeg built with freetype (drawtext). Minimal Homebrew builds skip burn-in automatically."
+          >
             <input
               type="checkbox"
               className="rounded border-slate-300"
@@ -317,7 +332,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
               onChange={(e) => setBurnInLabels(e.target.checked)}
               disabled={running}
             />
-            Burn-in REFERENCE / USER on clips
+            Burn-in REFERENCE / USER (ffmpeg drawtext)
           </label>
           <label className="flex items-center gap-2 cursor-pointer">
             <input

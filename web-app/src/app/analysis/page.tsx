@@ -5,7 +5,6 @@ import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
 import "../../components/ebs/ebs-viewer.css";
 
-import { EbsViewer } from "../../components/ebs/EbsViewer";
 import { FeedbackViewer } from "../../components/ebs/FeedbackViewer";
 import type { EbsData } from "../../components/ebs/types";
 import { getSessionEbs, storeSessionEbs } from "../../lib/ebsStorage";
@@ -20,6 +19,8 @@ import { DifferenceViewer } from "../../components/ebs/DifferenceViewer";
 import { getSessionVideo } from "../../lib/videoStorage";
 import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 const MAX_EBS_PROCESSING_SECONDS = 5 * 60;
+
+type AnalysisTab = "analysis" | "diff";
 
 function getProcessorBaseUrl(processorUrl: string) {
   return processorUrl.replace(/\/api\/process\/?$/, "");
@@ -56,7 +57,15 @@ function AnalysisPageContent() {
   const [processingStartedAt, setProcessingStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const generationRequestRef = useRef<string | null>(null);
+  const ebsViewerRef = useRef<{ seekTo: (time: number) => void } | null>(null);
+  const [activeTab, setActiveTab] = useState<AnalysisTab>("analysis");
+  const [sharedTime, setSharedTime] = useState(0);
   const processorUrl = getPublicEbsProcessorUrl();
+
+  const handleSeek = (time: number) => {
+    setSharedTime(time);
+    ebsViewerRef.current?.seekTo(time);
+  };
 
   const processorBaseUrl = useMemo(() => getProcessorBaseUrl(processorUrl), [processorUrl]);
   
@@ -420,21 +429,6 @@ function AnalysisPageContent() {
     setElapsedSeconds(0);
     setStatusMessage("Retrying EBS generation...");
   };
-  // 1. Create the state for the current time
-  const [sharedTime, setSharedTime] = useState(0);
-  // const sessionMode = props.mode === "session";
-  // 2. Create a Ref to the EbsViewer (to trigger seeking)
-  // Note: You'll need to make sure EbsViewer exposes a seek method via useImperativeHandle
-  const ebsViewerRef = useRef<{ seekTo: (time: number) => void } | null>(null);
-
-  // 3. Define the seek handler
-  const handleSeek = (time: number) => {
-    setSharedTime(time);
-    // Tell the viewer to move the videos to this time
-    ebsViewerRef.current?.seekTo(time);
-  };
-  type TabType = "ebs" | "feedback" | "diff";
-  const [activeTab, setActiveTab] = useState<TabType>("ebs");
 
   const header = (
     <header className="fixed top-0 left-0 right-0 bg-white/85 backdrop-blur-md border-b border-sky-100 z-50">
@@ -450,24 +444,14 @@ function AnalysisPageContent() {
         {/* 2. Middle Section: Centered Tabs */}
         <nav className="flex-none flex items-center bg-slate-100/80 p-1 rounded-xl border border-slate-200/60 shadow-inner">
           <button
-            onClick={() => setActiveTab("ebs")}
+            onClick={() => setActiveTab("analysis")}
             className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "ebs"
+              activeTab === "analysis"
                 ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
                 : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
             }`}
           >
-            EBS VIEWER
-          </button>
-          <button
-            onClick={() => setActiveTab("feedback")}
-            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "feedback"
-                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
-            }`}
-          >
-            FEEDBACK
+            ANALYSIS
           </button>
           <button
             onClick={() => setActiveTab("diff")}
@@ -654,27 +638,8 @@ return (
   <div className="min-h-screen bg-sky-50">
     {header}
     <div className="pt-20 px-6 pb-12">
-      {/* --- EBS VIEWER TAB --- */}
-      {activeTab === "ebs" && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <EbsViewer
-            mode="session"
-            sessionId={session.id}
-            title="TempoFlow EBS Session"
-            referenceVideoUrl={referenceVideoUrl}
-            userVideoUrl={practiceVideoUrl}
-            ebsData={ebsData}
-            referenceName={session.referenceName}
-            practiceName={session.practiceName}
-            footerSlot={
-              <Link href="/upload" className="dl-btn">New Session</Link>
-            }
-          />
-        </div>
-      )}
-
-      {/* --- FEEDBACK TAB --- */}
-      {activeTab === "feedback" && (
+      {/* --- Analysis: EBS playback + BodyPix + Gemini feedback --- */}
+      {activeTab === "analysis" && (
         <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
           <FeedbackViewer
             mode="session"
