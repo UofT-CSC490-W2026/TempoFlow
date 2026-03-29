@@ -189,12 +189,10 @@ export function LiveCoachPanel({
       sessionRef.current = session;
       const videoEl = await session.start();
 
-      // Mount webcam video into the container
       if (videoBoxRef.current) {
-        videoBoxRef.current.innerHTML = "";
         videoEl.style.cssText =
           "width:100%;height:100%;object-fit:cover;border-radius:16px;transform:scaleX(-1);";
-        videoBoxRef.current.appendChild(videoEl);
+        videoBoxRef.current.replaceChildren(videoEl);
       }
 
       // Pose extraction loop (~30 FPS, self-throttled by inference time)
@@ -227,7 +225,7 @@ export function LiveCoachPanel({
     poseRef.current = null;
     sessionRef.current?.stop();
     sessionRef.current = null;
-    if (videoBoxRef.current) videoBoxRef.current.innerHTML = "";
+    if (videoBoxRef.current) videoBoxRef.current.replaceChildren();
   }, []);
 
   // Cleanup on unmount
@@ -261,12 +259,13 @@ export function LiveCoachPanel({
 
         {/* Webcam */}
         <div className="px-8 pt-6">
-          <div
-            ref={videoBoxRef}
-            className="relative w-full aspect-video bg-slate-900 rounded-2xl overflow-hidden flex items-center justify-center"
-          >
+          <div className="relative w-full aspect-video bg-slate-900 rounded-2xl overflow-hidden flex items-center justify-center">
+            {/* Imperative-only container: React never renders children here */}
+            <div ref={videoBoxRef} className="absolute inset-0 z-0" />
+
+            {/* React-managed overlays sit above */}
             {!isActive && !isBusy && (
-              <div className="text-center px-6">
+              <div className="relative z-10 text-center px-6">
                 <div className="w-16 h-16 mx-auto rounded-full bg-slate-800 flex items-center justify-center mb-3">
                   <svg
                     className="w-8 h-8 text-slate-500"

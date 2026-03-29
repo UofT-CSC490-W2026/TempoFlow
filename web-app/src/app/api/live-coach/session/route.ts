@@ -14,7 +14,7 @@ import { NextResponse } from "next/server";
  */
 export async function POST() {
   const model =
-    process.env.GEMINI_LIVE_MODEL ?? "models/gemini-2.0-flash-live-001";
+    process.env.GEMINI_LIVE_MODEL ?? "models/gemini-3.1-flash-live-preview";
 
   const explicitWs = process.env.NEXT_PUBLIC_LIVE_COACH_WS_URL?.trim();
   if (explicitWs) {

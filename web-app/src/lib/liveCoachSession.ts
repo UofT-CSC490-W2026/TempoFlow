@@ -185,14 +185,14 @@ export class GeminiLiveSession {
     }
 
     const src = this.audioCtx.createMediaStreamSource(audioOnly);
+    const capturedSR = this.audioCtx.sampleRate;
 
-    // ScriptProcessorNode is deprecated but reliable under COOP/COEP
-    // headers that this app already uses (blob: AudioWorklet URLs can fail).
     const proc = this.audioCtx.createScriptProcessor(4096, 1, 1);
     src.connect(proc);
     proc.connect(this.audioCtx.destination);
     proc.onaudioprocess = (e: AudioProcessingEvent) => {
-      this.ingestAudio(e.inputBuffer.getChannelData(0), this.audioCtx!.sampleRate);
+      if (!this.audioCtx) return;
+      this.ingestAudio(e.inputBuffer.getChannelData(0), capturedSR);
     };
   }
 
@@ -235,12 +235,20 @@ export class GeminiLiveSession {
 
   private openSocket(): Promise<void> {
     return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const settle = (ok: boolean, err?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timeout);
+        ok ? resolve() : reject(err ?? new Error("ws failed"));
+      };
+
       this.ws = new WebSocket(this.cfg.wsUrl);
 
       const timeout = setTimeout(() => {
-        this.cfg.events.onError("Connection timed out.");
+        this.cfg.events.onError("Connection timed out waiting for Gemini setup.");
         this.setStatus("error");
-        reject(new Error("timeout"));
+        settle(false, new Error("timeout"));
       }, 15_000);
 
       this.ws.onopen = () => {
@@ -248,43 +256,70 @@ export class GeminiLiveSession {
         this.sendSetup();
       };
 
-      this.ws.onmessage = (ev) =>
-        this.handleMsg(ev.data as string, () => {
-          clearTimeout(timeout);
-          resolve();
-        });
+      this.ws.onmessage = (ev) => {
+        const decode = (text: string) =>
+          this.handleMsg(text, () => settle(true));
+
+        const raw = ev.data;
+        if (typeof raw === "string") {
+          decode(raw);
+        } else if (raw instanceof Blob) {
+          raw.text().then(decode);
+        } else if (raw instanceof ArrayBuffer) {
+          decode(new TextDecoder().decode(raw));
+        }
+      };
 
       this.ws.onerror = () => {
-        clearTimeout(timeout);
         this.cfg.events.onError(
           "WebSocket connection failed. Ensure the A5 API is running and GEMINI_API_KEY is set on the server.",
         );
         this.setStatus("error");
-        reject(new Error("ws error"));
+        settle(false, new Error("ws error"));
       };
 
-      this.ws.onclose = () => {
-        if (this.status === "active") this.setStatus("closed");
+      this.ws.onclose = (ev: CloseEvent) => {
+        const reason = ev.reason || `code ${ev.code}`;
+        if (!settled) {
+          this.cfg.events.onError(`Connection closed before setup: ${reason}`);
+          this.setStatus("error");
+          settle(false, new Error(reason));
+          return;
+        }
+        if (this.status === "active") {
+          if (ev.code !== 1000) {
+            this.cfg.events.onError(`Connection closed: ${reason}`);
+            this.setStatus("error");
+          } else {
+            this.setStatus("closed");
+          }
+        }
       };
     });
   }
 
   private sendSetup() {
+    // Live API native-audio models (gemini-3.1-flash-live-preview,
+    // gemini-2.5-flash-native-audio-*) only support response_modalities: ["AUDIO"].
+    // Requesting ["AUDIO", "TEXT"] together causes a 1011 / 1007 close.
+    // Text transcripts arrive in serverContent.modelTurn.parts[].text even in
+    // AUDIO-only mode when the model provides them (or via output_audio_transcription).
     this.ws!.send(
       JSON.stringify({
         setup: {
           model: this.cfg.model,
-          generation_config: {
-            response_modalities: ["AUDIO", "TEXT"],
-            speech_config: {
-              voice_config: {
-                prebuilt_voice_config: { voice_name: "Aoede" },
+          generationConfig: {
+            responseModalities: ["AUDIO"],
+            speechConfig: {
+              voiceConfig: {
+                prebuiltVoiceConfig: { voiceName: "Aoede" },
               },
             },
           },
-          system_instruction: {
+          systemInstruction: {
             parts: [{ text: this.cfg.systemInstruction }],
           },
+          outputAudioTranscription: {},
         },
       }),
     );
@@ -316,6 +351,7 @@ export class GeminiLiveSession {
               inlineData?: { data: string; mimeType: string };
             }>;
           };
+          outputTranscription?: { text?: string };
           turnComplete?: boolean;
           interrupted?: boolean;
         }
@@ -336,6 +372,10 @@ export class GeminiLiveSession {
       }
     }
 
+    if (sc.outputTranscription?.text) {
+      this.cfg.events.onTranscript(sc.outputTranscription.text, false);
+    }
+
     if (sc.turnComplete) {
       this.cfg.events.onTranscript("", true);
     }
@@ -345,15 +385,15 @@ export class GeminiLiveSession {
   private sendFileContext() {
     this.ws?.send(
       JSON.stringify({
-        client_content: {
+        clientContent: {
           turns: [
             {
               role: "user",
               parts: [
                 {
-                  file_data: {
-                    file_uri: this.cfg.referenceFileUri,
-                    mime_type: "video/mp4",
+                  fileData: {
+                    fileUri: this.cfg.referenceFileUri,
+                    mimeType: "video/mp4",
                   },
                 },
                 {
@@ -362,7 +402,7 @@ export class GeminiLiveSession {
               ],
             },
           ],
-          turn_complete: true,
+          turnComplete: true,
         },
       }),
     );
@@ -405,13 +445,11 @@ export class GeminiLiveSession {
 
     this.ws.send(
       JSON.stringify({
-        realtime_input: {
-          media_chunks: [
-            {
-              data: toBase64(new Uint8Array(merged.buffer)),
-              mime_type: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
-            },
-          ],
+        realtimeInput: {
+          audio: {
+            data: toBase64(new Uint8Array(merged.buffer)),
+            mimeType: `audio/pcm;rate=${INPUT_SAMPLE_RATE}`,
+          },
         },
       }),
     );
@@ -441,8 +479,11 @@ export class GeminiLiveSession {
 
     this.ws.send(
       JSON.stringify({
-        realtime_input: {
-          media_chunks: [{ data: b64, mime_type: "image/jpeg" }],
+        realtimeInput: {
+          video: {
+            data: b64,
+            mimeType: "image/jpeg",
+          },
         },
       }),
     );
@@ -458,14 +499,14 @@ export class GeminiLiveSession {
 
     this.ws.send(
       JSON.stringify({
-        client_content: {
+        clientContent: {
           turns: [
             {
               role: "user",
               parts: [{ text: `POSE: ${this.pendingPose}` }],
             },
           ],
-          turn_complete: true,
+          turnComplete: true,
         },
       }),
     );

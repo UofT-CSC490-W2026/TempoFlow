@@ -65,7 +65,9 @@ export class PoseExtractor {
     if (this.detector || this.loading) return;
     this.loading = true;
     try {
+      const tf = await import("@tensorflow/tfjs-core");
       await import("@tensorflow/tfjs-backend-webgl");
+      await tf.ready();
       const pd = await import("@tensorflow-models/pose-detection");
       this.detector = await pd.createDetector(pd.SupportedModels.MoveNet, {
         modelType: pd.movenet.modelType.SINGLEPOSE_LIGHTNING,
