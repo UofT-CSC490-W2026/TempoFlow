@@ -28,6 +28,8 @@ export default function UploadPage() {
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordedPreviewUrl, setRecordedPreviewUrl] = useState<string | null>(null);
   const [recorderTarget, setRecorderTarget] = useState<'reference' | 'practice'>('practice');
+  const [introFadingOut, setIntroFadingOut] = useState(false);
+  const [pauseReferenceAutoAdvance, setPauseReferenceAutoAdvance] = useState(false);
   const storageMode = getStorageMode();
   const analysisMode = getAnalysisMode();
   const liveVideoRef = useRef<HTMLVideoElement>(null);
@@ -65,14 +67,22 @@ export default function UploadPage() {
 
   useEffect(() => {
     if (flowStep !== 'intro') return;
+    setIntroFadingOut(false);
+    const fadeTimeoutId = window.setTimeout(() => {
+      setIntroFadingOut(true);
+    }, 900);
     const timeoutId = window.setTimeout(() => {
       setFlowStep('reference');
     }, 1600);
-    return () => window.clearTimeout(timeoutId);
+    return () => {
+      window.clearTimeout(fadeTimeoutId);
+      window.clearTimeout(timeoutId);
+    };
   }, [flowStep]);
 
   useEffect(() => {
     if (flowStep !== 'reference' || !referenceFile) return;
+    if (pauseReferenceAutoAdvance) return;
     if (recorderOpen) closeRecorder();
     const timeoutId = window.setTimeout(() => {
       setMessage('');
@@ -80,7 +90,7 @@ export default function UploadPage() {
     }, 750);
     return () => window.clearTimeout(timeoutId);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowStep, referenceFile, recorderOpen]);
+  }, [flowStep, pauseReferenceAutoAdvance, referenceFile, recorderOpen]);
 
   useEffect(() => {
     if (flowStep !== 'practice' || !practiceFile) return;
@@ -94,8 +104,12 @@ export default function UploadPage() {
 
   const handleFileChange = (type: 'reference' | 'practice') => (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
-      if (type === 'reference') setReferenceFile(e.target.files[0]);
-      else setPracticeFile(e.target.files[0]);
+      if (type === 'reference') {
+        setReferenceFile(e.target.files[0]);
+        setPauseReferenceAutoAdvance(false);
+      } else {
+        setPracticeFile(e.target.files[0]);
+      }
       setMessage('');
     }
   };
@@ -107,8 +121,12 @@ export default function UploadPage() {
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const droppedFile = e.dataTransfer.files[0];
       if (droppedFile.type.startsWith('video/')) {
-        if (type === 'reference') setReferenceFile(droppedFile);
-        else setPracticeFile(droppedFile);
+        if (type === 'reference') {
+          setReferenceFile(droppedFile);
+          setPauseReferenceAutoAdvance(false);
+        } else {
+          setPracticeFile(droppedFile);
+        }
         setMessage('');
       }
     }
@@ -221,6 +239,7 @@ export default function UploadPage() {
 
         if (recorderTarget === 'reference') {
           setReferenceFile(file);
+          setPauseReferenceAutoAdvance(false);
         } else {
           setPracticeFile(file);
         }
@@ -383,8 +402,9 @@ export default function UploadPage() {
           onDrop={handleDrop(type)}
           onDragOver={(e) => { e.preventDefault(); setDraggingType(type); }}
           onDragLeave={() => setDraggingType(null)}
-            className={`
+          className={`
             group relative overflow-hidden rounded-[28px] border p-8 transition-all
+            min-h-[526px]
             ${draggingType === type ? 'border-sky-400 bg-sky-100/80 shadow-lg shadow-sky-200/60' : 'border-sky-100 bg-white/90 hover:border-sky-300 hover:shadow-lg hover:shadow-sky-100/80'}
             ${file ? 'border-sky-200 bg-gradient-to-br from-white to-sky-50/70' : ''}
           `}
@@ -399,7 +419,7 @@ export default function UploadPage() {
           />
 
           {!file ? (
-            <div className="relative flex min-h-[220px] flex-col items-center justify-center text-center">
+            <div className="relative flex h-full min-h-[430px] flex-col items-center justify-center text-center">
               <div className="flex h-16 w-16 items-center justify-center rounded-3xl border border-sky-100 bg-white text-sky-500 shadow-sm transition-transform group-hover:scale-105">
                 <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 5v14M19 12H5" />
@@ -409,7 +429,7 @@ export default function UploadPage() {
               <p className="mt-2 max-w-xs text-sm text-slate-500">Drop video or click to browse</p>
             </div>
           ) : (
-            <div className="relative flex min-h-[220px] flex-col justify-between">
+            <div className="relative flex h-full min-h-[430px] flex-col justify-between">
               <div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-sky-100 text-sky-700">
                 <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -433,6 +453,24 @@ export default function UploadPage() {
   const stepLabel = flowStep === 'practice' ? 'Practice' : 'Reference';
   const activeFile = flowStep === 'practice' ? practiceFile : referenceFile;
   const isReferenceStep = flowStep === 'reference';
+
+  const goToPreviousStep = () => {
+    setMessage('');
+    if (recorderOpen) closeRecorder();
+
+    if (flowStep === 'practice') {
+      setPracticeFile(null);
+      setPauseReferenceAutoAdvance(true);
+      setFlowStep('reference');
+      return;
+    }
+
+    if (flowStep === 'reference') {
+      setReferenceFile(null);
+      setFlowStep('intro');
+    }
+  };
+
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f7fbff_0%,#edf7ff_34%,#f7fbff_100%)]">
       <div className="sticky top-0 left-0 right-0 z-10 border-b border-sky-100/80 bg-white/88 backdrop-blur-md">
@@ -459,7 +497,11 @@ export default function UploadPage() {
       <div className="px-6 py-14 md:py-20">
         <div className="mx-auto w-full max-w-5xl">
           {flowStep === 'intro' ? (
-            <div className="animate-in fade-in zoom-in-95 duration-700 overflow-hidden rounded-[44px] border border-sky-100/80 bg-white/80 shadow-[0_24px_80px_rgba(14,165,233,0.12)] backdrop-blur-sm">
+            <div
+              className={`overflow-hidden rounded-[44px] border border-sky-100/80 bg-white/80 shadow-[0_24px_80px_rgba(14,165,233,0.12)] backdrop-blur-sm transition-all duration-700 ${
+                introFadingOut ? 'scale-[0.985] opacity-0' : 'scale-100 opacity-100'
+              }`}
+            >
               <div className="relative px-8 py-[4.5rem] text-center md:px-14 md:py-24">
                 <div className="absolute inset-0 bg-[radial-gradient(circle_at_top,_rgba(14,165,233,0.14),_transparent_50%),linear-gradient(135deg,rgba(255,255,255,0.96),rgba(237,247,255,0.92))]" />
                 <div className="relative">
@@ -497,13 +539,16 @@ export default function UploadPage() {
                     {isReferenceStep ? 'Choose a reference clip' : 'Add your practice clip'}
                   </h1>
                 </div>
-                <div className="hidden rounded-full bg-sky-50 px-4 py-2 text-sm font-semibold text-sky-800 md:block">
-                  {isReferenceStep ? 'Reference' : 'Practice'}
-                </div>
+                <button
+                  onClick={goToPreviousStep}
+                  className="rounded-full border border-slate-200 bg-white px-4 py-2 text-sm font-medium text-slate-600 transition-all hover:border-slate-300 hover:text-slate-900"
+                >
+                  Back
+                </button>
               </div>
 
-              <div className="grid gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
-                <div className="space-y-6">
+              <div className="grid items-stretch gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
+                <div className="flex h-full flex-col justify-between space-y-6">
                   <UploadZone type={isReferenceStep ? 'reference' : 'practice'} file={activeFile} />
                   {activeFile ? (
                     <div className="rounded-3xl border border-emerald-100 bg-emerald-50 px-5 py-4 text-sm font-medium text-emerald-800">
@@ -512,7 +557,7 @@ export default function UploadPage() {
                   ) : null}
                 </div>
 
-                <div className="rounded-[32px] border border-slate-200/80 bg-slate-50/80 p-5">
+                <div className="flex min-h-[526px] h-full flex-col rounded-[32px] border border-slate-200/80 bg-slate-50/80 p-5">
                   <div className="flex items-start gap-3">
                     <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
                       <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -546,7 +591,7 @@ export default function UploadPage() {
                   </button>
 
                   {recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice') ? (
-                    <div className="mt-5 space-y-4">
+                    <div className="mt-5 flex flex-1 flex-col space-y-4">
                       <div className="overflow-hidden rounded-3xl bg-gray-950">
                         {cameraReady ? (
                           <video
@@ -594,9 +639,7 @@ export default function UploadPage() {
                       ) : null}
                     </div>
                   ) : (
-                    <div className="mt-5 rounded-3xl border border-dashed border-slate-200 bg-white px-5 py-4 text-sm text-slate-500">
-                      {isReferenceStep ? 'Start with the clip to learn from.' : 'Now add the clip you want to compare.'}
-                    </div>
+                    <div className="mt-5 flex flex-1 rounded-3xl bg-transparent" />
                   )}
                 </div>
               </div>
