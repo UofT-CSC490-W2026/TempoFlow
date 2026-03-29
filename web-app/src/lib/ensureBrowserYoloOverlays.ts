@@ -24,9 +24,28 @@ type VideoResult = {
   mime: string;
 };
 
+type PosePersonSummary = {
+  anchor_x: number;
+  anchor_y: number;
+  center_x: number;
+  center_y: number;
+  width: number;
+  height: number;
+  min_x: number;
+  max_x: number;
+  min_y: number;
+  max_y: number;
+};
+
+type PoseSummary = {
+  person_count: number;
+  persons: PosePersonSummary[];
+};
+
 type PoseResult = {
   arms: VideoResult;
   legs: VideoResult;
+  summary: PoseSummary | null;
 };
 
 type SegmentedYoloArtifacts = {
@@ -123,6 +142,60 @@ export function buildYoloOverlayChunkPlans(ebsData: EbsData | null): YoloOverlay
 
 function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
+function decodePoseSummaryHeader(value: string | null): PoseSummary | null {
+  if (!value) return null;
+  try {
+    const normalized = value.replace(/-/g, "+").replace(/_/g, "/");
+    const padded = normalized.padEnd(Math.ceil(normalized.length / 4) * 4, "=");
+    const json = atob(padded);
+    return JSON.parse(json) as PoseSummary;
+  } catch {
+    return null;
+  }
+}
+
+function buildNormalizationMeta(
+  referenceSummary: PoseSummary | null,
+  practiceSummary: PoseSummary | null,
+) {
+  const refPeople = [...(referenceSummary?.persons ?? [])].sort((a, b) => a.anchor_x - b.anchor_x);
+  const practicePeople = [...(practiceSummary?.persons ?? [])].sort((a, b) => a.anchor_x - b.anchor_x);
+  if (!refPeople.length || !practicePeople.length) return null;
+
+  const pairCount = Math.min(refPeople.length, practicePeople.length);
+  const refSubset = refPeople.slice(0, pairCount);
+  const practiceSubset = practicePeople.slice(0, pairCount);
+
+  const union = (people: PosePersonSummary[]) => ({
+    minX: Math.min(...people.map((person) => person.min_x)),
+    maxX: Math.max(...people.map((person) => person.max_x)),
+    minY: Math.min(...people.map((person) => person.min_y)),
+    maxY: Math.max(...people.map((person) => person.max_y)),
+    anchorX: people.reduce((sum, person) => sum + person.anchor_x, 0) / people.length,
+    anchorY: Math.max(...people.map((person) => person.anchor_y)),
+  });
+
+  const refUnion = union(refSubset);
+  const practiceUnion = union(practiceSubset);
+  const refWidth = Math.max(0.05, refUnion.maxX - refUnion.minX);
+  const practiceWidth = Math.max(0.05, practiceUnion.maxX - practiceUnion.minX);
+  const refHeight = Math.max(0.08, refUnion.maxY - refUnion.minY);
+  const practiceHeight = Math.max(0.08, practiceUnion.maxY - practiceUnion.minY);
+
+  const scale = Math.max(0.55, Math.min(1.9, (practiceHeight / refHeight) * 0.7 + (practiceWidth / refWidth) * 0.3));
+  const translatedAnchorX = refUnion.anchorX * scale;
+  const translatedAnchorY = refUnion.anchorY * scale;
+
+  return {
+    scale,
+    translateX: practiceUnion.anchorX - translatedAnchorX,
+    translateY: practiceUnion.anchorY - translatedAnchorY,
+    matchedPersonCount: pairCount,
+    referencePersonCount: refPeople.length,
+    practicePersonCount: practicePeople.length,
+  };
 }
 
 function getSideVariantKey(params: {
@@ -240,11 +313,16 @@ async function waitForPythonYoloPoseJob(jobId: string, reportProgress: (progress
         return {
           blob: await outRes.blob(),
           mime: outRes.headers.get("content-type") || "video/webm",
-        } satisfies VideoResult;
+          summary: decodePoseSummaryHeader(outRes.headers.get("x-tempoflow-pose-summary")),
+        };
       };
 
       const [arms, legs] = await Promise.all([loadLayer("arms"), loadLayer("legs")]);
-      return { arms, legs } satisfies PoseResult;
+      return {
+        arms: { blob: arms.blob, mime: arms.mime },
+        legs: { blob: legs.blob, mime: legs.mime },
+        summary: arms.summary ?? legs.summary ?? null,
+      } satisfies PoseResult;
     }
 
     if (st.status === "error") {
@@ -582,123 +660,126 @@ async function runSegmentedBrowserYoloPipeline(params: {
         });
       }
 
-      if (side === "reference") {
-        if (segResult) {
-          artifacts = {
-            ...artifacts,
-            referenceSeg: upsertOverlaySegment(
-              artifacts.referenceSeg,
-              buildSegmentVideoResult({
-                plan: clipRange,
-                index: plan.index,
-                segmentIndex: plan.segmentIndex,
-                moveIndex: plan.moveIndex,
-                sharedStartSec: plan.sharedStartSec,
-                sharedEndSec: plan.sharedEndSec,
-                side,
-                size,
-                video: segResult,
-                meta: { layer: "seg" },
-              }),
-            ),
-          };
-        }
-        if (poseResult) {
-          artifacts = {
-            ...artifacts,
-            referenceArms: upsertOverlaySegment(
-              artifacts.referenceArms,
-              buildSegmentVideoResult({
-                plan: clipRange,
-                index: plan.index,
-                segmentIndex: plan.segmentIndex,
-                moveIndex: plan.moveIndex,
-                sharedStartSec: plan.sharedStartSec,
-                sharedEndSec: plan.sharedEndSec,
-                side,
-                size,
-                video: poseResult.arms,
-                meta: { layer: "arms" },
-              }),
-            ),
-            referenceLegs: upsertOverlaySegment(
-              artifacts.referenceLegs,
-              buildSegmentVideoResult({
-                plan: clipRange,
-                index: plan.index,
-                segmentIndex: plan.segmentIndex,
-                moveIndex: plan.moveIndex,
-                sharedStartSec: plan.sharedStartSec,
-                sharedEndSec: plan.sharedEndSec,
-                side,
-                size,
-                video: poseResult.legs,
-                meta: { layer: "legs" },
-              }),
-            ),
-          };
-        }
-      } else {
-        if (segResult) {
-          artifacts = {
-            ...artifacts,
-            practiceSeg: upsertOverlaySegment(
-              artifacts.practiceSeg,
-              buildSegmentVideoResult({
-                plan: clipRange,
-                index: plan.index,
-                segmentIndex: plan.segmentIndex,
-                moveIndex: plan.moveIndex,
-                sharedStartSec: plan.sharedStartSec,
-                sharedEndSec: plan.sharedEndSec,
-                side,
-                size,
-                video: segResult,
-                meta: { layer: "seg" },
-              }),
-            ),
-          };
-        }
-        if (poseResult) {
-          artifacts = {
-            ...artifacts,
-            practiceArms: upsertOverlaySegment(
-              artifacts.practiceArms,
-              buildSegmentVideoResult({
-                plan: clipRange,
-                index: plan.index,
-                segmentIndex: plan.segmentIndex,
-                moveIndex: plan.moveIndex,
-                sharedStartSec: plan.sharedStartSec,
-                sharedEndSec: plan.sharedEndSec,
-                side,
-                size,
-                video: poseResult.arms,
-                meta: { layer: "arms" },
-              }),
-            ),
-            practiceLegs: upsertOverlaySegment(
-              artifacts.practiceLegs,
-              buildSegmentVideoResult({
-                plan: clipRange,
-                index: plan.index,
-                segmentIndex: plan.segmentIndex,
-                moveIndex: plan.moveIndex,
-                sharedStartSec: plan.sharedStartSec,
-                sharedEndSec: plan.sharedEndSec,
-                side,
-                size,
-                video: poseResult.legs,
-                meta: { layer: "legs" },
-              }),
-            ),
-          };
-        }
-      }
+      return { side, clipRange, size, segResult, poseResult };
     };
 
-    await processSide("reference");
-    await processSide("practice");
+    const referenceResult = await processSide("reference");
+    const practiceResult = await processSide("practice");
+    const normalizationMeta = buildNormalizationMeta(
+      referenceResult.poseResult?.summary ?? null,
+      practiceResult.poseResult?.summary ?? null,
+    );
+
+    if (referenceResult.segResult) {
+      artifacts = {
+        ...artifacts,
+        referenceSeg: upsertOverlaySegment(
+          artifacts.referenceSeg,
+          buildSegmentVideoResult({
+            plan: referenceResult.clipRange,
+            index: plan.index,
+            segmentIndex: plan.segmentIndex,
+            moveIndex: plan.moveIndex,
+            sharedStartSec: plan.sharedStartSec,
+            sharedEndSec: plan.sharedEndSec,
+            side: "reference",
+            size: referenceResult.size,
+            video: referenceResult.segResult,
+            meta: { layer: "seg", normalization: normalizationMeta, poseSummary: referenceResult.poseResult?.summary ?? null },
+          }),
+        ),
+      };
+    }
+    if (referenceResult.poseResult) {
+      artifacts = {
+        ...artifacts,
+        referenceArms: upsertOverlaySegment(
+          artifacts.referenceArms,
+          buildSegmentVideoResult({
+            plan: referenceResult.clipRange,
+            index: plan.index,
+            segmentIndex: plan.segmentIndex,
+            moveIndex: plan.moveIndex,
+            sharedStartSec: plan.sharedStartSec,
+            sharedEndSec: plan.sharedEndSec,
+            side: "reference",
+            size: referenceResult.size,
+            video: referenceResult.poseResult.arms,
+            meta: { layer: "arms", normalization: normalizationMeta, poseSummary: referenceResult.poseResult.summary },
+          }),
+        ),
+        referenceLegs: upsertOverlaySegment(
+          artifacts.referenceLegs,
+          buildSegmentVideoResult({
+            plan: referenceResult.clipRange,
+            index: plan.index,
+            segmentIndex: plan.segmentIndex,
+            moveIndex: plan.moveIndex,
+            sharedStartSec: plan.sharedStartSec,
+            sharedEndSec: plan.sharedEndSec,
+            side: "reference",
+            size: referenceResult.size,
+            video: referenceResult.poseResult.legs,
+            meta: { layer: "legs", normalization: normalizationMeta, poseSummary: referenceResult.poseResult.summary },
+          }),
+        ),
+      };
+    }
+    if (practiceResult.segResult) {
+      artifacts = {
+        ...artifacts,
+        practiceSeg: upsertOverlaySegment(
+          artifacts.practiceSeg,
+          buildSegmentVideoResult({
+            plan: practiceResult.clipRange,
+            index: plan.index,
+            segmentIndex: plan.segmentIndex,
+            moveIndex: plan.moveIndex,
+            sharedStartSec: plan.sharedStartSec,
+            sharedEndSec: plan.sharedEndSec,
+            side: "practice",
+            size: practiceResult.size,
+            video: practiceResult.segResult,
+            meta: { layer: "seg", poseSummary: practiceResult.poseResult?.summary ?? null },
+          }),
+        ),
+      };
+    }
+    if (practiceResult.poseResult) {
+      artifacts = {
+        ...artifacts,
+        practiceArms: upsertOverlaySegment(
+          artifacts.practiceArms,
+          buildSegmentVideoResult({
+            plan: practiceResult.clipRange,
+            index: plan.index,
+            segmentIndex: plan.segmentIndex,
+            moveIndex: plan.moveIndex,
+            sharedStartSec: plan.sharedStartSec,
+            sharedEndSec: plan.sharedEndSec,
+            side: "practice",
+            size: practiceResult.size,
+            video: practiceResult.poseResult.arms,
+            meta: { layer: "arms", poseSummary: practiceResult.poseResult.summary },
+          }),
+        ),
+        practiceLegs: upsertOverlaySegment(
+          artifacts.practiceLegs,
+          buildSegmentVideoResult({
+            plan: practiceResult.clipRange,
+            index: plan.index,
+            segmentIndex: plan.segmentIndex,
+            moveIndex: plan.moveIndex,
+            sharedStartSec: plan.sharedStartSec,
+            sharedEndSec: plan.sharedEndSec,
+            side: "practice",
+            size: practiceResult.size,
+            video: practiceResult.poseResult.legs,
+            meta: { layer: "legs", poseSummary: practiceResult.poseResult.summary },
+          }),
+        ),
+      };
+    }
 
     await persistHybridArtifacts({ sessionId, artifacts });
     syncHybridArtifacts({

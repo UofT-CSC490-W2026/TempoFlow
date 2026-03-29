@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode, RefObject } from "react";
+import type { CSSProperties, ReactNode, RefObject } from "react";
 import { useEbsViewer } from "./useEbsViewer";
 import type { EbsData } from "./types";
 import { buildMovesForSegment } from "./ebsViewerLogic";
@@ -19,7 +19,12 @@ import {
   buildYoloOverlayChunkPlans,
   ensureBrowserYoloOverlays,
 } from "../../lib/ensureBrowserYoloOverlays";
-import { buildOverlayKey, getSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
+import {
+  buildOverlayKey,
+  getSessionOverlay,
+  type OverlayArtifact,
+  type OverlaySegmentArtifact,
+} from "../../lib/overlayStorage";
 import {
   buildOverlaySegmentPlans,
   isOverlayArtifactComplete,
@@ -63,6 +68,7 @@ function YoloHybridOverlayStack(props: {
     artifact: OverlayArtifact | null;
     opacity: number;
     className?: string;
+    getSegmentStyle?: (segment: OverlaySegmentArtifact | null) => CSSProperties | undefined;
   }>;
 }) {
   const { videoRef, layers } = props;
@@ -78,6 +84,7 @@ function YoloHybridOverlayStack(props: {
             artifact={layer.artifact}
             className={layer.className}
             style={{ opacity: layer.opacity }}
+            getSegmentStyle={layer.getSegmentStyle}
           />
         );
       })}
@@ -101,8 +108,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [userVideoUrl, setUserVideoUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<{ message: string; type?: "error" | "success" } | null>(null);
   const [viewMode, setViewMode] = useState<"side" | "overlay">("side");
-  const [overlayViewSource, setOverlayViewSource] = useState<"reference" | "user" | "both">("reference");
-  const [overlayDetector, setOverlayDetector] = useState<"bodypix" | "yolo">("bodypix");
+  const [overlayViewSource, setOverlayViewSource] = useState<"reference" | "user" | "both">("both");
+  const [overlayDetector, setOverlayDetector] = useState<"bodypix" | "yolo">("yolo");
   const overlayVideoRef = useRef<HTMLVideoElement>(null);
   const [overlayCurrentTime, setOverlayCurrentTime] = useState(0);
   
@@ -261,6 +268,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
   }, [loadCachedOverlays]);
 
   useEffect(() => {
+    if (overlayDetector !== "bodypix") {
+      return;
+    }
     if (
       !sessionMode ||
       !overlayCacheReady ||
@@ -317,6 +327,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
         setOverlayBusy(false);
       });
   }, [
+    overlayDetector,
     sessionMode,
     overlayCacheReady,
     sessionId,
@@ -331,7 +342,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
     if (
       !sessionMode ||
       !overlayCacheReady ||
-      overlayDetector !== "yolo" ||
       overlayBusy ||
       !sessionId ||
       !activeReferenceVideoUrl ||
@@ -427,6 +437,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
   // Auto-resume: when BodyPix is already cached but Gemini is missing, auto-enqueue those segments
   useEffect(() => {
+    if (overlayDetector !== "bodypix") {
+      return;
+    }
     if (
       !sessionMode ||
       !overlayCacheReady ||
@@ -487,6 +500,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
       }
     })();
   }, [
+    overlayDetector,
     sessionMode,
     overlayCacheReady,
     sessionId,
@@ -709,6 +723,24 @@ export function FeedbackViewer(props: EbsViewerProps) {
     ],
     [userYoloArtifact, userYoloPoseArmsArtifact, userYoloPoseLegsArtifact],
   );
+  const getNormalizedReferenceOverlayStyle = useCallback(
+    (segment: OverlaySegmentArtifact | null) => {
+      const normalization = segment?.meta?.normalization as
+        | { scale?: number; translateX?: number; translateY?: number }
+        | undefined;
+      if (!normalization) return undefined;
+      const scale = Number(normalization.scale);
+      const translateX = Number(normalization.translateX);
+      const translateY = Number(normalization.translateY);
+      if (!Number.isFinite(scale) || !Number.isFinite(translateX) || !Number.isFinite(translateY)) {
+        return undefined;
+      }
+      return {
+        transform: `translate(${(translateX * 100).toFixed(3)}%, ${(translateY * 100).toFixed(3)}%) scale(${scale.toFixed(4)})`,
+      };
+    },
+    [],
+  );
   const getRenderableSegment = useCallback((artifact: OverlayArtifact | null, index: number) => {
     return (
       artifact?.segments?.find(
@@ -885,8 +917,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
       referenceYoloLayers.map((layer) => ({
         ...layer,
         artifact: mapArtifactToOverlayTimeline(layer.artifact, "reference"),
+        getSegmentStyle: getNormalizedReferenceOverlayStyle,
       })),
-    [mapArtifactToOverlayTimeline, referenceYoloLayers],
+    [getNormalizedReferenceOverlayStyle, mapArtifactToOverlayTimeline, referenceYoloLayers],
   );
   const overlayUserYoloLayers = useMemo(
     () =>

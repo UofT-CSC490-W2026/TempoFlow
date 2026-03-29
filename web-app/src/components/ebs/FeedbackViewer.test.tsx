@@ -48,8 +48,9 @@ vi.mock("../../lib/ensureBrowserBodyPixOverlays", () => ({
 
 vi.mock("../../lib/ensureBrowserYoloOverlays", () => ({
   ensureBrowserYoloOverlays: vi.fn().mockResolvedValue(undefined),
+  buildYoloOverlayChunkPlans: vi.fn(() => []),
   BROWSER_YOLO_OVERLAY_FPS: 12,
-  BROWSER_YOLO_VARIANT: "yolo26n-python-hybrid-v3",
+  BROWSER_YOLO_VARIANT: "yolo26n-python-hybrid-v6",
 }));
 
 describe("FeedbackViewer", () => {

@@ -1,9 +1,8 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import AnalysisPage from "./page"; // Adjust path accordingly
-import { getSession, getCurrentSessionId } from "../../lib/sessionStorage";
+import { getSession } from "../../lib/sessionStorage";
 import { getSessionVideo } from "../../lib/videoStorage";
-import { getSessionEbs } from "../../lib/ebsStorage";
 
 // 1. Mock Next.js Navigation
 vi.mock("next/navigation", () => ({
@@ -41,21 +40,13 @@ describe("AnalysisPage", () => {
     status: "idle",
   };
 
-  const mockEbsData = {
-    segments: [{ id: 1, start: 0, end: 5 }],
-    alignment: { shared_len_sec: 10 },
-    beat_tracking: { estimated_bpm: 120 },
-    segmentation_mode: "auto",
-  };
-
   beforeEach(() => {
     vi.clearAllMocks();
     global.URL.createObjectURL = vi.fn(() => "blob:mock-url");
     global.URL.revokeObjectURL = vi.fn();
     
-    // Default mock returns
-    (getSession as any).mockReturnValue(mockSession);
-    (getSessionVideo as any).mockResolvedValue(new File([], "test.mp4"));
+    vi.mocked(getSession).mockReturnValue(mockSession as ReturnType<typeof getSession>);
+    vi.mocked(getSessionVideo).mockResolvedValue(new File([], "test.mp4"));
   });
 
   it("shows loading spinner initially", () => {

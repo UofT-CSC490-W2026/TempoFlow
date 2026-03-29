@@ -3,7 +3,7 @@
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import Image from "next/image";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import "../../components/ebs/ebs-viewer.css";
 
 import { FeedbackViewer } from "../../components/ebs/FeedbackViewer";
@@ -19,6 +19,20 @@ import {
 import { getSessionVideo } from "../../lib/videoStorage";
 import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 const MAX_EBS_PROCESSING_SECONDS = 5 * 60;
+const LOADING_STEPS = [
+  {
+    title: "Pulling in both takes",
+    detail: "Setting up the reference and practice clips.",
+  },
+  {
+    title: "Matching the beat",
+    detail: "Lining up timing, audio, and shared phrases.",
+  },
+  {
+    title: "Cutting replay moments",
+    detail: "Building the clean segments for review.",
+  },
+];
 
 function getProcessorBaseUrl(processorUrl: string) {
   return processorUrl.replace(/\/api\/process\/?$/, "");
@@ -39,7 +53,6 @@ function buildEbsMeta(data: EbsData) {
 }
 
 function AnalysisPageContent() {
-  const router = useRouter();
   const searchParams = useSearchParams();
 
   const [session, setSession] = useState<TempoFlowSession | null>(null);
@@ -55,14 +68,7 @@ function AnalysisPageContent() {
   const [processingStartedAt, setProcessingStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const generationRequestRef = useRef<string | null>(null);
-  const ebsViewerRef = useRef<{ seekTo: (time: number) => void } | null>(null);
-  const [sharedTime, setSharedTime] = useState(0);
   const processorUrl = getPublicEbsProcessorUrl();
-
-  const handleSeek = (time: number) => {
-    setSharedTime(time);
-    ebsViewerRef.current?.seekTo(time);
-  };
 
   const processorBaseUrl = useMemo(() => getProcessorBaseUrl(processorUrl), [processorUrl]);
   
@@ -132,7 +138,7 @@ function AnalysisPageContent() {
               : "Cached EBS result loaded. This clip aligned successfully but did not produce any playable segments.",
           );
         } else {
-          setStatusMessage("Generating EBS segments from your saved videos. This can take 30 to 180 seconds depending on clip length.");
+          setStatusMessage("Getting your clips ready for sync.");
         }
       } catch (error) {
         console.error("Failed to load local session:", error);
@@ -186,7 +192,7 @@ function AnalysisPageContent() {
       setProcessingStartedAt(Date.now());
       setElapsedSeconds(0);
       setPageError(null);
-      setStatusMessage("Sending videos to the EBS processor and running audio alignment. This may look idle for a while.");
+      setStatusMessage("Matching beat, timing, and replay moments.");
       updateSession(session.id, {
         status: "analyzing",
         ebsStatus: "processing",
@@ -227,7 +233,7 @@ function AnalysisPageContent() {
         for (let attempt = 0; attempt < 2; attempt += 1) {
           try {
             if (attempt > 0) {
-              setStatusMessage("Network hiccup detected. Retrying EBS request...");
+              setStatusMessage("Quick retry after a network wobble.");
               await new Promise((resolve) => setTimeout(resolve, 800));
             }
             ({ response, payload } = await runRequest());
@@ -287,10 +293,10 @@ function AnalysisPageContent() {
         const isFetchFailed =
           message.includes("Failed to fetch") || message.includes("NetworkError");
         const hostedHint = isLocalDevProcessorUrl(processorUrl)
-          ? `Failed to reach ${processorUrl}. Start the A5 API locally: cd A5 && uvicorn src.main:app --host 127.0.0.1 --port 8787`
-          : `Failed to reach ${processorUrl}. Confirm the hosted API (EB/CloudFront) is healthy and redeploy A5 if you updated CORS/COEP headers.`;
+          ? "Couldn't reach the clip processor. Make sure the local service is running, then retry."
+          : "Couldn't reach the clip processor right now. Please retry in a moment.";
         const friendlyMessage = isChromeIoSuspended
-          ? "Browser network I/O was suspended during upload (often caused by the tab going to background, laptop sleep, or aggressive throttling). Keep this tab active and retry."
+          ? "The upload paused when the browser backgrounded the tab. Bring this tab back and retry."
           : isFetchFailed
             ? hostedHint
             : message;
@@ -407,7 +413,7 @@ function AnalysisPageContent() {
       setProcessingEbs(false);
       setProcessingStartedAt(null);
       setStatusMessage(
-        "EBS processing is taking longer than expected. If the Python service has already finished, reload this page to load the cached result.",
+        "This is taking longer than usual. Reload soon if your session does not open automatically.",
       );
     }, MAX_EBS_PROCESSING_SECONDS * 1000);
 
@@ -424,7 +430,7 @@ function AnalysisPageContent() {
     setPageError(null);
     setProcessingStartedAt(null);
     setElapsedSeconds(0);
-    setStatusMessage("Retrying EBS generation...");
+    setStatusMessage("Starting another sync pass.");
   };
 
   const header = (
@@ -464,10 +470,6 @@ function AnalysisPageContent() {
     </header>
   );
 
-  const sessionSummary = useMemo(() => {
-    if (!session) return null;
-    return `${session.practiceName} vs ${session.referenceName}`;
-  }, [session]);
   const elapsedLabel = useMemo(() => {
     if (!processingEbs) return null;
     if (elapsedSeconds < 60) return `${elapsedSeconds}s elapsed`;
@@ -476,6 +478,7 @@ function AnalysisPageContent() {
     return `${min}m ${sec}s elapsed`;
   }, [elapsedSeconds, processingEbs]);
   const loadingProgressWidth = processingEbs ? Math.min(92, 28 + elapsedSeconds * 0.8) : 18;
+  const activeLoadingStep = processingEbs ? Math.min(LOADING_STEPS.length - 1, Math.floor(elapsedSeconds / 7)) : 0;
 
   if (loadingSession) {
     return (
@@ -523,65 +526,139 @@ function AnalysisPageContent() {
       <div className="min-h-screen bg-sky-50">
         {header}
         <div className="mx-auto max-w-3xl px-6 py-12">
-          <div className="rounded-[32px] border border-sky-100 bg-white p-8 shadow-sm">
-            <div className="flex items-start justify-between gap-6">
-            <div>
-                <p className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-600">
-                  TempoFlow EBS Session
-                </p>
-                <h1 className="mt-3 text-3xl font-bold text-slate-900">
-                  {processingEbs ? "Generating beat-synced segments" : "Preparing session"}
-                </h1>
-                <p className="mt-2 text-slate-600">{statusMessage}</p>
-                {elapsedLabel ? <p className="mt-2 text-sm font-medium text-sky-700">{elapsedLabel}</p> : null}
-                {sessionSummary ? <p className="mt-4 text-sm text-slate-500">{sessionSummary}</p> : null}
-            </div>
-              <div className="h-12 w-12 rounded-2xl border border-sky-100 bg-sky-50 flex items-center justify-center">
-                <div className="h-6 w-6 animate-spin rounded-full border-2 border-sky-200 border-t-sky-500" />
-              </div>
-                    </div>
+          <div className="relative overflow-hidden rounded-[36px] border border-white/70 bg-white/72 p-8 shadow-[0_30px_80px_rgba(56,189,248,0.14)] backdrop-blur-xl">
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_top,rgba(56,189,248,0.12),transparent_42%),radial-gradient(circle_at_bottom_right,rgba(59,130,246,0.1),transparent_34%)]"
+            />
 
-            <div className="mt-8 h-2 overflow-hidden rounded-full bg-sky-100">
+            <div className="relative flex items-start justify-between gap-6">
+              <div className="max-w-2xl">
+                <div className="flex flex-wrap items-center gap-3">
+                  <span className="rounded-full bg-slate-950 px-4 py-2 text-[11px] font-semibold uppercase tracking-[0.3em] text-cyan-200">
+                    Session in motion
+                  </span>
+                  {elapsedLabel ? (
+                    <span className="rounded-full border border-sky-100 bg-white/80 px-4 py-2 text-sm font-medium text-sky-700 shadow-sm">
+                      {elapsedLabel}
+                    </span>
+                  ) : null}
+                </div>
+
+                <h1 className="mt-5 text-3xl font-black tracking-[-0.04em] text-slate-950 md:text-5xl">
+                  {processingEbs ? "Syncing your clips" : "Warming up your session"}
+                </h1>
+                <p className="mt-3 max-w-xl text-lg text-slate-600">
+                  {processingEbs
+                    ? "Reading the beat, matching timing, and shaping replay-ready moments."
+                    : "Pulling your saved takes back into the studio."}
+                </p>
+
+                <div className="mt-5 flex flex-wrap gap-3">
+                  {session?.referenceName ? (
+                    <span className="rounded-full border border-sky-100 bg-white/85 px-4 py-2 text-sm font-medium text-slate-600 shadow-sm">
+                      Ref: {session.referenceName}
+                    </span>
+                  ) : null}
+                  {session?.practiceName ? (
+                    <span className="rounded-full border border-sky-100 bg-white/85 px-4 py-2 text-sm font-medium text-slate-600 shadow-sm">
+                      Practice: {session.practiceName}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+
+              <div className="hidden rounded-[28px] border border-white/80 bg-white/70 p-5 shadow-[0_18px_44px_rgba(56,189,248,0.12)] backdrop-blur md:block">
+                <div className="flex h-16 w-16 items-center justify-center rounded-[22px] bg-[linear-gradient(135deg,#0f172a,#2563eb)]">
+                  <div className="h-8 w-8 animate-spin rounded-full border-[3px] border-white/25 border-t-white" />
+                </div>
+                <div className="mt-4 flex items-end gap-1.5">
+                  {[18, 36, 24, 42, 30, 48].map((height, index) => (
+                    <span
+                      key={height + index}
+                      className="home-float-fast inline-block w-2 rounded-full bg-gradient-to-t from-cyan-300 to-blue-500"
+                      style={{ height: `${height}px`, animationDelay: `${index * 120}ms` }}
+                    />
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            <div className="relative mt-8 h-3 overflow-hidden rounded-full bg-sky-100/90">
               <div
-                className="h-full rounded-full bg-gradient-to-r from-sky-400 to-blue-600 transition-all duration-700"
+                className="h-full rounded-full bg-gradient-to-r from-cyan-400 via-sky-500 to-blue-600 transition-all duration-700"
                 style={{ width: `${loadingProgressWidth}%` }}
               />
             </div>
 
-            <div className="mt-5 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-slate-600">
-              <p className="font-medium text-slate-900">What is happening now</p>
-              <p className="mt-2">
-                {isLocalDevProcessorUrl(processorUrl) ? (
-                  <>
-                    TempoFlow is sending both videos to your local A5 EBS service (Python), extracting audio, aligning
-                    the clips, then building beat-synced segments. Short clips are often a few seconds; larger files can
-                    take longer.
-                  </>
-                ) : (
-                  <>
-                    TempoFlow is uploading both videos to the hosted alignment API, then extracting audio, aligning the
-                    clips, and building beat-synced segments. Upload time depends on your network; processing time
-                    depends on clip length (hosted runs can take longer than a local dev server).
-                  </>
-                )}
-              </p>
-              <p className="mt-2 text-slate-500">
-                {isLocalDevProcessorUrl(processorUrl) ? (
-                  <>
-                    Keep this tab active while processing. If the browser suspends the request, retry after confirming{" "}
-                    <code className="rounded bg-sky-100 px-1">uvicorn</code> is still running on port 8787.
-                  </>
-                ) : (
-                  <>
-                    Keep this tab active while processing. Very long clips may hit API timeouts — try shorter test
-                    videos if uploads finish but the request fails.
-                  </>
-                )}
-              </p>
+            <div className="mt-6 grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
+              <div className="rounded-[28px] border border-sky-100 bg-[linear-gradient(145deg,rgba(255,255,255,0.95),rgba(240,249,255,0.88))] p-5 shadow-[0_18px_44px_rgba(56,189,248,0.08)]">
+                <p className="text-sm font-semibold uppercase tracking-[0.28em] text-sky-700">Now building</p>
+                <div className="mt-5 space-y-3">
+                  {LOADING_STEPS.map((step, index) => {
+                    const isComplete = processingEbs && index < activeLoadingStep;
+                    const isActive = index === activeLoadingStep;
+
+                    return (
+                      <div
+                        key={step.title}
+                        className={`rounded-[22px] border px-4 py-4 transition-all ${
+                          isActive
+                            ? "border-sky-200 bg-white shadow-[0_14px_30px_rgba(56,189,248,0.12)]"
+                            : isComplete
+                              ? "border-cyan-100 bg-cyan-50/70"
+                              : "border-slate-100 bg-white/70"
+                        }`}
+                      >
+                        <div className="flex items-start gap-3">
+                          <div
+                            className={`mt-0.5 flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl text-sm font-bold ${
+                              isActive
+                                ? "bg-slate-950 text-cyan-200"
+                                : isComplete
+                                  ? "bg-cyan-500 text-white"
+                                  : "bg-slate-100 text-slate-500"
+                            }`}
+                          >
+                            {isComplete ? "✓" : index + 1}
+                          </div>
+                          <div>
+                            <p className="text-lg font-semibold tracking-tight text-slate-950">{step.title}</p>
+                            <p className="mt-1 text-sm text-slate-500">{step.detail}</p>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="rounded-[28px] border border-slate-950/8 bg-slate-950 p-5 text-white shadow-[0_24px_50px_rgba(15,23,42,0.18)]">
+                <div className="flex items-center justify-between">
+                  <span className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">
+                    Live sync
+                  </span>
+                  <span className="text-xs uppercase tracking-[0.28em] text-white/45">TempoFlow</span>
+                </div>
+                <p className="mt-5 text-2xl font-black tracking-[-0.04em]">Almost stage-ready</p>
+                <p className="mt-3 text-sm text-white/70">
+                  Hang tight while we line up the strongest replay moments.
+                </p>
+                <div className="mt-6 flex items-end gap-2">
+                  {[24, 38, 30, 54, 36, 62, 28].map((height, index) => (
+                    <span
+                      key={`sync-${height + index}`}
+                      className="home-float-slow inline-block w-3 rounded-full bg-gradient-to-t from-cyan-300 to-blue-500"
+                      style={{ height: `${height}px`, animationDelay: `${index * 140}ms` }}
+                    />
+                  ))}
+                </div>
+                <p className="mt-6 text-sm text-white/55">{statusMessage}</p>
+              </div>
             </div>
 
             {pageError ? (
-              <div className="mt-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-4">
+              <div className="mt-6 rounded-[28px] border border-red-100 bg-red-50/95 px-5 py-5 shadow-[0_16px_34px_rgba(239,68,68,0.08)]">
                 <p className="text-sm font-medium text-red-700">{pageError}</p>
                 <div className="mt-4 flex flex-wrap gap-3">
                   <button
@@ -598,14 +675,9 @@ function AnalysisPageContent() {
                   </Link>
                 </div>
               </div>
-            ) : isLocalDevProcessorUrl(processorUrl) ? (
-              <p className="mt-6 text-sm text-slate-500">
-                Point <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_EBS_PROCESSOR_URL</code> at your local A5
-                server when developing offline.
-              </p>
             ) : (
               <p className="mt-6 text-sm text-slate-500">
-                Using hosted processor: <code className="rounded bg-slate-100 px-1 break-all">{processorUrl}</code>
+                Keep this tab open while we finish the sync.
               </p>
             )}
           </div>
