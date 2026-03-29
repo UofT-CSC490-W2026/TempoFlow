@@ -23,6 +23,11 @@ import {
   type GeminiFeedbackPanelHandle,
   type GeminiFlatMove,
 } from "./GeminiFeedbackPanel";
+import {
+  buildFeedbackSegmentKey,
+  getFeedbackSegment,
+  hashEbsData,
+} from "../../lib/feedbackStorage";
 
 type ManualViewerProps = {
   mode?: "manual";
@@ -104,6 +109,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [userBodyPixArtifact, setUserBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   const autoBodyPixStartedRef = useRef(false);
   const geminiFeedbackRef = useRef<GeminiFeedbackPanelHandle>(null);
+  const autoGeminiQueuedRef = useRef<Set<number>>(new Set());
+  const ebsFingerprint = useMemo(() => (sessionEbsData ? hashEbsData(sessionEbsData) : ""), [sessionEbsData]);
 
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
@@ -203,6 +210,77 @@ export function FeedbackViewer(props: EbsViewerProps) {
     sessionEbsData,
     refBodyPixArtifact,
     userBodyPixArtifact,
+  ]);
+
+  // Auto-resume: when BodyPix is already cached but Gemini is missing, auto-enqueue those segments
+  useEffect(() => {
+    if (
+      !sessionMode ||
+      !overlayCacheReady ||
+      !sessionId ||
+      !sessionEbsData ||
+      !refBodyPixArtifact ||
+      !userBodyPixArtifact
+    ) {
+      return;
+    }
+
+    const plans = buildOverlaySegmentPlans(sessionEbsData);
+    const n = plans.length;
+    if (n === 0) return;
+
+    // Only proceed if BodyPix is fully complete
+    const refComplete = isOverlayArtifactComplete(refBodyPixArtifact, n);
+    const userComplete = isOverlayArtifactComplete(userBodyPixArtifact, n);
+    if (!refComplete || !userComplete) return;
+
+    // Check each segment for BodyPix present but Gemini missing
+    void (async () => {
+      for (let i = 0; i < n; i++) {
+        if (autoGeminiQueuedRef.current.has(i)) continue;
+
+        // Verify segment has BodyPix data
+        const hasBodyPix =
+          (refBodyPixArtifact?.segments?.[i]?.frames?.length ?? 0) > 0 &&
+          (userBodyPixArtifact?.segments?.[i]?.frames?.length ?? 0) > 0;
+        if (!hasBodyPix) continue;
+
+        // Check if Gemini already cached (default settings: burnIn=true, audio=false)
+        const key = buildFeedbackSegmentKey({
+          sessionId,
+          segmentIndex: i,
+          burnInLabels: true,
+          includeAudio: false,
+          ebsFingerprint,
+        });
+        const cached = await getFeedbackSegment(key);
+        if (!cached) {
+          // Also check with audio=true variant
+          const keyAudio = buildFeedbackSegmentKey({
+            sessionId,
+            segmentIndex: i,
+            burnInLabels: true,
+            includeAudio: true,
+            ebsFingerprint,
+          });
+          const cachedAudio = await getFeedbackSegment(keyAudio);
+          if (!cachedAudio) {
+            autoGeminiQueuedRef.current.add(i);
+            queueMicrotask(() => {
+              geminiFeedbackRef.current?.enqueueSegmentAfterBodyPix(i);
+            });
+          }
+        }
+      }
+    })();
+  }, [
+    sessionMode,
+    overlayCacheReady,
+    sessionId,
+    sessionEbsData,
+    refBodyPixArtifact,
+    userBodyPixArtifact,
+    ebsFingerprint,
   ]);
 
   useEffect(() => {
