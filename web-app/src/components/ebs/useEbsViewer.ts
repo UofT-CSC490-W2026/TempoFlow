@@ -136,7 +136,9 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     if (!alignment) return;
     // In overlay mode, read time from overlay video (user video with clip_2_start_sec offset)
     if (overlayVideo?.current) {
-      setSharedTime(overlayVideo.current.currentTime - alignment.clip_2_start_sec);
+      const sharedTime = overlayVideo.current.currentTime - alignment.clip_2_start_sec;
+      console.log("[DEBUG] overlay time:", overlayVideo.current.currentTime, "shared:", sharedTime);
+      setSharedTime(sharedTime);
       return;
     }
     if (!refVideo.current || !userVideo.current) return;
@@ -213,11 +215,12 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
   }, [refVideo, userVideo, overlayVideo]);
 
   const startPlayback = useCallback(() => {
+    console.log("[DEBUG] startPlayback called, overlayVideo?.current:", overlayVideo?.current ? "exists" : "null");
     if (overlayVideo?.current) {
       // Overlay mode: play only overlay video
       hidePauseOverlay();
       playingRef.current = true;
-      void overlayVideo.current.play().catch(() => undefined);
+      void overlayVideo.current.play().catch((e) => { console.log("[DEBUG] overlay play error:", e); });
       setIsPlaying(true);
 
       const tick = () => {
@@ -255,6 +258,7 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
   }, [hidePauseOverlay, refVideo, syncUserToRef, updateTimesFromDom, userVideo, overlayVideo]);
 
   const togglePlay = useCallback(() => {
+    console.log("[DEBUG] togglePlay called, playingRef.current:", playingRef.current, "overlayVideo?.current:", overlayVideo?.current ? "exists" : "null");
     if (playingRef.current) {
       pausePlayback();
     } else {
