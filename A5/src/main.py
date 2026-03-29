@@ -20,6 +20,7 @@ from fastapi.responses import HTMLResponse, JSONResponse
 from src.alignment_and_segmentation.router import router as alignment_router
 from src.ebs_web_adapter import process_videos_from_paths, save_upload, save_upload_async
 from src.overlay_api import router as overlay_router
+from src.live_coach_proxy import router as live_coach_router
 from src.eval.runner import run_move_feedback_pipeline
 from src.eval import router as eval_router
 
@@ -48,6 +49,7 @@ async def add_cross_origin_resource_policy(request, call_next):
 # Include routers
 app.include_router(alignment_router, prefix="/a5")
 app.include_router(overlay_router)
+app.include_router(live_coach_router)
 app.include_router(eval_router)
 
 SESSION_STATUS: dict[str, str] = {}
