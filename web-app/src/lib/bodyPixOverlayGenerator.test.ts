@@ -1,6 +1,11 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { generateBodyPixOverlayFrames } from "./bodyPixOverlayGenerator";
 
+const { segmentPersonPartsMock, bodyPixLoadMock } = vi.hoisted(() => ({
+  segmentPersonPartsMock: vi.fn(),
+  bodyPixLoadMock: vi.fn(),
+}));
+
 // 1. Mock the Core TFJS modules to prevent backend initialization errors
 vi.mock("@tensorflow/tfjs-core", () => ({
   setBackend: vi.fn().mockResolvedValue(true),
@@ -13,20 +18,24 @@ vi.mock("@tensorflow/tfjs-backend-webgl", () => ({
 
 // 2. Mock BodyPix
 vi.mock("@tensorflow-models/body-pix", () => ({
-  load: vi.fn().mockResolvedValue({
-    segmentPersonParts: vi.fn().mockResolvedValue({
-      data: new Int32Array(100).fill(1),
-      width: 10,
-      height: 10,
-    }),
-  }),
+  load: (...args: unknown[]) => bodyPixLoadMock(...args),
 }));
 
 describe("generateBodyPixOverlayFrames", () => {
   let mockVideo: any;
+  let lastMaskImageData: { data: Uint8ClampedArray } | null;
 
   beforeEach(() => {
     vi.clearAllMocks();
+    lastMaskImageData = null;
+    segmentPersonPartsMock.mockResolvedValue({
+      data: new Int32Array(100).fill(1),
+      width: 10,
+      height: 10,
+    });
+    bodyPixLoadMock.mockResolvedValue({
+      segmentPersonParts: (...args: unknown[]) => segmentPersonPartsMock(...args),
+    });
 
     // Setup Video Mock
     mockVideo = {
@@ -47,26 +56,40 @@ describe("generateBodyPixOverlayFrames", () => {
       removeEventListener: vi.fn(),
     };
 
-    // Setup Canvas Mock
-    const mockCanvas = {
-      getContext: vi.fn(() => ({
-        createImageData: vi.fn(() => ({ data: new Uint8ClampedArray(400) })),
-        putImageData: vi.fn(),
-        clearRect: vi.fn(),
-        drawImage: vi.fn(),
-        imageSmoothingEnabled: true,
-        imageSmoothingQuality: "high",
-      })),
-      toBlob: vi.fn((cb) => cb(new Blob(["mock-frame"], { type: "image/webp" }))),
-      width: 640,
-      height: 480,
-    };
-
     // Stub document.createElement
+    let canvasCount = 0;
     vi.stubGlobal("document", {
       createElement: vi.fn((tag: string) => {
         if (tag === "video") return mockVideo;
-        if (tag === "canvas") return mockCanvas;
+        if (tag === "canvas") {
+          canvasCount += 1;
+          if (canvasCount === 1) {
+            return {
+              getContext: vi.fn(() => ({
+                clearRect: vi.fn(),
+                drawImage: vi.fn(),
+                imageSmoothingEnabled: true,
+                imageSmoothingQuality: "high",
+              })),
+              toBlob: vi.fn((cb) => cb(new Blob(["mock-frame"], { type: "image/webp" }))),
+              width: 640,
+              height: 480,
+            };
+          }
+
+          return {
+            getContext: vi.fn(() => ({
+              createImageData: vi.fn((width: number, height: number) => ({
+                data: new Uint8ClampedArray(width * height * 4),
+              })),
+              putImageData: vi.fn((imageData) => {
+                lastMaskImageData = imageData;
+              }),
+            })),
+            width: 640,
+            height: 480,
+          };
+        }
         return {};
       }),
     });

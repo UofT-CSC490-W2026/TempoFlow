@@ -28,7 +28,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      <div className="fixed top-0 left-0 right-0 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10">
+      <div className="sticky top-0 left-0 right-0 bg-white/80 backdrop-blur-md border-b border-slate-100 z-10">
         <div className="flex items-center justify-between px-6 py-4">
           <Link href="/" className="flex items-center">
             <Image 
@@ -49,7 +49,7 @@ export default function DashboardPage() {
         </div>
       </div>
 
-      <div className="px-6 pt-24 pb-12 max-w-4xl mx-auto">
+      <div className="mx-auto max-w-4xl px-6 py-12">
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-slate-800 mb-1">Sessions</h1>
         </div>

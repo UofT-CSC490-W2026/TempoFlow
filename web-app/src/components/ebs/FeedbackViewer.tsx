@@ -6,6 +6,7 @@ import { useEbsViewer } from "./useEbsViewer";
 import type { EbsData } from "./types";
 import { BodyPixOverlay } from "../BodyPixOverlay";
 import { ProgressiveOverlay } from "../ProgressiveOverlay";
+import { OverlayMaskLayer } from "./OverlayMaskLayer";
 import {
   BROWSER_BODYPIX_OVERLAY_FPS,
   BROWSER_BODYPIX_VARIANT,
@@ -470,16 +471,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
     currentPracticeSegment && state.practice.moves.length
       ? `${state.practice.moves.length} moves · ${(currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec).toFixed(1)}s segment · plays ${((currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec) / state.practice.playbackRate).toFixed(1)}s at ${practiceSpeedText}`
       : "";
-  const sessionNameTags = useMemo(() => {
-      if (!sessionMode) return null;
-      return (
-        <>
-          {sessionReferenceName ? <span className="ebs-tag">{sessionReferenceName}</span> : null}
-          {sessionPracticeName ? <span className="ebs-tag">{sessionPracticeName}</span> : null}
-        </>
-      );
-    }, [sessionMode, sessionPracticeName, sessionReferenceName]);
-
   // Overlay diff: get frame from per-segment BodyPix artifacts for current time
   const getOverlayDiffFrame = useCallback((
     artifact: OverlayArtifact | null,
@@ -546,13 +537,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 checked={state.pauseAtSegmentEnd}
                 onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
               />
-              <>
-                {sessionNameTags}
-                <span className="ebs-tag green">{bpm} BPM</span>
-                <span className="ebs-tag">{nb} beats</span>
-                <span className="ebs-tag">{state.segments.length} segments</span>
-                <span className="ebs-tag orange">{mode}</span>
-              </>
               <div className="flex-1" />
               {/* View mode toggle */}
               <div className="flex items-center gap-2 mr-4">
@@ -696,28 +680,32 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   />
                   {/* Layer 1: Reference ghost (BodyPix overlay) - tinted green */}
                   {(overlayViewSource === "reference" || overlayViewSource === "both") && refOverlayFrame && (
-                    <img
-                      src={refOverlayFrame instanceof Blob ? URL.createObjectURL(refOverlayFrame) : refOverlayFrame}
-                      alt="Reference ghost"
-                      className="absolute inset-0 w-full h-full object-contain pointer-events-none z-10"
-                      style={{
-                        mixBlendMode: "multiply",
-                        filter: "brightness(0.7) saturate(0) sepia(0.6) hue-rotate(90deg) saturate(1.2) drop-shadow(2px 2px 0 #22c55e) drop-shadow(-2px -2px 0 #22c55e) drop-shadow(2px -2px 0 #22c55e) drop-shadow(-2px 2px 0 #22c55e)",
-                        opacity: 0.6,
-                      }}
+                    <OverlayMaskLayer
+                      frame={refOverlayFrame}
+                      color={{ r: 14, g: 165, b: 233 }}
+                      fillOpacity={0.08}
+                      contourOpacity={0.88}
+                      contourRadius={2}
+                      seamOpacity={0.42}
+                      seamRadius={1}
+                      glowOpacity={0.16}
+                      glowRadius={4}
+                      className="z-10"
                     />
                   )}
                   {/* Layer 2: User BodyPix overlay - tinted red-orange */}
                   {(overlayViewSource === "user" || overlayViewSource === "both") && userOverlayFrame && (
-                    <img
-                      src={userOverlayFrame instanceof Blob ? URL.createObjectURL(userOverlayFrame) : userOverlayFrame}
-                      alt="User overlay"
-                      className="absolute inset-0 w-full h-full object-contain pointer-events-none z-20"
-                      style={{
-                        mixBlendMode: "multiply",
-                        filter: "brightness(0.7) saturate(0) sepia(0.6) hue-rotate(320deg) saturate(1.2) drop-shadow(2px 2px 0 #ef4444) drop-shadow(-2px -2px 0 #ef4444) drop-shadow(2px -2px 0 #ef4444) drop-shadow(-2px 2px 0 #ef4444)",
-                        opacity: 0.5,
-                      }}
+                    <OverlayMaskLayer
+                      frame={userOverlayFrame}
+                      color={{ r: 249, g: 115, b: 22 }}
+                      fillOpacity={0.12}
+                      contourOpacity={0.92}
+                      contourRadius={2}
+                      seamOpacity={0.5}
+                      seamRadius={1}
+                      glowOpacity={0.18}
+                      glowRadius={4}
+                      className="z-20"
                     />
                   )}
                 </div>
@@ -1076,4 +1064,3 @@ export function FeedbackViewer(props: EbsViewerProps) {
     </div>
   );
 }
-

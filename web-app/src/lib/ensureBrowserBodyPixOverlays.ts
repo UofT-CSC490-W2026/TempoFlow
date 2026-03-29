@@ -14,7 +14,7 @@ import {
 
 export const BROWSER_BODYPIX_OVERLAY_FPS = 12;
 /** Must match keys written by the session viewer (browser TF.js path). */
-export const BROWSER_BODYPIX_VARIANT = "bodypix24-browser";
+export const BROWSER_BODYPIX_VARIANT = "bodypix24-browser-clean-v3";
 
 async function runSegmentedBrowserBodyPixPipeline(params: {
   sessionId: string;

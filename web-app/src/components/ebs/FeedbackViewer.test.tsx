@@ -13,6 +13,9 @@ vi.mock("../BodyPixOverlay", () => ({ BodyPixOverlay: () => <div data-testid="bo
 vi.mock("../ProgressiveOverlay", () => ({
   ProgressiveOverlay: () => <div data-testid="progressive-overlay" />,
 }));
+vi.mock("./OverlayMaskLayer", () => ({
+  OverlayMaskLayer: () => <div data-testid="overlay-mask-layer" />,
+}));
 vi.mock("./GeminiFeedbackPanel", () => {
   const React = require("react");
   return {
@@ -40,7 +43,7 @@ vi.mock("../../lib/overlayStorage", () => ({
 vi.mock("../../lib/ensureBrowserBodyPixOverlays", () => ({
   ensureBrowserBodyPixOverlays: vi.fn().mockResolvedValue(undefined),
   BROWSER_BODYPIX_OVERLAY_FPS: 12,
-  BROWSER_BODYPIX_VARIANT: "bodypix24-browser",
+  BROWSER_BODYPIX_VARIANT: "bodypix24-browser-clean-v3",
 }));
 
 describe("FeedbackViewer", () => {

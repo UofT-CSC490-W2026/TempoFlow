@@ -66,8 +66,8 @@ describe('Dashboard page', () => {
   it('renders the empty state when there are no saved sessions', () => {
     render(React.createElement(DashboardPage));
 
-    expect(screen.getByText(/no dances yet/i)).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /upload video/i })).toHaveAttribute(
+    expect(screen.getByText(/no sessions/i)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: /start/i })).toHaveAttribute(
       'href',
       '/upload',
     );
@@ -98,12 +98,12 @@ describe('Dashboard page', () => {
 
     render(React.createElement(DashboardPage));
 
-    expect(screen.getByRole('heading', { name: /your dances/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /sessions/i })).toBeInTheDocument();
     expect(screen.getByText('practice.mp4')).toBeInTheDocument();
     expect(screen.getByText(/ref: reference\.mp4/i)).toBeInTheDocument();
     expect(screen.getByText('6 segments')).toBeInTheDocument();
     expect(screen.getByText('128 BPM')).toBeInTheDocument();
-    expect(screen.getByRole('link', { name: /open session/i })).toHaveAttribute(
+    expect(screen.getByRole('link', { name: /^open$/i })).toHaveAttribute(
       'href',
       '/analysis?session=session-1',
     );

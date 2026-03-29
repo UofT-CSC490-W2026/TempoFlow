@@ -1,34 +1,9 @@
 "use client";
 
+import { BODYPIX_PART_COLORS } from "./bodyPix/palette";
+
 type BodyPixModule = typeof import("@tensorflow-models/body-pix");
 type BodyPixNet = Awaited<ReturnType<BodyPixModule["load"]>>;
-
-const BODYPIX_PART_COLORS: Array<[number, number, number]> = [
-  [110, 64, 170],
-  [106, 72, 183],
-  [100, 81, 196],
-  [92, 91, 206],
-  [84, 101, 214],
-  [75, 113, 221],
-  [66, 125, 224],
-  [56, 138, 226],
-  [48, 150, 224],
-  [40, 163, 220],
-  [33, 176, 214],
-  [29, 188, 205],
-  [26, 199, 194],
-  [26, 210, 182],
-  [28, 219, 169],
-  [33, 227, 155],
-  [41, 234, 141],
-  [51, 240, 128],
-  [64, 243, 116],
-  [79, 246, 105],
-  [96, 247, 97],
-  [115, 246, 91],
-  [134, 245, 88],
-  [155, 243, 88],
-];
 
 let bodyPixPromise: Promise<BodyPixNet> | null = null;
 
