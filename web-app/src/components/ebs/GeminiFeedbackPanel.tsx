@@ -100,6 +100,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
   const [results, setResults] = useState<GeminiSegmentResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filterLabel, setFilterLabel] = useState<string>("all");
+  const [currentMoveIndex, setCurrentMoveIndex] = useState<number>(0);
   const [showPipelineDebug, setShowPipelineDebug] = useState(false);
   const [burnInLabels, setBurnInLabels] = useState(true);
   const [includeAudio, setIncludeAudio] = useState(false);
@@ -181,6 +182,28 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
     if (filterLabel === "all") return flatMoves;
     return flatMoves.filter((m) => m.micro_timing_label === filterLabel);
   }, [flatMoves, filterLabel]);
+
+  // Reset current index when filter changes
+  useEffect(() => {
+    setCurrentMoveIndex(0);
+  }, [filterLabel]);
+
+  // Auto-transition to current move based on sharedTime
+  useEffect(() => {
+    if (filtered.length === 0) return;
+    
+    // Find the move that contains the current time
+    const activeIndex = filtered.findIndex((m) => {
+      const start = m.shared_start_sec ?? 0;
+      const end = m.shared_end_sec ?? start;
+      return sharedTime >= start && sharedTime < end;
+    });
+    
+    // If found and different from current, update
+    if (activeIndex !== -1 && activeIndex !== currentMoveIndex) {
+      setCurrentMoveIndex(activeIndex);
+    }
+  }, [sharedTime, filtered, currentMoveIndex]);
 
   useEffect(() => {
     const container = listRef.current;
@@ -459,111 +482,133 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
             </span>
           </div>
 
-          {/* Move list */}
-          <div
-            ref={listRef}
-            onMouseEnter={() => { userHovering.current = true; }}
-            onMouseLeave={() => { userHovering.current = false; }}
-            className="max-h-[420px] overflow-y-auto divide-y divide-indigo-50"
-          >
-            {filtered.map((m, i) => {
-              const badge = TIMING_BADGES[m.micro_timing_label] ?? DEFAULT_BADGE;
-              const mid = ((m.shared_start_sec ?? 0) + (m.shared_end_sec ?? 0)) / 2;
-              const isNear = Math.abs(mid - sharedTime) < 0.8;
+          {/* Move list - single item view with navigation */}
+          <div className="border-t border-indigo-50">
+            {filtered.length > 0 && (
+              <>
+                {/* Navigation header */}
+                <div className="px-5 py-2 border-b border-indigo-50 flex items-center justify-between bg-slate-50/50">
+                  <button
+                    onClick={() => setCurrentMoveIndex((i) => Math.max(0, i - 1))}
+                    disabled={currentMoveIndex === 0}
+                    className="px-3 py-1 text-xs font-medium rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ◀ Prev
+                  </button>
+                  <span className="text-xs font-medium text-slate-600">
+                    {currentMoveIndex + 1} / {filtered.length}
+                  </span>
+                  <button
+                    onClick={() => setCurrentMoveIndex((i) => Math.min(filtered.length - 1, i + 1))}
+                    disabled={currentMoveIndex >= filtered.length - 1}
+                    className="px-3 py-1 text-xs font-medium rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Next ▶
+                  </button>
+                </div>
 
-              return (
-                <button
-                  key={`${m.segmentIndex}-${m.move_index}-${i}`}
-                  onClick={() => onSeek(m.shared_start_sec ?? mid)}
-                  className={`w-full text-left px-5 py-3.5 transition-all hover:bg-indigo-50/50 ${
-                    isNear ? "bg-indigo-50/60 ring-inset ring-1 ring-indigo-200" : ""
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex flex-col items-center gap-1 pt-0.5 shrink-0">
-                      <div className={`w-2.5 h-2.5 rounded-full ${badge.dot}`} />
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {fmtTime(m.shared_start_sec ?? 0)}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[11px] font-mono text-slate-500">
+                {/* Single move display - clickable card */}
+                {(() => {
+                  const m = filtered[currentMoveIndex];
+                  if (!m) return null;
+                  const badge = TIMING_BADGES[m.micro_timing_label] ?? DEFAULT_BADGE;
+                  const mid = ((m.shared_start_sec ?? 0) + (m.shared_end_sec ?? 0)) / 2;
+
+                  return (
+                    <div 
+                      onClick={() => onSeek(m.shared_start_sec ?? mid)}
+                      className="px-5 py-4 cursor-pointer hover:bg-slate-50/50 transition-colors"
+                    >
+                      {/* Header row */}
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className={`w-2.5 h-2.5 rounded-full ${badge.dot}`} />
+                        <span className="text-sm font-mono font-medium text-slate-700">
                           Move {m.move_index}
                         </span>
-                        <span
-                          title={TIMING_LABEL_FRIENDLY[m.micro_timing_label] ?? undefined}
-                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide ${badge.bg} ${badge.color}`}
-                        >
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide ${badge.bg} ${badge.color}`}>
                           {badge.label}
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {fmtTime(m.shared_start_sec ?? 0)}&ndash;{fmtTime(m.shared_end_sec ?? 0)}
+                        <span className="text-[11px] text-slate-400 font-mono ml-auto">
+                          {fmtTime(m.shared_start_sec ?? 0)}–{fmtTime(m.shared_end_sec ?? 0)}
                         </span>
-                        {m.confidence && (
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                              m.confidence === "high"
-                                ? "bg-emerald-50 text-emerald-600"
-                                : m.confidence === "medium"
-                                  ? "bg-amber-50 text-amber-600"
-                                  : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {m.confidence}
-                          </span>
-                        )}
-                        {m.user_relative_to_reference && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">
-                            vs ref: {m.user_relative_to_reference}
-                          </span>
-                        )}
-                        <span className="text-[10px] text-slate-400 ml-auto">Seg {m.segmentIndex}</span>
                       </div>
+
+                      {/* Timing explanation */}
                       {TIMING_LABEL_FRIENDLY[m.micro_timing_label] && (
-                        <p className="text-[10px] text-slate-500 mt-0.5 leading-snug">
+                        <p className="text-xs text-slate-500 mb-2 leading-snug">
                           {TIMING_LABEL_FRIENDLY[m.micro_timing_label]}
                         </p>
                       )}
-                      {m.guardrail_note && (
-                        <p className="text-[10px] text-amber-800 mt-1 bg-amber-50/80 rounded px-1.5 py-0.5">
-                          {m.guardrail_note}
-                        </p>
-                      )}
+
+                      {/* Evidence */}
                       {m.micro_timing_evidence && (
-                        <p className="text-[11px] text-slate-600 mt-1.5 leading-snug">
+                        <p className="text-sm text-slate-700 mb-3 leading-relaxed">
                           {m.micro_timing_evidence}
                         </p>
                       )}
+
+                      {/* Meta info row */}
+                      <div className="flex items-center gap-2 flex-wrap mb-3">
+                        {m.confidence && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                            m.confidence === "high"
+                              ? "bg-emerald-50 text-emerald-600"
+                              : m.confidence === "medium"
+                                ? "bg-amber-50 text-amber-600"
+                                : "bg-slate-100 text-slate-500"
+                          }`}>
+                            {m.confidence} confidence
+                          </span>
+                        )}
+                        {m.user_relative_to_reference && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">
+                            vs ref: {m.user_relative_to_reference}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-slate-400">Seg {m.segmentIndex}</span>
+                      </div>
+
+                      {/* Body parts */}
                       {m.body_parts_involved?.length > 0 && (
-                        <div className="flex gap-1 mt-1.5 flex-wrap">
+                        <div className="flex gap-1.5 mb-3 flex-wrap">
                           {m.body_parts_involved.map((bp) => (
                             <span
                               key={bp}
-                              className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-medium"
+                              className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium"
                             >
                               {bp}
                             </span>
                           ))}
                         </div>
                       )}
-                      {m.coaching_note && (
-                        <p className="text-xs text-indigo-700 mt-2 leading-relaxed font-medium">
-                          {m.coaching_note}
+
+                      {/* Guardrail note */}
+                      {m.guardrail_note && (
+                        <p className="text-xs text-amber-800 bg-amber-50/80 rounded-lg px-3 py-2 mb-3">
+                          {m.guardrail_note}
                         </p>
                       )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
 
-          {filtered.length === 0 && (
-            <div className="px-5 py-8 text-center text-sm text-slate-500">
-              No moves match the current filter.
-            </div>
-          )}
+                      {/* Coaching note */}
+                      {m.coaching_note && (
+                        <div className="bg-indigo-50/70 rounded-lg px-3 py-3">
+                          <p className="text-sm text-indigo-800 leading-relaxed font-medium">
+                            {m.coaching_note}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+
+            {filtered.length === 0 && (
+              <div className="px-5 py-8 text-center text-sm text-slate-500">
+                No moves match the current filter.
+              </div>
+            )}
+          </div>
         </>
       )}
 
