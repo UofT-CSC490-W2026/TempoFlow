@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.alignment_and_segmentation.router import router as alignment_router
-from src.ebs_web_adapter import process_uploads, process_videos_from_paths, save_upload
+from src.ebs_web_adapter import process_videos_from_paths, save_upload, save_upload_async
 from src.overlay_api import router as overlay_router
 from src.eval.runner import run_move_feedback_pipeline
 from src.eval import router as eval_router
@@ -115,14 +115,29 @@ async def process(
             {"error": "Both ref_video/user_video (or file_a/file_b) are required."},
             status_code=400,
         )
+
+    ref_tmp: str | None = None
+    user_tmp: str | None = None
     try:
-        artifact = process_uploads(ref, usr)
+        ref_tmp = await save_upload_async(ref, "ref")
+        user_tmp = await save_upload_async(usr, "user")
+        # librosa/CPU work must not block the asyncio loop — otherwise GET /api/status never runs
+        # and the web UI polls "idle" forever while the POST is in progress.
+        artifact = await asyncio.to_thread(process_videos_from_paths, ref_tmp, user_tmp)
         SESSION_RESULTS[sid] = artifact
         SESSION_STATUS[sid] = "done"
         return JSONResponse(artifact, status_code=200)
     except Exception as exc:
         SESSION_STATUS[sid] = "error"
         return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        for p in (ref_tmp, user_tmp):
+            if not p:
+                continue
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @app.get("/api/status")

@@ -45,6 +45,18 @@ def save_upload(upload: UploadFile, prefix: str) -> str:
     return tmp.name
 
 
+async def save_upload_async(upload: UploadFile, prefix: str) -> str:
+    """Read multipart body asynchronously; write to disk without blocking the event loop."""
+    data = await upload.read()
+    suffix = Path(upload.filename or "video.mp4").suffix or ".mp4"
+    tmp = tempfile.NamedTemporaryFile(prefix=f"ebs_{prefix}_", suffix=suffix, delete=False)
+    try:
+        tmp.write(data)
+    finally:
+        tmp.close()
+    return tmp.name
+
+
 def extract_audio_from_video(video_path: str, sr: int = SAMPLE_RATE) -> str:
     ffmpeg_exe = resolve_ffmpeg_executable()
     out = tempfile.NamedTemporaryFile(prefix="ebs_audio_", suffix=".wav", delete=False)

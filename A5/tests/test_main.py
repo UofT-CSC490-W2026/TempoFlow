@@ -43,9 +43,9 @@ def test_overlay_status_unknown_job():
     assert response.status_code == 404
 
 
-@patch("src.main.process_uploads")
-def test_process_success(mock_process):
-    mock_process.return_value = {"segments": [{"shared_start_sec": 0.0}]}
+@patch("src.main.asyncio.to_thread", new_callable=AsyncMock)
+def test_process_success(mock_to_thread):
+    mock_to_thread.return_value = {"segments": [{"shared_start_sec": 0.0}]}
     files = {
         "ref_video": ("a.mp4", b"x", "video/mp4"),
         "user_video": ("b.mp4", b"y", "video/mp4"),
@@ -55,9 +55,9 @@ def test_process_success(mock_process):
     assert "segments" in response.json()
 
 
-@patch("src.main.process_uploads")
-def test_process_uploads_raises(mock_process):
-    mock_process.side_effect = RuntimeError("pipeline failed")
+@patch("src.main.asyncio.to_thread", new_callable=AsyncMock)
+def test_process_uploads_raises(mock_to_thread):
+    mock_to_thread.side_effect = RuntimeError("pipeline failed")
     files = {
         "ref_video": ("a.mp4", b"x", "video/mp4"),
         "user_video": ("b.mp4", b"y", "video/mp4"),
