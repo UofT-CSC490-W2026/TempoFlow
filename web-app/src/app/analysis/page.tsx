@@ -17,6 +17,7 @@ import {
   updateSession,
 } from "../../lib/sessionStorage";
 import { DifferenceViewer } from "../../components/ebs/DifferenceViewer";
+import { LiveCoachPanel } from "../../components/ebs/LiveCoachPanel";
 import { getSessionVideo } from "../../lib/videoStorage";
 import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 const MAX_EBS_PROCESSING_SECONDS = 5 * 60;
@@ -433,7 +434,7 @@ function AnalysisPageContent() {
     // Tell the viewer to move the videos to this time
     ebsViewerRef.current?.seekTo(time);
   };
-  type TabType = "ebs" | "feedback" | "diff";
+  type TabType = "ebs" | "feedback" | "diff" | "live";
   const [activeTab, setActiveTab] = useState<TabType>("ebs");
 
   const header = (
@@ -478,6 +479,16 @@ function AnalysisPageContent() {
             }`}
           >
             OVERLAY DIFFERENCE
+          </button>
+          <button
+            onClick={() => setActiveTab("live")}
+            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
+              activeTab === "live"
+                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
+                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
+            }`}
+          >
+            LIVE COACH
           </button>
         </nav>
 
@@ -700,6 +711,17 @@ return (
           userVideoUrl={practiceVideoUrl}
           ebsData={ebsData}
         />
+        </div>
+      )}
+
+      {/* --- LIVE COACH TAB --- */}
+      {activeTab === "live" && (
+        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+          <LiveCoachPanel
+            sessionId={session.id}
+            ebsData={ebsData}
+            referenceName={session.referenceName}
+          />
         </div>
       )}
     </div>
