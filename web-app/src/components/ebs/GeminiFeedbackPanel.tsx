@@ -1,39 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { EbsData, EbsSegment } from "./types";
 import { getSessionVideo } from "../../lib/videoStorage";
 import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 import { buildGeminiSegmentDebugRows } from "../../lib/geminiDebugInfo";
 import { computePosePriorsForSegment } from "../../lib/geminiPosePriors";
+import {
+  buildFeedbackSegmentKey,
+  getFeedbackSegment,
+  hashEbsData,
+  storeFeedbackSegment,
+} from "../../lib/feedbackStorage";
+import type { GeminiFlatMove, GeminiSegmentResult } from "../../lib/geminiFeedbackTypes";
+
+export type { GeminiFlatMove, GeminiMoveResult, GeminiSegmentResult } from "../../lib/geminiFeedbackTypes";
 
 function getProcessorBaseUrl(): string {
   return getPublicEbsProcessorUrl().replace(/\/api\/process\/?$/, "");
 }
-
-export type GeminiMoveResult = {
-  move_index: number;
-  time_window: string;
-  micro_timing_label: string;
-  micro_timing_evidence: string;
-  body_parts_involved: string[];
-  coaching_note: string;
-  confidence: string;
-  shared_start_sec?: number;
-  shared_end_sec?: number;
-  /** Model output: user timing vs reference within the move window */
-  user_relative_to_reference?: string;
-  guardrail_note?: string;
-};
-
-export type GeminiSegmentResult = {
-  segment_index: number;
-  model?: string;
-  moves: GeminiMoveResult[];
-  error?: string;
-};
-
-export type GeminiFlatMove = GeminiMoveResult & { segmentIndex: number };
 
 export const TIMING_LABEL_COLORS: Record<string, string> = {
   "on-time": "#34d399",
@@ -87,11 +72,17 @@ type GeminiFeedbackPanelProps = {
   /** When set, pose-based timing priors are computed client-side and sent with each segment request. */
   referenceVideoUrl?: string | null;
   userVideoUrl?: string | null;
-  /** When false, Gemini run is disabled until browser BodyPix precompute has finished (same stack as pose priors). */
-  bodyPixReady?: boolean;
 };
 
-export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
+export type GeminiFeedbackPanelHandle = {
+  /** Queue Gemini move-feedback for this segment (call when BodyPix for that segment is ready). Runs one segment at a time. */
+  enqueueSegmentAfterBodyPix: (segmentIndex: number) => void;
+};
+
+const FETCH_RETRIES = 3;
+
+export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiFeedbackPanelProps>(
+  function GeminiFeedbackPanel(props, ref) {
   const {
     sessionId,
     ebsData,
@@ -101,7 +92,6 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
     onFeedbackReady,
     referenceVideoUrl,
     userVideoUrl,
-    bodyPixReady = true,
   } = props;
 
   const [running, setRunning] = useState(false);
@@ -113,16 +103,71 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
   const [showPipelineDebug, setShowPipelineDebug] = useState(false);
   const [burnInLabels, setBurnInLabels] = useState(true);
   const [includeAudio, setIncludeAudio] = useState(false);
-  const hasRun = useRef(false);
+  const [pipelineHint, setPipelineHint] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const userHovering = useRef(false);
 
+  const queueRef = useRef<number[]>([]);
+  const drainingRef = useRef(false);
+
   const processorBaseUrl = useMemo(getProcessorBaseUrl, []);
+
+  useEffect(() => {
+    queueRef.current = [];
+    drainingRef.current = false;
+    setResults([]);
+    setSegmentsDone(0);
+    setSegmentsTotal(0);
+    setError(null);
+    setPipelineHint(null);
+  }, [sessionId]);
 
   const pipelineDebugRows = useMemo(
     () => buildGeminiSegmentDebugRows(ebsData, segments),
     [ebsData, segments],
   );
+
+  const validIndices = useMemo(
+    () =>
+      segments
+        .map((_, i) => i)
+        .filter((i) => {
+          const range = segments[i].beat_idx_range;
+          return range != null && range[1] > range[0];
+        }),
+    [segments],
+  );
+
+  const ebsFingerprint = useMemo(() => hashEbsData(ebsData), [ebsData]);
+
+  useEffect(() => {
+    if (!sessionId || validIndices.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const rows: GeminiSegmentResult[] = [];
+      for (const segIndex of validIndices) {
+        const key = buildFeedbackSegmentKey({
+          sessionId,
+          segmentIndex: segIndex,
+          burnInLabels,
+          includeAudio,
+          ebsFingerprint,
+        });
+        const c = await getFeedbackSegment(key);
+        if (c) rows.push(c);
+      }
+      if (cancelled || rows.length === 0) return;
+      setResults((prev) => {
+        const bySeg = new Map<number, GeminiSegmentResult>();
+        for (const r of prev) bySeg.set(r.segment_index, r);
+        for (const r of rows) bySeg.set(r.segment_index, r);
+        return [...bySeg.values()].sort((a, b) => a.segment_index - b.segment_index);
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, validIndices, burnInLabels, includeAudio, ebsFingerprint]);
 
   const flatMoves = useMemo<GeminiFlatMove[]>(
     () =>
@@ -161,119 +206,161 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
     }
   }, [sharedTime, filtered, flatMoves]);
 
-  const runAnalysis = useCallback(async () => {
-    if (running || segments.length === 0 || !sessionId || !bodyPixReady) return;
-    setRunning(true);
-    setError(null);
-    setResults([]);
-    hasRun.current = true;
+  const fetchSegmentWithRetries = useCallback(
+    async (segIndex: number): Promise<GeminiSegmentResult> => {
+      const cacheKey = buildFeedbackSegmentKey({
+        sessionId,
+        segmentIndex: segIndex,
+        burnInLabels,
+        includeAudio,
+        ebsFingerprint,
+      });
+      const cached = await getFeedbackSegment(cacheKey);
+      if (cached) return cached;
 
-    try {
       const [refFile, userFile] = await Promise.all([
         getSessionVideo(sessionId, "reference"),
         getSessionVideo(sessionId, "practice"),
       ]);
       if (!refFile || !userFile) {
-        setError("Could not load video files from local storage.");
-        setRunning(false);
-        return;
+        throw new Error("Could not load video files from local storage.");
       }
 
-      const validIndices = segments
-        .map((_, i) => i)
-        .filter((i) => {
-          const range = segments[i].beat_idx_range;
-          return range && range[1] > range[0];
+      let priorsJson: string | undefined;
+      if (referenceVideoUrl && userVideoUrl) {
+        const priors = await computePosePriorsForSegment({
+          referenceVideoUrl,
+          userVideoUrl,
+          ebsData,
+          segments,
+          segmentIndex: segIndex,
         });
-
-      if (validIndices.length === 0) {
-        setError("No segments with beat data to analyze.");
-        setRunning(false);
-        return;
+        priorsJson = JSON.stringify(priors);
       }
-
-      setSegmentsTotal(validIndices.length);
-      setSegmentsDone(0);
 
       const ebsJson = JSON.stringify(ebsData);
+      let lastErr: Error | null = null;
 
-      const priorsBySegment = new Map<number, string>();
-      if (referenceVideoUrl && userVideoUrl) {
-        for (const segIndex of validIndices) {
-          const priors = await computePosePriorsForSegment({
-            referenceVideoUrl,
-            userVideoUrl,
-            ebsData,
-            segments,
-            segmentIndex: segIndex,
-          });
-          priorsBySegment.set(segIndex, JSON.stringify(priors));
+      for (let attempt = 1; attempt <= FETCH_RETRIES; attempt += 1) {
+        const form = new FormData();
+        form.append("ref_video", refFile, refFile.name || "ref.mp4");
+        form.append("user_video", userFile, userFile.name || "user.mp4");
+        form.append("segment_index", String(segIndex));
+        form.append("session_id", sessionId);
+        form.append("ebs_data_json", ebsJson);
+        if (priorsJson) {
+          form.append("pose_priors_json", priorsJson);
         }
-      }
+        form.append("burn_in_labels", burnInLabels ? "true" : "false");
+        form.append("include_audio", includeAudio ? "true" : "false");
 
-      const settled = await Promise.allSettled(
-        validIndices.map(async (segIndex) => {
-          const form = new FormData();
-          form.append("ref_video", refFile, refFile.name || "ref.mp4");
-          form.append("user_video", userFile, userFile.name || "user.mp4");
-          form.append("segment_index", String(segIndex));
-          form.append("session_id", sessionId);
-          form.append("ebs_data_json", ebsJson);
-          const pj = priorsBySegment.get(segIndex);
-          if (pj) {
-            form.append("pose_priors_json", pj);
-          }
-          form.append("burn_in_labels", burnInLabels ? "true" : "false");
-          form.append("include_audio", includeAudio ? "true" : "false");
-
+        try {
           const res = await fetch(`${processorBaseUrl}/api/move-feedback`, {
             method: "POST",
             body: form,
           });
           if (!res.ok) {
             const body = await res.json().catch(() => ({}));
-            throw new Error((body as { error?: string }).error ?? `Segment ${segIndex} failed`);
+            throw new Error((body as { error?: string }).error ?? `Segment ${segIndex} failed (${res.status})`);
           }
           const data = (await res.json()) as GeminiSegmentResult;
-          setSegmentsDone((n) => n + 1);
+          await storeFeedbackSegment(cacheKey, data);
           return data;
-        }),
-      );
+        } catch (e) {
+          lastErr = e instanceof Error ? e : new Error(String(e));
+          const msg = lastErr.message.toLowerCase();
+          const retryable =
+            msg.includes("timeout") ||
+            msg.includes("network") ||
+            msg.includes("failed to fetch") ||
+            msg.includes("load failed");
+          if (attempt < FETCH_RETRIES && retryable) {
+            await new Promise((r) => window.setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          throw lastErr;
+        }
+      }
+      throw lastErr ?? new Error("Unknown fetch error");
+    },
+    [
+      sessionId,
+      ebsData,
+      segments,
+      processorBaseUrl,
+      referenceVideoUrl,
+      userVideoUrl,
+      burnInLabels,
+      includeAudio,
+      ebsFingerprint,
+    ],
+  );
 
-      const allResults: GeminiSegmentResult[] = settled.map((s, i) => {
-        if (s.status === "fulfilled") return s.value;
-        return {
-          segment_index: validIndices[i],
-          moves: [],
-          error: String((s as PromiseRejectedResult).reason),
-        };
-      });
+  const drainQueue = useCallback(async () => {
+    if (drainingRef.current) return;
+    if (validIndices.length === 0) return;
+    drainingRef.current = true;
+    setRunning(true);
+    setError(null);
+    setSegmentsTotal(validIndices.length);
 
-      allResults.sort((a, b) => a.segment_index - b.segment_index);
-      setResults(allResults);
-
-      const flat: GeminiFlatMove[] = allResults.flatMap((r) =>
-        (r.moves ?? []).map((m) => ({ ...m, segmentIndex: r.segment_index })),
-      );
-      onFeedbackReady?.(flat);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Gemini analysis failed.");
+    try {
+      while (queueRef.current.length > 0) {
+        const segIndex = queueRef.current.shift()!;
+        const ord = validIndices.indexOf(segIndex) + 1;
+        setPipelineHint(
+          ord > 0
+            ? `Gemini: segment ${segIndex + 1} (${ord}/${validIndices.length})`
+            : `Gemini: segment ${segIndex + 1}`,
+        );
+        try {
+          const data = await fetchSegmentWithRetries(segIndex);
+          setResults((prev) => {
+            const rest = prev.filter((r) => r.segment_index !== segIndex);
+            return [...rest, data].sort((a, b) => a.segment_index - b.segment_index);
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setResults((prev) => {
+            const rest = prev.filter((r) => r.segment_index !== segIndex);
+            return [
+              ...rest,
+              { segment_index: segIndex, moves: [], error: msg },
+            ].sort((a, b) => a.segment_index - b.segment_index);
+          });
+        }
+        setSegmentsDone((n) => n + 1);
+      }
     } finally {
+      drainingRef.current = false;
       setRunning(false);
+      setPipelineHint(null);
+      if (queueRef.current.length > 0) {
+        void drainQueue();
+      }
     }
-  }, [
-    running,
-    segments,
-    sessionId,
-    ebsData,
-    processorBaseUrl,
-    onFeedbackReady,
-    referenceVideoUrl,
-    userVideoUrl,
-    burnInLabels,
-    includeAudio,
-    bodyPixReady,
-  ]);
+  }, [validIndices, fetchSegmentWithRetries]);
+
+  const enqueueSegmentAfterBodyPix = useCallback(
+    (segmentIndex: number) => {
+      if (!sessionId || validIndices.length === 0) return;
+      if (!validIndices.includes(segmentIndex)) return;
+      if (queueRef.current.includes(segmentIndex)) return;
+      queueRef.current.push(segmentIndex);
+      setPipelineHint(`Queued segment ${segmentIndex + 1} for Gemini…`);
+      void drainQueue();
+    },
+    [sessionId, validIndices],
+  );
+
+  useImperativeHandle(ref, () => ({ enqueueSegmentAfterBodyPix }), [enqueueSegmentAfterBodyPix]);
+
+  useEffect(() => {
+    const flat: GeminiFlatMove[] = results.flatMap((r) =>
+      (r.moves ?? []).map((m) => ({ ...m, segmentIndex: r.segment_index })),
+    );
+    onFeedbackReady?.(flat);
+  }, [results, onFeedbackReady]);
 
   const progressPercent =
     segmentsTotal > 0 ? Math.round((segmentsDone / segmentsTotal) * 100) : 0;
@@ -300,26 +387,15 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
               Gemini Micro-Timing Analysis
             </h3>
             <p className="text-xs text-slate-500 mt-0.5">
-              Sends each segment as a low-res video pair to Gemini 2.5 Flash-Lite for move-level micro-timing comparison.
-              Optional <strong className="font-medium text-slate-600">BodyPix</strong> pose priors (browser TF.js) send peak
-              motion timing vs the reference; optional REFERENCE/USER burn-in needs ffmpeg with{" "}
-              <code className="text-[10px]">drawtext</code> (otherwise labels are skipped automatically).
+              Runs automatically as each segment finishes BodyPix: one Gemini request at a time (same order as segments).
+              Optional <strong className="font-medium text-slate-600">BodyPix</strong> pose priors per segment; optional
+              REFERENCE/USER burn-in needs ffmpeg <code className="text-[10px]">drawtext</code>.
             </p>
+            {pipelineHint ? (
+              <p className="text-xs text-indigo-700 mt-2 font-medium">{pipelineHint}</p>
+            ) : null}
           </div>
-          <button
-            onClick={runAnalysis}
-            disabled={running || segments.length === 0 || !bodyPixReady}
-            className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {running ? "Analyzing..." : hasRun.current ? "Re-run" : "Run Analysis"}
-          </button>
         </div>
-        {!bodyPixReady && (
-          <p className="mt-2 text-xs text-amber-700">
-            Finish BodyPix overlay precompute (runs automatically when you open this session) before running Gemini
-            analysis—feedback uses the same BodyPix-based pose priors.
-          </p>
-        )}
         <div className="mt-3 flex flex-wrap items-center gap-4 text-xs text-slate-600">
           <label
             className="flex items-center gap-2 cursor-pointer"
@@ -330,7 +406,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
               className="rounded border-slate-300"
               checked={burnInLabels}
               onChange={(e) => setBurnInLabels(e.target.checked)}
-              disabled={running}
+              disabled={running || results.length > 0}
             />
             Burn-in REFERENCE / USER (ffmpeg drawtext)
           </label>
@@ -340,7 +416,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
               className="rounded border-slate-300"
               checked={includeAudio}
               onChange={(e) => setIncludeAudio(e.target.checked)}
-              disabled={running}
+              disabled={running || results.length > 0}
             />
             Keep audio in clips (helps beat timing; larger uploads)
           </label>
@@ -382,7 +458,7 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
           <div className="flex items-center justify-between text-xs text-slate-600 mb-1.5">
             <span>
               {segmentsDone < segmentsTotal
-                ? `Segment ${segmentsDone + 1} of ${segmentsTotal} (parallel)…`
+                ? `Completed ${segmentsDone} of ${segmentsTotal} segments (sequential)…`
                 : "Finishing up…"}
             </span>
             <span>{progressPercent}%</span>
@@ -591,9 +667,11 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
               />
             </svg>
           </div>
-          <p className="text-sm font-medium text-slate-700">Ready for Gemini analysis</p>
+          <p className="text-sm font-medium text-slate-700">Waiting for BodyPix / Gemini</p>
           <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
-            Click &ldquo;Run Analysis&rdquo; to send each segment&apos;s video clips to Gemini 2.5 Flash-Lite for per-move micro-timing comparison.
+            Feedback starts automatically when each segment&apos;s BodyPix overlay finishes. Gemini runs one segment at a
+            time on the server (retries on transient network errors). Results are cached in the browser (IndexedDB) per
+            session and analysis, like BodyPix overlays—revisits skip duplicate API calls.
           </p>
           <p className="text-[10px] text-slate-400 mt-3">
             Requires GEMINI_API_KEY on the Python backend
@@ -602,4 +680,6 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
       )}
     </div>
   );
-}
+});
+
+GeminiFeedbackPanel.displayName = "GeminiFeedbackPanel";

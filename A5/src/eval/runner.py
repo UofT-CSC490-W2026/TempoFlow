@@ -8,9 +8,7 @@ import logging
 import os
 import subprocess
 import tempfile
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from typing import Any
 
@@ -287,17 +285,14 @@ def run_move_feedback_pipeline(
     logger.info("Running baseline model %s for %s/%s", baseline_model, vid, segment_id)
     baseline_result = _run_single(baseline_model)
 
-    # ---- fan out remaining models in background ----
+    # ---- run remaining models sequentially (avoids SSL / timeout contention) ----
     def _background() -> None:
         try:
-            with ThreadPoolExecutor(max_workers=max(len(other_models), 1)) as pool:
-                futs = {pool.submit(_run_single, m): m for m in other_models}
-                for fut in as_completed(futs):
-                    m = futs[fut]
-                    try:
-                        fut.result()
-                    except Exception:
-                        logger.exception("Unexpected failure for model %s", m)
+            for m in other_models:
+                try:
+                    _run_single(m)
+                except Exception:
+                    logger.exception("Unexpected failure for model %s", m)
         finally:
             for p in (ref_clip, user_clip):
                 try:
@@ -306,6 +301,8 @@ def run_move_feedback_pipeline(
                     pass
 
     if other_models:
+        import threading
+
         threading.Thread(target=_background, daemon=True).start()
     else:
         for p in (ref_clip, user_clip):

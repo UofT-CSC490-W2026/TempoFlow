@@ -13,10 +13,13 @@ vi.mock("../BodyPixOverlay", () => ({ BodyPixOverlay: () => <div data-testid="bo
 vi.mock("../ProgressiveOverlay", () => ({
   ProgressiveOverlay: () => <div data-testid="progressive-overlay" />,
 }));
-vi.mock("./GeminiFeedbackPanel", () => ({ 
-  GeminiFeedbackPanel: () => <div data-testid="gemini-panel" />,
-  TIMING_LABEL_COLORS: {} 
-}));
+vi.mock("./GeminiFeedbackPanel", () => {
+  const React = require("react");
+  return {
+    GeminiFeedbackPanel: React.forwardRef(() => <div data-testid="gemini-panel" />),
+    TIMING_LABEL_COLORS: {},
+  };
+});
 
 // 3. Mock Storage Utils — return cached BodyPix frames so Gemini isn’t blocked
 vi.mock("../../lib/overlayStorage", () => ({

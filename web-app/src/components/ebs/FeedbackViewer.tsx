@@ -17,7 +17,12 @@ import {
   isOverlayArtifactComplete,
   overlayArtifactHasRenderableData,
 } from "../../lib/overlaySegments";
-import { GeminiFeedbackPanel, TIMING_LABEL_COLORS, type GeminiFlatMove } from "./GeminiFeedbackPanel";
+import {
+  GeminiFeedbackPanel,
+  TIMING_LABEL_COLORS,
+  type GeminiFeedbackPanelHandle,
+  type GeminiFlatMove,
+} from "./GeminiFeedbackPanel";
 
 type ManualViewerProps = {
   mode?: "manual";
@@ -98,6 +103,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [refBodyPixArtifact, setRefBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   const [userBodyPixArtifact, setUserBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   const autoBodyPixStartedRef = useRef(false);
+  const geminiFeedbackRef = useRef<GeminiFeedbackPanelHandle>(null);
 
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
@@ -135,21 +141,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
       cancelled = true;
     };
   }, [loadCachedOverlays]);
-
-  const bodyPixReadyForGemini = useMemo(() => {
-    if (!sessionMode || overlayBusy) return false;
-    const plans = buildOverlaySegmentPlans(sessionEbsData);
-    const n = plans.length;
-    const refOk =
-      n > 0
-        ? isOverlayArtifactComplete(refBodyPixArtifact, n)
-        : overlayArtifactHasRenderableData(refBodyPixArtifact);
-    const userOk =
-      n > 0
-        ? isOverlayArtifactComplete(userBodyPixArtifact, n)
-        : overlayArtifactHasRenderableData(userBodyPixArtifact);
-    return refOk && userOk;
-  }, [sessionMode, overlayBusy, sessionEbsData, refBodyPixArtifact, userBodyPixArtifact]);
 
   useEffect(() => {
     if (
@@ -191,6 +182,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
       setRefArtifact: setRefBodyPixArtifact,
       setUserArtifact: setUserBodyPixArtifact,
       onStatus: setOverlayStatus,
+      onSegmentComplete: (segmentIndex) => {
+        queueMicrotask(() => {
+          geminiFeedbackRef.current?.enqueueSegmentAfterBodyPix(segmentIndex);
+        });
+      },
     })
       .catch((err) => {
         setOverlayStatus(err instanceof Error ? err.message : "BodyPix overlay generation failed.");
@@ -486,6 +482,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
           {sessionMode && showFeedback && sessionId && sessionEbsData && state.segments.length > 0 && (
             <div className="mt-4 mb-2">
               <GeminiFeedbackPanel
+                ref={geminiFeedbackRef}
                 sessionId={sessionId}
                 ebsData={sessionEbsData}
                 segments={state.segments}
@@ -494,7 +491,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 onFeedbackReady={setGeminiFeedback}
                 referenceVideoUrl={activeReferenceVideoUrl}
                 userVideoUrl={activeUserVideoUrl}
-                bodyPixReady={bodyPixReadyForGemini}
               />
             </div>
           )}

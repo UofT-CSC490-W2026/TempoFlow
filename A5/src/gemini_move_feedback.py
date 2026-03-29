@@ -543,7 +543,26 @@ def _parse_gemini_json(raw: str) -> dict:
     raise ValueError(f"Gemini returned non-JSON response: {text[:500]}")
 
 
-def call_gemini_move_feedback(
+def _is_retryable_gemini_error(exc: BaseException) -> bool:
+    """Transient network/TLS issues — safe to retry full upload + generate."""
+    msg = str(exc).lower()
+    if "timeout" in msg or "timed out" in msg:
+        return True
+    if "wrong version number" in msg:
+        return True
+    if "decryption failed" in msg or "bad record mac" in msg:
+        return True
+    if "ssl" in msg and ("eof" in msg or "connection" in msg):
+        return True
+    if "connection reset" in msg or "broken pipe" in msg:
+        return True
+    name = type(exc).__name__
+    if name in ("ReadTimeout", "ConnectTimeout", "SSLError", "SSLCertVerificationError"):
+        return True
+    return False
+
+
+def _call_gemini_move_feedback_once(
     ref_clip_path: str,
     user_clip_path: str,
     move_windows_text: str,
@@ -551,7 +570,7 @@ def call_gemini_move_feedback(
     model_name: str = GEMINI_MODEL,
     pose_priors_text: str | None = None,
 ) -> dict:
-    """Upload segment clips and call Gemini for micro-timing feedback."""
+    """Single attempt: upload clips, generate, delete files, return parsed JSON."""
     import google.generativeai as genai
 
     key = _resolve_api_key(api_key)
@@ -576,19 +595,57 @@ def call_gemini_move_feedback(
         user_parts.append(pose_priors_text)
     user_parts.append(move_windows_text)
 
-    model = genai.GenerativeModel(model_name=model_name, system_instruction=SYSTEM_PROMPT)
-    response = model.generate_content(
-        user_parts,
-        generation_config=genai.GenerationConfig(temperature=0.3, response_mime_type="application/json"),
-    )
+    try:
+        model = genai.GenerativeModel(model_name=model_name, system_instruction=SYSTEM_PROMPT)
+        response = model.generate_content(
+            user_parts,
+            generation_config=genai.GenerationConfig(temperature=0.3, response_mime_type="application/json"),
+        )
+        return _parse_gemini_json(response.text)
+    finally:
+        for f in (ref_file, user_file):
+            try:
+                genai.delete_file(f.name)
+            except Exception as exc:
+                logger.warning("Could not delete uploaded file %s: %s", f.name, exc)
 
-    for f in (ref_file, user_file):
+
+def call_gemini_move_feedback(
+    ref_clip_path: str,
+    user_clip_path: str,
+    move_windows_text: str,
+    api_key: str | None = None,
+    model_name: str = GEMINI_MODEL,
+    pose_priors_text: str | None = None,
+    max_attempts: int = 4,
+) -> dict:
+    """Upload segment clips and call Gemini for micro-timing feedback (with retries)."""
+    last_exc: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
         try:
-            genai.delete_file(f.name)
-        except Exception as exc:
-            logger.warning("Could not delete uploaded file %s: %s", f.name, exc)
-
-    return _parse_gemini_json(response.text)
+            return _call_gemini_move_feedback_once(
+                ref_clip_path,
+                user_clip_path,
+                move_windows_text,
+                api_key=api_key,
+                model_name=model_name,
+                pose_priors_text=pose_priors_text,
+            )
+        except BaseException as exc:
+            last_exc = exc
+            if attempt >= max_attempts or not _is_retryable_gemini_error(exc):
+                raise
+            delay = min(8.0, 2.0 ** (attempt - 1))
+            logger.warning(
+                "Gemini call failed (attempt %d/%d), retrying in %.1fs: %s",
+                attempt,
+                max_attempts,
+                delay,
+                exc,
+            )
+            time.sleep(delay)
+    assert last_exc is not None
+    raise last_exc
 
 
 # ---------------------------------------------------------------------------
