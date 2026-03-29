@@ -46,3 +46,4 @@ package-lock.json
 .coverage
 coverage/
 htmlcov/
+public/models/*
