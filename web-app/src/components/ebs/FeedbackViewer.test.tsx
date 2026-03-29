@@ -3,6 +3,10 @@ import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import { FeedbackViewer } from "./FeedbackViewer";
 import { useEbsViewer } from "./useEbsViewer";
 
+const { ensureBrowserYoloOverlaysMock } = vi.hoisted(() => ({
+  ensureBrowserYoloOverlaysMock: vi.fn().mockResolvedValue(undefined),
+}));
+
 // 1. Mock the custom hook
 vi.mock("./useEbsViewer", () => ({
   useEbsViewer: vi.fn(),
@@ -26,18 +30,23 @@ vi.mock("./GeminiFeedbackPanel", () => {
 
 // 3. Mock Storage Utils — return cached BodyPix frames so Gemini isn’t blocked
 vi.mock("../../lib/overlayStorage", () => ({
-  getSessionOverlay: vi.fn().mockResolvedValue({
-    version: 1,
-    type: "bodypix",
-    side: "reference",
-    fps: 12,
-    width: 64,
-    height: 48,
-    frameCount: 1,
-    createdAt: "",
-    frames: ["data:image/webp;base64,UklGRiI="],
+  getSessionOverlay: vi.fn(async (key: string) => {
+    if (!key.startsWith("mock-key-bodypix-")) {
+      return null;
+    }
+    return {
+      version: 1,
+      type: "bodypix",
+      side: key.endsWith("-practice") ? "practice" : "reference",
+      fps: 12,
+      width: 64,
+      height: 48,
+      frameCount: 1,
+      createdAt: "",
+      frames: ["data:image/webp;base64,UklGRiI="],
+    };
   }),
-  buildOverlayKey: vi.fn((opts: { side?: string }) => `mock-key-${opts?.side ?? "x"}`),
+  buildOverlayKey: vi.fn((opts: { type?: string; side?: string }) => `mock-key-${opts?.type ?? "x"}-${opts?.side ?? "x"}`),
 }));
 
 vi.mock("../../lib/ensureBrowserBodyPixOverlays", () => ({
@@ -47,8 +56,7 @@ vi.mock("../../lib/ensureBrowserBodyPixOverlays", () => ({
 }));
 
 vi.mock("../../lib/ensureBrowserYoloOverlays", () => ({
-  ensureBrowserYoloOverlays: vi.fn().mockResolvedValue(undefined),
-  buildYoloOverlayChunkPlans: vi.fn(() => []),
+  ensureBrowserYoloOverlays: ensureBrowserYoloOverlaysMock,
   BROWSER_YOLO_OVERLAY_FPS: 12,
   BROWSER_YOLO_VARIANT: "yolo26n-python-hybrid-v6",
 }));
@@ -184,5 +192,67 @@ describe("FeedbackViewer", () => {
     unmount();
     // Verify cleanup logic if URLs were set (this would require setting state first)
     expect(global.URL.revokeObjectURL).not.toHaveBeenCalled(); // None set yet
+  });
+
+  it("does not abort the in-flight YOLO pipeline when segment artifacts update", async () => {
+    const inFlight = new Promise<void>(() => {});
+    let seenSignal: AbortSignal | undefined;
+    const segmentedArtifact = {
+      version: 1,
+      type: "yolo",
+      side: "reference",
+      fps: 12,
+      width: 64,
+      height: 48,
+      frameCount: 1,
+      createdAt: "",
+      segments: [
+        {
+          index: 0,
+          startSec: 0,
+          endSec: 5,
+          fps: 12,
+          width: 64,
+          height: 48,
+          frameCount: 1,
+          createdAt: "",
+          video: new Blob(["x"], { type: "video/webm" }),
+          videoMime: "video/webm",
+          meta: {},
+        },
+      ],
+      meta: {},
+    };
+    const poseArtifact = { ...segmentedArtifact, type: "yolo-pose-arms" };
+
+    ensureBrowserYoloOverlaysMock.mockImplementationOnce(async (params) => {
+      seenSignal = params.signal;
+      params.setRefArtifact(segmentedArtifact as any);
+      params.setUserArtifact({ ...segmentedArtifact, side: "practice" } as any);
+      params.setRefArmsArtifact?.(poseArtifact as any);
+      params.setRefLegsArtifact?.({ ...poseArtifact, type: "yolo-pose-legs" } as any);
+      params.setUserArmsArtifact?.({ ...poseArtifact, side: "practice" } as any);
+      params.setUserLegsArtifact?.({ ...poseArtifact, type: "yolo-pose-legs", side: "practice" } as any);
+      return inFlight;
+    });
+
+    render(
+      <FeedbackViewer
+        mode="session"
+        sessionId="test-session"
+        referenceVideoUrl="ref.mp4"
+        userVideoUrl="user.mp4"
+        ebsData={{ segments: [{ shared_start_sec: 0, shared_end_sec: 5 }], alignment: {} } as any}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(ensureBrowserYoloOverlaysMock).toHaveBeenCalledTimes(1);
+      expect(seenSignal).toBeDefined();
+    });
+
+    await waitFor(() => {
+      expect(seenSignal?.aborted).toBe(false);
+    });
   });
 });

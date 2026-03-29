@@ -425,20 +425,16 @@ export function FeedbackViewer(props: EbsViewerProps) {
     return () => {
       controller.abort();
     };
+    // Keep this tied to the session/input lifecycle only.
+    // Depending on overlay artifact state makes React clean up the in-flight run
+    // after each completed segment update, which aborts the remaining segments.
   }, [
     sessionMode,
     overlayCacheReady,
-    overlayDetector,
     sessionId,
     activeReferenceVideoUrl,
     activeUserVideoUrl,
     sessionEbsData,
-    refYoloArtifact,
-    userYoloArtifact,
-    refYoloPoseArmsArtifact,
-    refYoloPoseLegsArtifact,
-    userYoloPoseArmsArtifact,
-    userYoloPoseLegsArtifact,
   ]);
 
   // Auto-resume: when YOLO segment data is already cached but Gemini is missing, auto-enqueue those segments.
