@@ -299,10 +299,7 @@ def run_move_feedback_pipeline(
     def _background() -> None:
         try:
             for m in other_models:
-                try:
-                    _run_single(m)
-                except Exception:
-                    logger.exception("Unexpected failure for model %s", m)
+                _run_single(m)
         finally:
             for p in (ref_clip, user_clip):
                 try:

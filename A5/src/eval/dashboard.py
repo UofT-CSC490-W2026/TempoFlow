@@ -56,9 +56,9 @@ async def dashboard(request: Request, prompt_version: str | None = None):
     all_models = sorted({row["model_id"] for row in per_video_raw}) if per_video_raw else []
 
     return templates.TemplateResponse(
+        request,
         "dashboard.html",
         {
-            "request": request,
             "versions": versions,
             "current_version": prompt_version,
             "model_stats": model_stats,

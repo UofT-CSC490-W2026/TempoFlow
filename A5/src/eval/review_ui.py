@@ -31,7 +31,7 @@ templates = Jinja2Templates(directory=str(Path(__file__).resolve().parent / "tem
 @router.get("/review", response_class=HTMLResponse)
 async def review_list(request: Request):
     videos = list_videos()
-    return templates.TemplateResponse("review_list.html", {"request": request, "videos": videos})
+    return templates.TemplateResponse(request, "review_list.html", {"videos": videos})
 
 
 @router.get("/review/{video_id}", response_class=HTMLResponse)
@@ -87,9 +87,9 @@ async def review_segment(
     seg_experts_done = experts_who_rated(video_id, segment_id)
 
     return templates.TemplateResponse(
+        request,
         "review_segment.html",
         {
-            "request": request,
             "video_id": video_id,
             "segment_id": segment_id,
             "segments": segments,
