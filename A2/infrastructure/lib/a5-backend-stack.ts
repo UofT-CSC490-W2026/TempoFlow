@@ -76,8 +76,26 @@ export class A5BackendStack extends cdk.Stack {
     });
     instanceProfile.node.addDependency(instanceRole);
 
+    // Asset uses IgnoreMode.GLOB by default — it does **not** read `.ebignore` or `.gitignore`.
+    // Exclude local venv and dev artifacts or the bundle is ~1.4GB+ and fills disk / S3.
     const asset = new s3assets.Asset(this, 'A5SourceBundle', {
       path: a5Path,
+      exclude: [
+        'venv',
+        '.venv',
+        '__pycache__',
+        '**/__pycache__/**',
+        '.pytest_cache',
+        'htmlcov',
+        '.coverage',
+        '.env',
+        'tests',
+        '*.md',
+        '**/*.md',
+        'profiling',
+        '*.py[cod]',
+        '**/*.py[cod]',
+      ],
     });
     asset.grantRead(serviceRole);
 
