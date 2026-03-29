@@ -25,6 +25,10 @@ function getProcessorBaseUrl(processorUrl: string) {
   return processorUrl.replace(/\/api\/process\/?$/, "");
 }
 
+function isLocalDevProcessorUrl(url: string): boolean {
+  return url.includes("127.0.0.1") || url.includes("localhost:");
+}
+
 function buildEbsMeta(data: EbsData) {
   return {
     segmentCount: data.segments.length,
@@ -225,18 +229,16 @@ function AnalysisPageContent() {
           } catch (error) {
             lastError = error;
             const message = error instanceof Error ? error.message : String(error);
-            const isSuspended =
-              message.includes("ERR_NETWORK_IO_SUSPENDED") ||
-              message.includes("Failed to fetch") ||
-              message.includes("NetworkError");
-            if (!isSuspended || attempt === 1) {
+            // Only retry on likely-transient Chrome suspend; "Failed to fetch" is often COEP/CORS (retry won't help).
+            const isTransientSuspend = message.includes("ERR_NETWORK_IO_SUSPENDED");
+            if (!isTransientSuspend || attempt === 1) {
               throw error;
             }
           }
         }
 
         if (!response || !payload) {
-          throw lastError ?? new Error(`Failed to reach the local EBS processor at ${processorUrl}.`);
+          throw lastError ?? new Error(`Failed to reach the EBS processor at ${processorUrl}.`);
         }
 
         if (!response.ok) {
@@ -267,15 +269,17 @@ function AnalysisPageContent() {
         const message =
           error instanceof Error
             ? error.message
-            : "Failed to generate EBS data. Start the local Python service and try again.";
-        const isSuspended =
-          message.includes("ERR_NETWORK_IO_SUSPENDED") ||
-          message.includes("Failed to fetch") ||
-          message.includes("NetworkError");
-        const friendlyMessage = isSuspended
+            : "Failed to generate EBS data for this session.";
+        const isChromeIoSuspended = message.includes("ERR_NETWORK_IO_SUSPENDED");
+        const isFetchFailed =
+          message.includes("Failed to fetch") || message.includes("NetworkError");
+        const hostedHint = isLocalDevProcessorUrl(processorUrl)
+          ? `Failed to reach ${processorUrl}. Start the A5 API locally: cd A5 && uvicorn src.main:app --host 127.0.0.1 --port 8787`
+          : `Failed to reach ${processorUrl}. Confirm the hosted API (EB/CloudFront) is healthy and redeploy A5 if you updated CORS/COEP headers.`;
+        const friendlyMessage = isChromeIoSuspended
           ? "Browser network I/O was suspended during upload (often caused by the tab going to background, laptop sleep, or aggressive throttling). Keep this tab active and retry."
-          : message.includes("Failed to fetch")
-            ? `Failed to reach the local EBS processor at ${processorUrl}. Keep the local A5 EBS server running, then retry.`
+          : isFetchFailed
+            ? hostedHint
             : message;
 
         updateSession(session.id, {

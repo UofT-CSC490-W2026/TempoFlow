@@ -32,6 +32,19 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_cross_origin_resource_policy(request, call_next):
+    """Allow browser JS to read cross-origin fetch() responses when the web app uses COEP.
+
+    Next.js sends Cross-Origin-Embedder-Policy: require-corp (for WASM/WebGPU). In that mode,
+    responses from CloudFront/EB must include this header or the client sees Failed to fetch.
+    """
+    response = await call_next(request)
+    response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+    return response
+
+
 # Include routers
 app.include_router(alignment_router, prefix="/a5")
 app.include_router(overlay_router)
