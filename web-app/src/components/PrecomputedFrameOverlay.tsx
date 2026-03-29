@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 
 export function PrecomputedFrameOverlay(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
   frames: Array<string | Blob>;
   fps: number;
+  className?: string;
+  style?: CSSProperties;
 }) {
-  const { videoRef, frames, fps } = props;
+  const { videoRef, frames, fps, className, style } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const [ready, setReady] = useState(false);
 
@@ -166,9 +168,8 @@ export function PrecomputedFrameOverlay(props: {
   return (
     <canvas
       ref={canvasRef}
-      className={`pointer-events-none absolute inset-0 h-full w-full ${ready ? "opacity-100" : "opacity-70"}`}
-      style={{ mixBlendMode: "screen" }}
+      className={`pointer-events-none absolute inset-0 h-full w-full ${ready ? "opacity-100" : "opacity-70"} ${className ?? ""}`}
+      style={{ mixBlendMode: "screen", ...(style ?? {}) }}
     />
   );
 }
-

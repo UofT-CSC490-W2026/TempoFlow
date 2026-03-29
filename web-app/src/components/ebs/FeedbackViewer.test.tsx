@@ -49,7 +49,7 @@ vi.mock("../../lib/ensureBrowserBodyPixOverlays", () => ({
 vi.mock("../../lib/ensureBrowserYoloOverlays", () => ({
   ensureBrowserYoloOverlays: vi.fn().mockResolvedValue(undefined),
   BROWSER_YOLO_OVERLAY_FPS: 12,
-  BROWSER_YOLO_VARIANT: "yolo26n-python-dev-v2",
+  BROWSER_YOLO_VARIANT: "yolo26n-python-hybrid-v3",
 }));
 
 describe("FeedbackViewer", () => {
@@ -128,7 +128,7 @@ describe("FeedbackViewer", () => {
       expect(screen.getByTestId("gemini-panel")).toBeInTheDocument();
     });
     expect(screen.getByTitle(/Use BodyPix overlays/i)).toBeInTheDocument();
-    expect(screen.getByTitle(/Use YOLO overlays/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Use YOLO hybrid overlays/i)).toBeInTheDocument();
   });
 
   it("toggles playback when the play button is clicked", () => {

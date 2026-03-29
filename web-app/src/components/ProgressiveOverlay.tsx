@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 
 import { PrecomputedFrameOverlay } from "./PrecomputedFrameOverlay";
 import { PrecomputedVideoOverlay } from "./PrecomputedVideoOverlay";
@@ -38,8 +38,10 @@ function getLocalSegmentTime(segment: OverlaySegmentArtifact, timeSec: number) {
 function SegmentedFrameOverlay(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
   segments: OverlaySegmentArtifact[];
+  className?: string;
+  style?: CSSProperties;
 }) {
-  const { videoRef, segments } = props;
+  const { videoRef, segments, className, style } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const imageCacheRef = useRef<Map<string, HTMLImageElement>>(new Map());
   const urlCacheRef = useRef<Map<string, string>>(new Map());
@@ -179,8 +181,8 @@ function SegmentedFrameOverlay(props: {
   return (
     <canvas
       ref={canvasRef}
-      className="pointer-events-none absolute inset-0 h-full w-full"
-      style={{ mixBlendMode: "screen" }}
+      className={`pointer-events-none absolute inset-0 h-full w-full ${className ?? ""}`}
+      style={{ mixBlendMode: "screen", ...(style ?? {}) }}
     />
   );
 }
@@ -188,8 +190,10 @@ function SegmentedFrameOverlay(props: {
 function SegmentedVideoOverlay(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
   segments: OverlaySegmentArtifact[];
+  className?: string;
+  style?: CSSProperties;
 }) {
-  const { videoRef, segments } = props;
+  const { videoRef, segments, className, style } = props;
   const overlayVideoRef = useRef<HTMLVideoElement | null>(null);
   const urlCacheRef = useRef<Map<string, string>>(new Map());
   const currentSegmentKeyRef = useRef<string>("");
@@ -323,8 +327,8 @@ function SegmentedVideoOverlay(props: {
   return (
     <video
       ref={overlayVideoRef}
-      className="pointer-events-none absolute inset-0 h-full w-full"
-      style={{ mixBlendMode: "screen", visibility: "hidden" }}
+      className={`pointer-events-none absolute inset-0 h-full w-full object-contain ${className ?? ""}`}
+      style={{ mixBlendMode: "screen", visibility: "hidden", background: "transparent", ...(style ?? {}) }}
     />
   );
 }
@@ -332,8 +336,10 @@ function SegmentedVideoOverlay(props: {
 export function ProgressiveOverlay(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
   artifact: OverlayArtifact | null;
+  className?: string;
+  style?: CSSProperties;
 }) {
-  const { videoRef, artifact } = props;
+  const { videoRef, artifact, className, style } = props;
 
   const segments = useMemo(() => (artifact ? getRenderableSegments(artifact) : []), [artifact]);
 
@@ -341,10 +347,10 @@ export function ProgressiveOverlay(props: {
 
   if (segments.length > 0) {
     if (segments.some((segment) => segment.video)) {
-      return <SegmentedVideoOverlay videoRef={videoRef} segments={segments} />;
+      return <SegmentedVideoOverlay videoRef={videoRef} segments={segments} className={className} style={style} />;
     }
     if (segments.some((segment) => segment.frames && segment.frames.length > 0)) {
-      return <SegmentedFrameOverlay videoRef={videoRef} segments={segments} />;
+      return <SegmentedFrameOverlay videoRef={videoRef} segments={segments} className={className} style={style} />;
     }
   }
 
@@ -354,6 +360,8 @@ export function ProgressiveOverlay(props: {
         videoRef={videoRef}
         overlayBlob={artifact.video}
         mimeType={artifact.videoMime}
+        className={className}
+        style={style}
       />
     );
   }
@@ -364,6 +372,8 @@ export function ProgressiveOverlay(props: {
         videoRef={videoRef}
         frames={artifact.frames}
         fps={artifact.fps}
+        className={className}
+        style={style}
       />
     );
   }

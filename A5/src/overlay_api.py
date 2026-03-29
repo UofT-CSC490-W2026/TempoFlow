@@ -67,11 +67,40 @@ def _draw_pose_segment(overlay: Any, start: tuple[int, int] | None, end: tuple[i
     if start is None or end is None or width <= 0:
         return
     import cv2  # type: ignore
+    import numpy as np  # type: ignore
 
-    cv2.line(overlay, start, end, color, thickness=width, lineType=cv2.LINE_AA)
-    joint_r = max(2, int(round(width * 0.42)))
-    cv2.circle(overlay, start, joint_r, color, thickness=-1, lineType=cv2.LINE_AA)
-    cv2.circle(overlay, end, joint_r, color, thickness=-1, lineType=cv2.LINE_AA)
+    sx, sy = float(start[0]), float(start[1])
+    ex, ey = float(end[0]), float(end[1])
+    dx = ex - sx
+    dy = ey - sy
+    length = math.hypot(dx, dy)
+    if length <= 1e-6:
+        half = max(1.0, width / 2.0)
+        pts = np.array(
+            [
+                [sx - half, sy - half],
+                [sx + half, sy - half],
+                [sx + half, sy + half],
+                [sx - half, sy + half],
+            ],
+            dtype=np.int32,
+        )
+        cv2.fillConvexPoly(overlay, pts, color, lineType=cv2.LINE_AA)
+        return
+
+    px = -dy / length
+    py = dx / length
+    half = width / 2.0
+    pts = np.array(
+        [
+            [sx + px * half, sy + py * half],
+            [sx - px * half, sy - py * half],
+            [ex - px * half, ey - py * half],
+            [ex + px * half, ey + py * half],
+        ],
+        dtype=np.int32,
+    )
+    cv2.fillConvexPoly(overlay, pts, color, lineType=cv2.LINE_AA)
 
 
 def _draw_pose_circle(
@@ -198,6 +227,35 @@ def _render_pose_layers(
     return arms_overlay, legs_overlay
 
 
+def _predict_segmentation_mask(frame: Any, model: Any, w: int, h: int) -> Any | None:
+    import cv2  # type: ignore
+    import numpy as np  # type: ignore
+
+    result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+    if not result or result[0].masks is None:
+        return None
+
+    mask_tensor = result[0].masks.data
+    mask_np = mask_tensor.detach().cpu().numpy()  # type: ignore[attr-defined]
+    alpha = np.max(mask_np, axis=0).astype(np.float32)
+    alpha = np.clip(alpha, 0.0, 1.0)
+    if alpha.shape[0] != h or alpha.shape[1] != w:
+        alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_CUBIC)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.2, sigmaY=1.2)
+    return (alpha * 255.0).astype(np.uint8)
+
+
+def _clip_overlay_to_mask(overlay: Any, mask_u8: Any | None) -> Any:
+    if mask_u8 is None:
+        return overlay
+
+    import numpy as np  # type: ignore
+
+    alpha = (mask_u8.astype(np.float32) / 255.0)[..., None]
+    clipped = overlay.astype(np.float32) * alpha
+    return np.clip(clipped, 0, 255).astype(np.uint8)
+
+
 def _weights_path(filename: str) -> Path:
     # A5/src -> A5 -> repo root
     return (Path(__file__).resolve().parents[2] / "web-app" / "public" / "models" / filename).resolve()
@@ -304,7 +362,17 @@ def _run_yolo_overlay_job(job_id: str, tmp_in: str, tmp_out: str, color: str, fp
     OVERLAY_JOBS[job_id]["status"] = "done"
 
 
-def _run_pose_overlay_job(job_id: str, tmp_in: str, arms_out: str, legs_out: str, arms_color: str, legs_color: str, fps: int) -> None:
+def _run_pose_overlay_job(
+    job_id: str,
+    tmp_in: str,
+    arms_out: str,
+    legs_out: str,
+    arms_color: str,
+    legs_color: str,
+    fps: int,
+    start_sec: float | None = None,
+    end_sec: float | None = None,
+) -> None:
     try:
         import cv2  # type: ignore
         import numpy as np  # type: ignore
@@ -314,10 +382,16 @@ def _run_pose_overlay_job(job_id: str, tmp_in: str, arms_out: str, legs_out: str
         POSE_JOBS[job_id]["error"] = f"Missing pose deps: {exc}"
         return
 
-    weights = _weights_path("yolo26n-pose.pt")
-    if not weights.exists():
+    pose_weights = _weights_path("yolo26n-pose.pt")
+    if not pose_weights.exists():
         POSE_JOBS[job_id]["status"] = "error"
-        POSE_JOBS[job_id]["error"] = f"YOLO pose weights not found at {weights}"
+        POSE_JOBS[job_id]["error"] = f"YOLO pose weights not found at {pose_weights}"
+        return
+
+    seg_weights = _weights_path("yolo26n-seg.pt")
+    if not seg_weights.exists():
+        POSE_JOBS[job_id]["status"] = "error"
+        POSE_JOBS[job_id]["error"] = f"YOLO seg weights not found at {seg_weights}"
         return
 
     cap = cv2.VideoCapture(tmp_in)
@@ -330,8 +404,19 @@ def _run_pose_overlay_job(job_id: str, tmp_in: str, arms_out: str, legs_out: str
     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
     duration_sec = float((probe_video_metadata(tmp_in).get("duration_sec") or 0.0))
-    expected = _expected_frames(duration_sec, out_fps)
+    seg_start, seg_end = _resolve_segment_window(duration_sec, start_sec, end_sec)
+    seg_duration = seg_end - seg_start
+    if seg_duration <= 0:
+        POSE_JOBS[job_id]["status"] = "error"
+        POSE_JOBS[job_id]["error"] = "Pose overlay segment duration must be greater than 0."
+        cap.release()
+        return
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, seg_start * 1000.0)
+    expected = _expected_frames(seg_duration, out_fps)
     POSE_JOBS[job_id]["frames_expected"] = expected
+    POSE_JOBS[job_id]["frames_written"] = 0
+    POSE_JOBS[job_id]["progress"] = 0.0
     POSE_JOBS[job_id]["status"] = "processing"
 
     arms_writer = cv2.VideoWriter(arms_out, cv2.VideoWriter_fourcc(*"VP90"), out_fps, (w, h))
@@ -342,7 +427,8 @@ def _run_pose_overlay_job(job_id: str, tmp_in: str, arms_out: str, legs_out: str
         cap.release()
         return
 
-    model = YOLO(str(weights))
+    pose_model = YOLO(str(pose_weights))
+    seg_model = YOLO(str(seg_weights))
     written = 0
     out_dt = 1.0 / float(out_fps)
     next_out_time = 0.0
@@ -353,18 +439,24 @@ def _run_pose_overlay_job(job_id: str, tmp_in: str, arms_out: str, legs_out: str
         ok, frame = cap.read()
         if not ok:
             break
-        rel_t = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
+        abs_t = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
+        rel_t = max(0.0, abs_t - seg_start)
+        if rel_t > seg_duration + (out_dt * 0.25):
+            break
         if rel_t + (out_dt * 0.25) < next_out_time:
             continue
 
         arms_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         legs_overlay = np.zeros((h, w, 3), dtype=np.uint8)
-        result = model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
         if result and getattr(result[0], "keypoints", None) is not None and len(result[0].keypoints.xy) > 0:
             kp = result[0].keypoints
             xy = kp.xy[0].detach().cpu().numpy()  # type: ignore[attr-defined]
             conf = kp.conf[0].detach().cpu().numpy() if getattr(kp, "conf", None) is not None else None  # type: ignore[attr-defined]
             arms_overlay, legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
+            seg_mask = _predict_segmentation_mask(frame, seg_model, w, h)
+            arms_overlay = _clip_overlay_to_mask(arms_overlay, seg_mask)
+            legs_overlay = _clip_overlay_to_mask(legs_overlay, seg_mask)
 
         last_arms, last_legs = arms_overlay, legs_overlay
         arms_writer.write(arms_overlay)
@@ -591,6 +683,8 @@ async def overlay_yolo_pose_start(
     fps: int = Form(default=12),
     session_id: str | None = Form(default=None),
     side: str | None = Form(default=None),
+    start_sec: float | None = Form(default=None),
+    end_sec: float | None = Form(default=None),
 ):
     job_id = str(uuid.uuid4())
     tmp_in = save_upload(video, f"pose_{(side or 'unknown')}_{job_id}")
@@ -606,12 +700,14 @@ async def overlay_yolo_pose_start(
         "legs_out": legs_out,
         "session_id": (session_id or "default"),
         "side": (side or "unknown"),
+        "start_sec": start_sec,
+        "end_sec": end_sec,
         "error": None,
         "served_layers": set(),
     }
     threading.Thread(
         target=_run_pose_overlay_job,
-        args=(job_id, tmp_in, arms_out, legs_out, arms_color, legs_color, fps),
+        args=(job_id, tmp_in, arms_out, legs_out, arms_color, legs_color, fps, start_sec, end_sec),
         daemon=True,
     ).start()
     return JSONResponse({"job_id": job_id}, status_code=200)

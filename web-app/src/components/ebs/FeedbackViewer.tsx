@@ -1,9 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ReactNode } from "react";
+import type { ReactNode, RefObject } from "react";
 import { useEbsViewer } from "./useEbsViewer";
 import type { EbsData } from "./types";
+import { buildMovesForSegment } from "./ebsViewerLogic";
 import { BodyPixOverlay } from "../BodyPixOverlay";
 import { ProgressiveOverlay } from "../ProgressiveOverlay";
 import { OverlayMaskLayer } from "./OverlayMaskLayer";
@@ -15,6 +16,7 @@ import {
 import {
   BROWSER_YOLO_OVERLAY_FPS,
   BROWSER_YOLO_VARIANT,
+  buildYoloOverlayChunkPlans,
   ensureBrowserYoloOverlays,
 } from "../../lib/ensureBrowserYoloOverlays";
 import { buildOverlayKey, getSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
@@ -53,6 +55,35 @@ type SessionViewerProps = {
 };
 
 type EbsViewerProps = ManualViewerProps | SessionViewerProps;
+
+function YoloHybridOverlayStack(props: {
+  videoRef: RefObject<HTMLVideoElement | null>;
+  layers: Array<{
+    key: string;
+    artifact: OverlayArtifact | null;
+    opacity: number;
+    className?: string;
+  }>;
+}) {
+  const { videoRef, layers } = props;
+
+  return (
+    <>
+      {layers.map((layer) => {
+        if (!overlayArtifactHasRenderableData(layer.artifact)) return null;
+        return (
+          <ProgressiveOverlay
+            key={layer.key}
+            videoRef={videoRef}
+            artifact={layer.artifact}
+            className={layer.className}
+            style={{ opacity: layer.opacity }}
+          />
+        );
+      })}
+    </>
+  );
+}
 
 export function FeedbackViewer(props: EbsViewerProps) {
   const sessionMode = props.mode === "session";
@@ -115,11 +146,17 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [geminiFeedback, setGeminiFeedback] = useState<GeminiFlatMove[]>([]);
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
+  const [bodyPixSegmentProgress, setBodyPixSegmentProgress] = useState<{ segmentIndex: number; progress: number } | null>(null);
+  const [yoloSegmentProgress, setYoloSegmentProgress] = useState<{ segmentIndex: number; progress: number } | null>(null);
   const [overlayCacheReady, setOverlayCacheReady] = useState(false);
   const [refBodyPixArtifact, setRefBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   const [userBodyPixArtifact, setUserBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   const [refYoloArtifact, setRefYoloArtifact] = useState<OverlayArtifact | null>(null);
   const [userYoloArtifact, setUserYoloArtifact] = useState<OverlayArtifact | null>(null);
+  const [refYoloPoseArmsArtifact, setRefYoloPoseArmsArtifact] = useState<OverlayArtifact | null>(null);
+  const [refYoloPoseLegsArtifact, setRefYoloPoseLegsArtifact] = useState<OverlayArtifact | null>(null);
+  const [userYoloPoseArmsArtifact, setUserYoloPoseArmsArtifact] = useState<OverlayArtifact | null>(null);
+  const [userYoloPoseLegsArtifact, setUserYoloPoseLegsArtifact] = useState<OverlayArtifact | null>(null);
   const autoBodyPixStartedRef = useRef(false);
   const autoYoloStartedRef = useRef(false);
   const geminiFeedbackRef = useRef<GeminiFeedbackPanelHandle>(null);
@@ -128,7 +165,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
-    const [rbp, ubp, ryo, uyo] = await Promise.all([
+    const [rbp, ubp, ryo, uyo, ryoArms, ryoLegs, uyoArms, uyoLegs] = await Promise.all([
       getSessionOverlay(
         buildOverlayKey({
           sessionId,
@@ -160,6 +197,42 @@ export function FeedbackViewer(props: EbsViewerProps) {
         buildOverlayKey({
           sessionId,
           type: "yolo",
+          side: "practice",
+          fps: BROWSER_YOLO_OVERLAY_FPS,
+          variant: BROWSER_YOLO_VARIANT,
+        }),
+      ),
+      getSessionOverlay(
+        buildOverlayKey({
+          sessionId,
+          type: "yolo-pose-arms",
+          side: "reference",
+          fps: BROWSER_YOLO_OVERLAY_FPS,
+          variant: BROWSER_YOLO_VARIANT,
+        }),
+      ),
+      getSessionOverlay(
+        buildOverlayKey({
+          sessionId,
+          type: "yolo-pose-legs",
+          side: "reference",
+          fps: BROWSER_YOLO_OVERLAY_FPS,
+          variant: BROWSER_YOLO_VARIANT,
+        }),
+      ),
+      getSessionOverlay(
+        buildOverlayKey({
+          sessionId,
+          type: "yolo-pose-arms",
+          side: "practice",
+          fps: BROWSER_YOLO_OVERLAY_FPS,
+          variant: BROWSER_YOLO_VARIANT,
+        }),
+      ),
+      getSessionOverlay(
+        buildOverlayKey({
+          sessionId,
+          type: "yolo-pose-legs",
           side: "practice",
           fps: BROWSER_YOLO_OVERLAY_FPS,
           variant: BROWSER_YOLO_VARIANT,
@@ -170,6 +243,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
     setUserBodyPixArtifact(ubp);
     setRefYoloArtifact(ryo);
     setUserYoloArtifact(uyo);
+    setRefYoloPoseArmsArtifact(ryoArms);
+    setRefYoloPoseLegsArtifact(ryoLegs);
+    setUserYoloPoseArmsArtifact(uyoArms);
+    setUserYoloPoseLegsArtifact(uyoLegs);
   }, [sessionId]);
 
   useEffect(() => {
@@ -223,7 +300,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
       setRefArtifact: setRefBodyPixArtifact,
       setUserArtifact: setUserBodyPixArtifact,
       onStatus: setOverlayStatus,
+      onSegmentProgress: (segmentIndex, progress) => {
+        setBodyPixSegmentProgress({ segmentIndex, progress });
+      },
       onSegmentComplete: (segmentIndex) => {
+        setBodyPixSegmentProgress({ segmentIndex, progress: 1 });
         queueMicrotask(() => {
           geminiFeedbackRef.current?.enqueueSegmentAfterBodyPix(segmentIndex);
         });
@@ -260,25 +341,41 @@ export function FeedbackViewer(props: EbsViewerProps) {
       return;
     }
 
-    const plans = buildOverlaySegmentPlans(sessionEbsData);
-    const totalSegments = plans.length;
+    const chunkPlans = buildYoloOverlayChunkPlans(sessionEbsData);
+    const totalChunks = chunkPlans.length;
     const refOk =
-      totalSegments > 0
-        ? isOverlayArtifactComplete(refYoloArtifact, totalSegments)
+      totalChunks > 0
+        ? isOverlayArtifactComplete(refYoloArtifact, totalChunks)
         : overlayArtifactHasRenderableData(refYoloArtifact);
     const userOk =
-      totalSegments > 0
-        ? isOverlayArtifactComplete(userYoloArtifact, totalSegments)
+      totalChunks > 0
+        ? isOverlayArtifactComplete(userYoloArtifact, totalChunks)
         : overlayArtifactHasRenderableData(userYoloArtifact);
-    if (refOk && userOk) {
-      setOverlayStatus("YOLO overlays ready.");
+    const refArmsOk =
+      totalChunks > 0
+        ? isOverlayArtifactComplete(refYoloPoseArmsArtifact, totalChunks)
+        : overlayArtifactHasRenderableData(refYoloPoseArmsArtifact);
+    const refLegsOk =
+      totalChunks > 0
+        ? isOverlayArtifactComplete(refYoloPoseLegsArtifact, totalChunks)
+        : overlayArtifactHasRenderableData(refYoloPoseLegsArtifact);
+    const userArmsOk =
+      totalChunks > 0
+        ? isOverlayArtifactComplete(userYoloPoseArmsArtifact, totalChunks)
+        : overlayArtifactHasRenderableData(userYoloPoseArmsArtifact);
+    const userLegsOk =
+      totalChunks > 0
+        ? isOverlayArtifactComplete(userYoloPoseLegsArtifact, totalChunks)
+        : overlayArtifactHasRenderableData(userYoloPoseLegsArtifact);
+    if (refOk && userOk && refArmsOk && refLegsOk && userArmsOk && userLegsOk) {
+      setOverlayStatus("YOLO hybrid overlays ready.");
       return;
     }
     if (autoYoloStartedRef.current) return;
 
     autoYoloStartedRef.current = true;
     setOverlayBusy(true);
-    setOverlayStatus("Generating YOLO overlays…");
+    setOverlayStatus("Generating YOLO hybrid overlays…");
 
     void ensureBrowserYoloOverlays({
       sessionId,
@@ -289,13 +386,24 @@ export function FeedbackViewer(props: EbsViewerProps) {
       userVideo,
       existingRef: refYoloArtifact,
       existingUser: userYoloArtifact,
+      existingRefArms: refYoloPoseArmsArtifact,
+      existingRefLegs: refYoloPoseLegsArtifact,
+      existingUserArms: userYoloPoseArmsArtifact,
+      existingUserLegs: userYoloPoseLegsArtifact,
       setRefArtifact: setRefYoloArtifact,
       setUserArtifact: setUserYoloArtifact,
+      setRefArmsArtifact: setRefYoloPoseArmsArtifact,
+      setRefLegsArtifact: setRefYoloPoseLegsArtifact,
+      setUserArmsArtifact: setUserYoloPoseArmsArtifact,
+      setUserLegsArtifact: setUserYoloPoseLegsArtifact,
       onStatus: setOverlayStatus,
+      onSegmentProgress: (segmentIndex, progress) => {
+        setYoloSegmentProgress({ segmentIndex, progress });
+      },
     })
       .catch((err) => {
         autoYoloStartedRef.current = false;
-        setOverlayStatus(err instanceof Error ? err.message : "YOLO overlay generation failed.");
+        setOverlayStatus(err instanceof Error ? err.message : "YOLO hybrid overlay generation failed.");
       })
       .finally(() => {
         setOverlayBusy(false);
@@ -311,6 +419,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
     sessionEbsData,
     refYoloArtifact,
     userYoloArtifact,
+    refYoloPoseArmsArtifact,
+    refYoloPoseLegsArtifact,
+    userYoloPoseArmsArtifact,
+    userYoloPoseLegsArtifact,
   ]);
 
   // Auto-resume: when BodyPix is already cached but Gemini is missing, auto-enqueue those segments
@@ -396,6 +508,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
     autoBodyPixStartedRef.current = false;
     autoYoloStartedRef.current = false;
     setOverlayCacheReady(false);
+    setBodyPixSegmentProgress(null);
+    setYoloSegmentProgress(null);
   }, [sessionId]);
 
   useEffect(() => {
@@ -568,13 +682,155 @@ export function FeedbackViewer(props: EbsViewerProps) {
     currentPracticeSegment && state.practice.moves.length
       ? `${state.practice.moves.length} moves · ${(currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec).toFixed(1)}s segment · plays ${((currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec) / state.practice.playbackRate).toFixed(1)}s at ${practiceSpeedText}`
       : "";
-  const activeSideOverlayDetector = overlayDetector === "yolo" ? "YOLO" : "BodyPix";
+  const activeSideOverlayDetector = overlayDetector === "yolo" ? "YOLO Hybrid" : "BodyPix";
   const activeReferenceArtifact = overlayDetector === "yolo" ? refYoloArtifact : refBodyPixArtifact;
   const activeUserArtifact = overlayDetector === "yolo" ? userYoloArtifact : userBodyPixArtifact;
   const overlaySegmentPlans = useMemo(
     () => buildOverlaySegmentPlans(sessionEbsData),
     [sessionEbsData],
   );
+  const segmentMoves = useMemo(
+    () => state.segments.map((_, index) => buildMovesForSegment(state.beats, state.segments, index)),
+    [state.beats, state.segments],
+  );
+  const referenceYoloLayers = useMemo(
+    () => [
+      { key: "ref-yolo-seg", artifact: refYoloArtifact, opacity: 0.58, className: "z-10" },
+      { key: "ref-yolo-legs", artifact: refYoloPoseLegsArtifact, opacity: 0.84, className: "z-20" },
+      { key: "ref-yolo-arms", artifact: refYoloPoseArmsArtifact, opacity: 0.94, className: "z-30" },
+    ],
+    [refYoloArtifact, refYoloPoseArmsArtifact, refYoloPoseLegsArtifact],
+  );
+  const userYoloLayers = useMemo(
+    () => [
+      { key: "user-yolo-seg", artifact: userYoloArtifact, opacity: 0.6, className: "z-10" },
+      { key: "user-yolo-legs", artifact: userYoloPoseLegsArtifact, opacity: 0.86, className: "z-20" },
+      { key: "user-yolo-arms", artifact: userYoloPoseArmsArtifact, opacity: 0.96, className: "z-30" },
+    ],
+    [userYoloArtifact, userYoloPoseArmsArtifact, userYoloPoseLegsArtifact],
+  );
+  const getRenderableSegment = useCallback((artifact: OverlayArtifact | null, index: number) => {
+    return (
+      artifact?.segments?.find(
+        (segment) => segment.index === index && Boolean(segment.video || (segment.frames && segment.frames.length > 0)),
+      ) ?? null
+    );
+  }, []);
+  const getRenderableYoloChunksForSegment = useCallback((artifact: OverlayArtifact | null, segmentIndex: number) => {
+    return (artifact?.segments ?? []).filter((segment) => {
+      const renderable = Boolean(segment.video || (segment.frames && segment.frames.length > 0));
+      return renderable && Number(segment.meta?.segmentIndex) === segmentIndex;
+    });
+  }, []);
+  const hasRenderableYoloMoveChunk = useCallback(
+    (artifact: OverlayArtifact | null, segmentIndex: number, moveIndex: number) => {
+      return (artifact?.segments ?? []).some((segment) => {
+        const renderable = Boolean(segment.video || (segment.frames && segment.frames.length > 0));
+        return (
+          renderable &&
+          Number(segment.meta?.segmentIndex) === segmentIndex &&
+          Number(segment.meta?.moveIndex) === moveIndex
+        );
+      });
+    },
+    [],
+  );
+  const activeMoveReadiness = useMemo(() => {
+    const inFlight = overlayDetector === "yolo" ? yoloSegmentProgress : bodyPixSegmentProgress;
+    const readySharedCutoffBySegment = new Map<number, number>();
+
+    state.segments.forEach((segment, index) => {
+      const moves = segmentMoves[index] ?? [];
+      const yoloRenderableChunkCount = getRenderableYoloChunksForSegment(refYoloArtifact, index).length;
+      const segmentComplete =
+        overlayDetector === "yolo"
+          ? moves.length > 0
+            ? moves.every(
+                (_move, moveIndex) =>
+                  hasRenderableYoloMoveChunk(refYoloArtifact, index, moveIndex) &&
+                  hasRenderableYoloMoveChunk(userYoloArtifact, index, moveIndex) &&
+                  hasRenderableYoloMoveChunk(refYoloPoseArmsArtifact, index, moveIndex) &&
+                  hasRenderableYoloMoveChunk(refYoloPoseLegsArtifact, index, moveIndex) &&
+                  hasRenderableYoloMoveChunk(userYoloPoseArmsArtifact, index, moveIndex) &&
+                  hasRenderableYoloMoveChunk(userYoloPoseLegsArtifact, index, moveIndex),
+              )
+            : Boolean(
+                getRenderableYoloChunksForSegment(refYoloArtifact, index).length &&
+                  getRenderableYoloChunksForSegment(userYoloArtifact, index).length &&
+                  getRenderableYoloChunksForSegment(refYoloPoseArmsArtifact, index).length &&
+                  getRenderableYoloChunksForSegment(refYoloPoseLegsArtifact, index).length &&
+                  getRenderableYoloChunksForSegment(userYoloPoseArmsArtifact, index).length &&
+                  getRenderableYoloChunksForSegment(userYoloPoseLegsArtifact, index).length,
+              )
+          : Boolean(getRenderableSegment(refBodyPixArtifact, index) && getRenderableSegment(userBodyPixArtifact, index));
+
+      if (segmentComplete) {
+        readySharedCutoffBySegment.set(index, segment.shared_end_sec);
+        return;
+      }
+
+      if (overlayDetector === "yolo" && yoloRenderableChunkCount > 0) {
+        const completedMoveCount = moves.filter(
+          (_move, moveIndex) =>
+            hasRenderableYoloMoveChunk(refYoloArtifact, index, moveIndex) &&
+            hasRenderableYoloMoveChunk(userYoloArtifact, index, moveIndex) &&
+            hasRenderableYoloMoveChunk(refYoloPoseArmsArtifact, index, moveIndex) &&
+            hasRenderableYoloMoveChunk(refYoloPoseLegsArtifact, index, moveIndex) &&
+            hasRenderableYoloMoveChunk(userYoloPoseArmsArtifact, index, moveIndex) &&
+            hasRenderableYoloMoveChunk(userYoloPoseLegsArtifact, index, moveIndex),
+        ).length;
+        if (completedMoveCount > 0) {
+          const readyMove = moves[Math.min(completedMoveCount - 1, moves.length - 1)];
+          readySharedCutoffBySegment.set(index, readyMove?.endSec ?? segment.shared_start_sec);
+        }
+      } else if (inFlight?.segmentIndex === index) {
+        const duration = Math.max(0, segment.shared_end_sec - segment.shared_start_sec);
+        readySharedCutoffBySegment.set(
+          index,
+          segment.shared_start_sec + duration * Math.max(0, Math.min(1, inFlight.progress)),
+        );
+      }
+    });
+
+    const moveReadyBySegment = segmentMoves.map((moves, segmentIndex) => {
+      const cutoff = readySharedCutoffBySegment.get(segmentIndex);
+      return moves.map((move) => cutoff != null && move.endSec <= cutoff + 0.04);
+    });
+
+    const readyMoves = moveReadyBySegment.reduce(
+      (total, moves) => total + moves.filter(Boolean).length,
+      0,
+    );
+    const totalMoves = segmentMoves.reduce((total, moves) => total + moves.length, 0);
+
+    return {
+      readySharedCutoffBySegment,
+      moveReadyBySegment,
+      readyMoves,
+      totalMoves,
+    };
+  }, [
+    overlayDetector,
+    yoloSegmentProgress,
+    bodyPixSegmentProgress,
+    state.segments,
+    segmentMoves,
+    getRenderableSegment,
+    getRenderableYoloChunksForSegment,
+    hasRenderableYoloMoveChunk,
+    refYoloArtifact,
+    userYoloArtifact,
+    refYoloPoseArmsArtifact,
+    refYoloPoseLegsArtifact,
+    userYoloPoseArmsArtifact,
+    userYoloPoseLegsArtifact,
+    refBodyPixArtifact,
+    userBodyPixArtifact,
+  ]);
+  const moveReadySummary =
+    activeMoveReadiness.totalMoves > 0
+      ? `${activeMoveReadiness.readyMoves}/${activeMoveReadiness.totalMoves} moves ready`
+      : null;
 
   const mapArtifactToOverlayTimeline = useCallback(
     (
@@ -587,9 +843,24 @@ export function FeedbackViewer(props: EbsViewerProps) {
       return {
         ...artifact,
         segments: artifact.segments.map((segment) => {
-          const plan = plansByIndex.get(segment.index);
+          const parentIndex =
+            typeof segment.meta?.segmentIndex === "number"
+              ? segment.meta.segmentIndex
+              : Number(segment.meta?.segmentIndex ?? segment.index);
+          const plan = plansByIndex.get(parentIndex);
           if (!plan) return segment;
-          const nextRange = side === "reference" ? plan.practice : plan.practice;
+          const sharedStartSec = Number(segment.meta?.sharedStartSec);
+          const sharedEndSec = Number(segment.meta?.sharedEndSec);
+          const hasSharedMeta =
+            Number.isFinite(sharedStartSec) &&
+            Number.isFinite(sharedEndSec) &&
+            sharedEndSec > sharedStartSec;
+          const nextRange = hasSharedMeta
+            ? {
+                startSec: plan.practice.startSec + (sharedStartSec - plan.sharedStartSec),
+                endSec: plan.practice.startSec + (sharedEndSec - plan.sharedStartSec),
+              }
+            : plan.practice;
           return {
             ...segment,
             startSec: nextRange.startSec,
@@ -608,6 +879,22 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const overlayUserArtifact = useMemo(
     () => mapArtifactToOverlayTimeline(activeUserArtifact, "practice"),
     [activeUserArtifact, mapArtifactToOverlayTimeline],
+  );
+  const overlayReferenceYoloLayers = useMemo(
+    () =>
+      referenceYoloLayers.map((layer) => ({
+        ...layer,
+        artifact: mapArtifactToOverlayTimeline(layer.artifact, "reference"),
+      })),
+    [mapArtifactToOverlayTimeline, referenceYoloLayers],
+  );
+  const overlayUserYoloLayers = useMemo(
+    () =>
+      userYoloLayers.map((layer) => ({
+        ...layer,
+        artifact: mapArtifactToOverlayTimeline(layer.artifact, "practice"),
+      })),
+    [mapArtifactToOverlayTimeline, userYoloLayers],
   );
   // Overlay diff: get frame from per-segment BodyPix artifacts for current time
   const getOverlayDiffFrame = useCallback((
@@ -786,7 +1073,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                           ? "bg-slate-800 text-white"
                           : "bg-slate-100 text-slate-600 hover:bg-slate-200"
                       }`}
-                      title="Use YOLO overlays"
+                      title="Use YOLO hybrid overlays"
                     >
                       YOLO
                     </button>
@@ -838,7 +1125,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
         </div>
           {(overlayStatus || overlayBusy) && sessionMode ? (
             <div className="mb-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-2 text-xs text-slate-700">
-              {overlayBusy ? `${overlayStatus ?? "Working…"}` : overlayStatus}
+              <div>{overlayBusy ? `${overlayStatus ?? "Working…"}` : overlayStatus}</div>
+              {moveReadySummary ? (
+                <div className="mt-1 text-[11px] text-slate-500">{moveReadySummary}</div>
+              ) : null}
             </div>
           ) : null}
           {viewMode === "side" ? (
@@ -853,7 +1143,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
                   {sessionMode && showBodyPix ? (
                     overlayMode === "precomputed" ? (
-                      <ProgressiveOverlay videoRef={refVideo} artifact={activeReferenceArtifact} />
+                      overlayDetector === "yolo" ? (
+                        <YoloHybridOverlayStack videoRef={refVideo} layers={referenceYoloLayers} />
+                      ) : (
+                        <ProgressiveOverlay videoRef={refVideo} artifact={activeReferenceArtifact} />
+                      )
                     ) : (
                       <BodyPixOverlay videoRef={refVideo} opacity={0.68} color={{ r: 50, g: 200, b: 100 }} />
                     )
@@ -878,7 +1172,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
                   {sessionMode && showBodyPix ? (
                     overlayMode === "precomputed" ? (
-                      <ProgressiveOverlay videoRef={userVideo} artifact={activeUserArtifact} />
+                      overlayDetector === "yolo" ? (
+                        <YoloHybridOverlayStack videoRef={userVideo} layers={userYoloLayers} />
+                      ) : (
+                        <ProgressiveOverlay videoRef={userVideo} artifact={activeUserArtifact} />
+                      )
                     ) : (
                       <BodyPixOverlay videoRef={userVideo} opacity={0.68} color={{ r: 255, g: 100, b: 50 }} />
                     )
@@ -913,10 +1211,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   {overlayDetector === "yolo" ? (
                     <>
                       {(overlayViewSource === "reference" || overlayViewSource === "both") && (
-                        <ProgressiveOverlay videoRef={overlayVideoRef} artifact={overlayReferenceArtifact} />
+                        <YoloHybridOverlayStack videoRef={overlayVideoRef} layers={overlayReferenceYoloLayers} />
                       )}
                       {(overlayViewSource === "user" || overlayViewSource === "both") && (
-                        <ProgressiveOverlay videoRef={overlayVideoRef} artifact={overlayUserArtifact} />
+                        <YoloHybridOverlayStack videoRef={overlayVideoRef} layers={overlayUserYoloLayers} />
                       )}
                     </>
                   ) : (
@@ -1103,6 +1401,20 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     <div className="seg-time">
                       {fmtTime(segment.shared_start_sec)} - {fmtTime(segment.shared_end_sec)}
                     </div>
+                    {segmentMoves[index]?.length ? (
+                      <div
+                        className={`text-[10px] ${
+                          activeMoveReadiness.moveReadyBySegment[index]?.every(Boolean)
+                            ? "text-emerald-600"
+                            : activeMoveReadiness.moveReadyBySegment[index]?.some(Boolean)
+                              ? "text-amber-600"
+                              : "text-slate-400"
+                        }`}
+                      >
+                        {activeMoveReadiness.moveReadyBySegment[index]?.filter(Boolean).length ?? 0}/
+                        {segmentMoves[index].length} moves ready
+                      </div>
+                    ) : null}
                     <button
                       className="seg-practice-btn"
                       onClick={(event) => {
@@ -1240,6 +1552,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     state.practice.moves.map((move, index) => {
                       const segDuration =
                         currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec;
+                      const moveReady =
+                        activeMoveReadiness.moveReadyBySegment[state.practice.segmentIndex]?.[index] ?? false;
                       return (
                         <div
                           key={`move-track-${index}`}
@@ -1254,6 +1568,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                           style={{
                             left: `${((move.startSec - currentPracticeSegment.shared_start_sec) / segDuration) * 100}%`,
                             width: `${((move.endSec - move.startSec) / segDuration) * 100}%`,
+                            opacity: moveReady ? 1 : 0.45,
                           }}
                           onClick={(event) => {
                             event.stopPropagation();
@@ -1261,6 +1576,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                           }}
                         >
                           <div className="mv-n">Move {move.num}</div>
+                          <div className="mv-s">{moveReady ? "Ready" : "Processing"}</div>
                           {move.isTransition && <div className="mv-s">Transition</div>}
                         </div>
                       );
@@ -1281,7 +1597,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
               </div>
 
               <div className="move-list">
-                {state.practice.moves.map((move, index) => (
+                {state.practice.moves.map((move, index) => {
+                  const moveReady =
+                    activeMoveReadiness.moveReadyBySegment[state.practice.segmentIndex]?.[index] ?? false;
+                  return (
                   <div
                     key={`move-chip-${index}`}
                     className={[
@@ -1292,15 +1611,20 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     ]
                       .filter(Boolean)
                       .join(" ")}
+                    style={{ opacity: moveReady ? 1 : 0.6 }}
                     onClick={() => seekToMove(index)}
                   >
                     <div className="mv-cn">Move {move.num}</div>
                     <div className="mv-ct">
                       {fmtTime(move.startSec)} - {fmtTime(move.endSec)}
                     </div>
+                    <div className={`text-[10px] ${moveReady ? "text-emerald-600" : "text-slate-400"}`}>
+                      {moveReady ? "Ready" : "Processing"}
+                    </div>
                     {move.isTransition && <div className="mv-cl">Transition</div>}
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </div>
           )}

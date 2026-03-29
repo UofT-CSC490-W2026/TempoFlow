@@ -31,6 +31,8 @@ async function runSegmentedBrowserBodyPixPipeline(params: {
   onStatus: (msg: string) => void;
   /** Fires when ref+user BodyPix for this segment index is ready (cached or freshly built). */
   onSegmentComplete?: (segmentIndex: number) => void;
+  /** Fires as the current segment progresses from 0..1. */
+  onSegmentProgress?: (segmentIndex: number, progress: number) => void;
 }): Promise<boolean> {
   const {
     sessionId,
@@ -46,6 +48,7 @@ async function runSegmentedBrowserBodyPixPipeline(params: {
     setPracticeArtifact,
     onStatus,
     onSegmentComplete,
+    onSegmentProgress,
   } = params;
 
   if (!overlaySegmentPlans.length) {
@@ -58,6 +61,7 @@ async function runSegmentedBrowserBodyPixPipeline(params: {
   ) {
     onStatus("BodyPix overlays already ready.");
     for (const plan of overlaySegmentPlans) {
+      onSegmentProgress?.(plan.index, 1);
       onSegmentComplete?.(plan.index);
     }
     return true;
@@ -112,6 +116,7 @@ async function runSegmentedBrowserBodyPixPipeline(params: {
     const updateSegmentStatus = () => {
       const avgProgress = (referenceProgress + practiceProgress) / 2;
       const pct = Math.max(0, Math.min(100, Math.round(avgProgress * 100)));
+      onSegmentProgress?.(plan.index, avgProgress);
       onStatus(`BodyPix segment ${ordinal}/${overlaySegmentPlans.length} processing… ${pct}%`);
     };
 
@@ -184,6 +189,7 @@ async function runSegmentedBrowserBodyPixPipeline(params: {
 
     setReferenceArtifact(referenceArtifact);
     setPracticeArtifact(practiceArtifact);
+    onSegmentProgress?.(plan.index, 1);
     onSegmentComplete?.(plan.index);
 
     const nextPendingIndex = overlaySegmentPlans.findIndex(
@@ -219,6 +225,7 @@ export async function ensureBrowserBodyPixOverlays(params: {
   setUserArtifact: (a: OverlayArtifact) => void;
   onStatus: (msg: string | null) => void;
   onSegmentComplete?: (segmentIndex: number) => void;
+  onSegmentProgress?: (segmentIndex: number, progress: number) => void;
 }): Promise<void> {
   const OVERLAY_FPS = BROWSER_BODYPIX_OVERLAY_FPS;
   const variant = BROWSER_BODYPIX_VARIANT;
@@ -236,6 +243,7 @@ export async function ensureBrowserBodyPixOverlays(params: {
     setUserArtifact,
     onStatus,
     onSegmentComplete,
+    onSegmentProgress,
   } = params;
 
   const getVideoSize = (side: "reference" | "practice") => {
@@ -262,6 +270,7 @@ export async function ensureBrowserBodyPixOverlays(params: {
     setPracticeArtifact: setUserArtifact,
     onStatus: (msg) => onStatus(msg),
     onSegmentComplete,
+    onSegmentProgress,
   });
 
   if (usedSegmented) {

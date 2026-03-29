@@ -83,7 +83,7 @@ def test_draw_pose_segment_uses_cv2(monkeypatch):
     monkeypatch.setitem(sys.modules, "cv2", cv2)
     overlay = np.zeros((32, 32, 3), dtype=np.uint8)
     oa._draw_pose_segment(overlay, (2, 2), (10, 10), 3, (10, 20, 30))
-    assert cv2.line.called and cv2.circle.call_count == 2
+    assert cv2.fillConvexPoly.called
 
 
 def test_draw_pose_circle_skips_invalid():
@@ -267,11 +267,19 @@ def test_overlay_yolo_pose_start_returns_job_id(mock_save, overlay_client):
             "fps": 12,
             "session_id": "sess",
             "side": "ref",
+            "start_sec": "0.25",
+            "end_sec": "1.5",
         },
         files={"video": vid},
     )
     assert r.status_code == 200
     assert "job_id" in r.json()
+    jid = r.json()["job_id"]
+    try:
+        assert oa.POSE_JOBS[jid]["start_sec"] == 0.25
+        assert oa.POSE_JOBS[jid]["end_sec"] == 1.5
+    finally:
+        oa.POSE_JOBS.pop(jid, None)
 
 
 def test_overlay_yolo_pose_status_200(overlay_client):
@@ -560,7 +568,15 @@ def _install_mock_cv2_and_ultralytics(monkeypatch, mode: str, opened_capture: bo
         circle=lambda *args, **kwargs: None,
         fillConvexPoly=lambda *args, **kwargs: None,
     )
-    ultralytics = types.SimpleNamespace(YOLO=lambda path: _MockYOLO(mode, 48, 64))
+    def _make_yolo(path):
+        path_str = str(path)
+        if "seg" in path_str:
+            return _MockYOLO("seg", 48, 64)
+        if "pose" in path_str:
+            return _MockYOLO("pose", 48, 64)
+        return _MockYOLO(mode, 48, 64)
+
+    ultralytics = types.SimpleNamespace(YOLO=_make_yolo)
     monkeypatch.setitem(sys.modules, "cv2", cv2)
     monkeypatch.setitem(sys.modules, "ultralytics", ultralytics)
     return cap, writer
@@ -598,9 +614,11 @@ def test_run_yolo_overlay_job_writer_open_error(monkeypatch, tmp_path):
 def test_run_pose_overlay_job_success(monkeypatch, tmp_path):
     _, writer = _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose")
     monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
-    weights = tmp_path / "yolo26n-pose.pt"
-    weights.write_bytes(b"w")
-    monkeypatch.setattr(oa, "_weights_path", lambda _: weights)
+    pose_weights = tmp_path / "yolo26n-pose.pt"
+    pose_weights.write_bytes(b"w")
+    seg_weights = tmp_path / "yolo26n-seg.pt"
+    seg_weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda name: pose_weights if "pose" in name else seg_weights)
     jid = "pose-success"
     oa.POSE_JOBS[jid] = {"status": "queued"}
     oa._run_pose_overlay_job(jid, "/tmp/in.mp4", "/tmp/arms.webm", "/tmp/legs.webm", "#f00", "#0f0", 1)

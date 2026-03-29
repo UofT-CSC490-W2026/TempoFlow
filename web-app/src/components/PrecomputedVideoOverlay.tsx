@@ -1,14 +1,16 @@
 "use client";
 
 import { useEffect, useMemo, useRef } from "react";
-import type { RefObject } from "react";
+import type { CSSProperties, RefObject } from "react";
 
 export function PrecomputedVideoOverlay(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
   overlayBlob: Blob;
   mimeType?: string;
+  className?: string;
+  style?: CSSProperties;
 }) {
-  const { videoRef, overlayBlob } = props;
+  const { videoRef, overlayBlob, className, style } = props;
   const overlayVideoRef = useRef<HTMLVideoElement | null>(null);
 
   const overlayUrl = useMemo(() => URL.createObjectURL(overlayBlob), [overlayBlob]);
@@ -101,9 +103,8 @@ export function PrecomputedVideoOverlay(props: {
     <video
       ref={overlayVideoRef}
       src={overlayUrl}
-      className="pointer-events-none absolute inset-0 h-full w-full"
-      style={{ mixBlendMode: "screen" }}
+      className={`pointer-events-none absolute inset-0 h-full w-full object-contain ${className ?? ""}`}
+      style={{ mixBlendMode: "screen", background: "transparent", ...(style ?? {}) }}
     />
   );
 }
-
