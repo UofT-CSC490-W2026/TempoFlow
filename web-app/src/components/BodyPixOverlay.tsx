@@ -11,12 +11,14 @@ interface BodyPixOverlayProps {
   videoRef: RefObject<HTMLVideoElement | null>;
   sourceKeypoints?: Keypoint[] | null;
   opacity?: number;
+  color?: { r: number; g: number; b: number };
 }
 
 export function BodyPixOverlay({
   videoRef,
   sourceKeypoints,
   opacity = 0.6,
+  color = { r: 56, g: 189, b: 248 }, // default cyan
 }: BodyPixOverlayProps) {
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const netRef = useRef<BodyPixNet | null>(null);
@@ -108,9 +110,9 @@ export function BodyPixOverlay({
       for (let i = 0; i < result.data.length; i++) {
         if (result.data[i] >= 0) { // If pixel belongs to a body part
           const px = i * 4;
-          imgData.data[px] = 56;     // Cyan/Blue R
-          imgData.data[px + 1] = 189; // Cyan/Blue G
-          imgData.data[px + 2] = 248; // Cyan/Blue B
+          imgData.data[px] = color.r;
+          imgData.data[px + 1] = color.g;
+          imgData.data[px + 2] = color.b;
           imgData.data[px + 3] = Math.round(255 * opacity);
         }
       }

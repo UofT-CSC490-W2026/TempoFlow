@@ -13,3 +13,5 @@ bin/*
 # lib
 # lib/*
 web-app/package-lock.json
+/evaluations/
+.coverage

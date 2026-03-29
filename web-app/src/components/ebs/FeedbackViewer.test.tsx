@@ -10,17 +10,37 @@ vi.mock("./useEbsViewer", () => ({
 
 // 2. Mock sub-components that perform heavy logic or WebGL
 vi.mock("../BodyPixOverlay", () => ({ BodyPixOverlay: () => <div data-testid="bodypix-live" /> }));
-vi.mock("../PrecomputedVideoOverlay", () => ({ PrecomputedVideoOverlay: () => <div data-testid="precomputed-video" /> }));
-vi.mock("./FeedbackPanel", () => ({ FeedbackPanel: () => <div data-testid="feedback-panel" /> }));
-vi.mock("./GeminiFeedbackPanel", () => ({ 
-  GeminiFeedbackPanel: () => <div data-testid="gemini-panel" />,
-  TIMING_LABEL_COLORS: {} 
+vi.mock("../ProgressiveOverlay", () => ({
+  ProgressiveOverlay: () => <div data-testid="progressive-overlay" />,
+}));
+vi.mock("./GeminiFeedbackPanel", () => {
+  const React = require("react");
+  return {
+    GeminiFeedbackPanel: React.forwardRef(() => <div data-testid="gemini-panel" />),
+    TIMING_LABEL_COLORS: {},
+  };
+});
+
+// 3. Mock Storage Utils — return cached BodyPix frames so Gemini isn’t blocked
+vi.mock("../../lib/overlayStorage", () => ({
+  getSessionOverlay: vi.fn().mockResolvedValue({
+    version: 1,
+    type: "bodypix",
+    side: "reference",
+    fps: 12,
+    width: 64,
+    height: 48,
+    frameCount: 1,
+    createdAt: "",
+    frames: ["data:image/webp;base64,UklGRiI="],
+  }),
+  buildOverlayKey: vi.fn((opts: { side?: string }) => `mock-key-${opts?.side ?? "x"}`),
 }));
 
-// 3. Mock Storage Utils
-vi.mock("../../lib/overlayStorage", () => ({
-  getSessionOverlay: vi.fn().mockResolvedValue(null),
-  buildOverlayKey: vi.fn().mockReturnValue("mock-key"),
+vi.mock("../../lib/ensureBrowserBodyPixOverlays", () => ({
+  ensureBrowserBodyPixOverlays: vi.fn().mockResolvedValue(undefined),
+  BROWSER_BODYPIX_OVERLAY_FPS: 12,
+  BROWSER_BODYPIX_VARIANT: "bodypix24-browser",
 }));
 
 describe("FeedbackViewer", () => {
@@ -84,7 +104,7 @@ describe("FeedbackViewer", () => {
     expect(screen.queryByText(/currently using BodyPix/i)).not.toBeInTheDocument();
   });
 
-  it("renders session mode directly with video players", () => {
+  it("renders session mode directly with video players", async () => {
     render(
       <FeedbackViewer
         mode="session"
@@ -94,8 +114,10 @@ describe("FeedbackViewer", () => {
         ebsData={{ segments: [], alignment: {} } as any}
       />
     );
-    expect(screen.getByText(/currently using BodyPix/i)).toBeInTheDocument();
     expect(screen.getByText(/Reference \(Clip 1\)/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByTestId("gemini-panel")).toBeInTheDocument();
+    });
   });
 
   it("toggles playback when the play button is clicked", () => {
@@ -125,7 +147,7 @@ describe("FeedbackViewer", () => {
     expect(mockActions.togglePlay).toHaveBeenCalled();
   });
 
-  it("shows Gemini and Dance feedback panels in session mode", () => {
+  it("shows Gemini feedback panel in session mode", () => {
     render(
       <FeedbackViewer
         mode="session"
@@ -136,7 +158,6 @@ describe("FeedbackViewer", () => {
       />
     );
     expect(screen.getByTestId("gemini-panel")).toBeInTheDocument();
-    expect(screen.getByTestId("feedback-panel")).toBeInTheDocument();
   });
 
   it("switches to practice mode when requested", () => {

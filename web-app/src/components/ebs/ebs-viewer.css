@@ -290,6 +290,10 @@
   margin-bottom: 16px;
 }
 
+.videos.single-view {
+  grid-template-columns: 1fr;
+}
+
 .video-panel,
 .transport,
 .timeline,
@@ -402,6 +406,8 @@
 .move-timeline {
   padding: 16px 20px;
   margin-bottom: 14px;
+  position: relative;
+  z-index: 1;
 }
 
 .transport-row {

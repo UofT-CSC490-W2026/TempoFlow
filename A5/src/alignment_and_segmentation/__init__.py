@@ -1,4 +1,8 @@
-from .alignment_core import perform_alignment
-from .utils import load_audio_files
-from .router import router
-from .schemas import AlignmentResult
+"""
+Alignment + segmentation package.
+
+Keep this module free of heavy imports and side-effects so that unit tests can
+import submodules and patch symbols reliably (e.g. `src.alignment_and_segmentation.router.*`).
+"""
+
+__all__: list[str] = []

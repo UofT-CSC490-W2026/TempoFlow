@@ -20,7 +20,8 @@ def _candidate_from_env(env_name: str) -> str | None:
     found = shutil.which(raw)
     if found:
         return found
-    return raw
+    # Do not return a non-existent path (e.g. EB env set before first boot install).
+    return None
 
 
 def _common_windows_ffmpeg_dirs() -> list[Path]:
@@ -44,6 +45,11 @@ def _first_existing_exe(dirs: list[Path], name: str) -> str | None:
     return None
 
 
+def _common_unix_ffmpeg_dirs() -> list[Path]:
+    """Elastic Beanstalk / Docker often install static ffmpeg under /usr/local/bin (not always on minimal PATH)."""
+    return [Path("/usr/local/bin"), Path("/usr/bin"), Path("/bin")]
+
+
 def resolve_ffmpeg_executable() -> str:
     c = _candidate_from_env("EBS_FFMPEG_PATH")
     if c:
@@ -53,6 +59,10 @@ def resolve_ffmpeg_executable() -> str:
         return w
     if sys.platform == "win32":
         hit = _first_existing_exe(_common_windows_ffmpeg_dirs(), "ffmpeg")
+        if hit:
+            return hit
+    else:
+        hit = _first_existing_exe(_common_unix_ffmpeg_dirs(), "ffmpeg")
         if hit:
             return hit
     return "ffmpeg"
@@ -67,6 +77,10 @@ def resolve_ffprobe_executable() -> str:
         return w
     if sys.platform == "win32":
         hit = _first_existing_exe(_common_windows_ffmpeg_dirs(), "ffprobe")
+        if hit:
+            return hit
+    else:
+        hit = _first_existing_exe(_common_unix_ffmpeg_dirs(), "ffprobe")
         if hit:
             return hit
     return "ffprobe"

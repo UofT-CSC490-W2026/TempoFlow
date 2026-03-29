@@ -2,10 +2,10 @@
 
 import { Suspense, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { useRouter, useSearchParams } from "next/navigation";
 import "../../components/ebs/ebs-viewer.css";
 
-import { EbsViewer } from "../../components/ebs/EbsViewer";
 import { FeedbackViewer } from "../../components/ebs/FeedbackViewer";
 import type { EbsData } from "../../components/ebs/types";
 import { getSessionEbs, storeSessionEbs } from "../../lib/ebsStorage";
@@ -16,13 +16,16 @@ import {
   type TempoFlowSession,
   updateSession,
 } from "../../lib/sessionStorage";
-import { DifferenceViewer } from "../../components/ebs/DifferenceViewer";
 import { getSessionVideo } from "../../lib/videoStorage";
-const DEFAULT_EBS_PROCESSOR_URL = "http://127.0.0.1:8787/api/process";
+import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 const MAX_EBS_PROCESSING_SECONDS = 5 * 60;
 
 function getProcessorBaseUrl(processorUrl: string) {
   return processorUrl.replace(/\/api\/process\/?$/, "");
+}
+
+function isLocalDevProcessorUrl(url: string): boolean {
+  return url.includes("127.0.0.1") || url.includes("localhost:");
 }
 
 function buildEbsMeta(data: EbsData) {
@@ -52,7 +55,14 @@ function AnalysisPageContent() {
   const [processingStartedAt, setProcessingStartedAt] = useState<number | null>(null);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const generationRequestRef = useRef<string | null>(null);
-  const processorUrl = process.env.NEXT_PUBLIC_EBS_PROCESSOR_URL ?? DEFAULT_EBS_PROCESSOR_URL;
+  const ebsViewerRef = useRef<{ seekTo: (time: number) => void } | null>(null);
+  const [sharedTime, setSharedTime] = useState(0);
+  const processorUrl = getPublicEbsProcessorUrl();
+
+  const handleSeek = (time: number) => {
+    setSharedTime(time);
+    ebsViewerRef.current?.seekTo(time);
+  };
 
   const processorBaseUrl = useMemo(() => getProcessorBaseUrl(processorUrl), [processorUrl]);
   
@@ -225,18 +235,23 @@ function AnalysisPageContent() {
           } catch (error) {
             lastError = error;
             const message = error instanceof Error ? error.message : String(error);
-            const isSuspended =
-              message.includes("ERR_NETWORK_IO_SUSPENDED") ||
-              message.includes("Failed to fetch") ||
-              message.includes("NetworkError");
-            if (!isSuspended || attempt === 1) {
+            // Only retry on likely-transient Chrome suspend; "Failed to fetch" is often COEP/CORS (retry won't help).
+            const isTransientSuspend = message.includes("ERR_NETWORK_IO_SUSPENDED");
+            if (!isTransientSuspend || attempt === 1) {
               throw error;
             }
           }
         }
 
         if (!response || !payload) {
-          throw lastError ?? new Error(`Failed to reach the local EBS processor at ${processorUrl}.`);
+          throw (
+            lastError ??
+            new Error(
+              isLocalDevProcessorUrl(processorUrl)
+                ? `Failed to reach the local EBS processor at ${processorUrl}.`
+                : `Failed to reach the EBS processor at ${processorUrl}.`,
+            )
+          );
         }
 
         if (!response.ok) {
@@ -268,14 +283,16 @@ function AnalysisPageContent() {
           error instanceof Error
             ? error.message
             : "Failed to generate EBS data. Start the local Python service and try again.";
-        const isSuspended =
-          message.includes("ERR_NETWORK_IO_SUSPENDED") ||
-          message.includes("Failed to fetch") ||
-          message.includes("NetworkError");
-        const friendlyMessage = isSuspended
+        const isChromeIoSuspended = message.includes("ERR_NETWORK_IO_SUSPENDED");
+        const isFetchFailed =
+          message.includes("Failed to fetch") || message.includes("NetworkError");
+        const hostedHint = isLocalDevProcessorUrl(processorUrl)
+          ? `Failed to reach ${processorUrl}. Start the A5 API locally: cd A5 && uvicorn src.main:app --host 127.0.0.1 --port 8787`
+          : `Failed to reach ${processorUrl}. Confirm the hosted API (EB/CloudFront) is healthy and redeploy A5 if you updated CORS/COEP headers.`;
+        const friendlyMessage = isChromeIoSuspended
           ? "Browser network I/O was suspended during upload (often caused by the tab going to background, laptop sleep, or aggressive throttling). Keep this tab active and retry."
-          : message.includes("Failed to fetch")
-            ? `Failed to reach the local EBS processor at ${processorUrl}. Keep the local A5 EBS server running, then retry.`
+          : isFetchFailed
+            ? hostedHint
             : message;
 
         updateSession(session.id, {
@@ -297,10 +314,11 @@ function AnalysisPageContent() {
         );
         setPageError(friendlyMessage);
       } finally {
-        if (!cancelled) {
-          setProcessingEbs(false);
-          setProcessingStartedAt(null);
-        }
+        // Always clear the processing flag when the async work finishes. Do not gate this on `cancelled`:
+        // this effect must not list `processingEbs` in deps — if it did, `setProcessingEbs(true)` would
+        // re-run the effect, cleanup would set `cancelled` true, and we'd skip this and stay stuck on "Generating…".
+        setProcessingEbs(false);
+        setProcessingStartedAt(null);
       }
     };
 
@@ -309,7 +327,10 @@ function AnalysisPageContent() {
     return () => {
       cancelled = true;
     };
-  }, [ebsData, loadingSession, pageError, practiceFile, processingEbs, processorUrl, referenceFile, session]);
+    // Omit `processingEbs`: including it makes `setProcessingEbs(true)` re-subscribe the effect and run
+    // cleanup, which sets `cancelled` and breaks the in-flight `generateEbs` (stuck spinner, no result).
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- see above
+  }, [ebsData, loadingSession, pageError, practiceFile, processorUrl, referenceFile, session]);
 
   useEffect(() => {
     if (!processingEbs || !session) return;
@@ -352,13 +373,13 @@ function AnalysisPageContent() {
     const pollProcessorStatus = async () => {
       try {
         const statusUrl = `${processorBaseUrl}/api/status?session=${encodeURIComponent(sessionId)}`;
-        const response = await fetch(statusUrl, { method: "GET" });
+        const response = await fetch(statusUrl, { method: "GET", cache: "no-store" });
         if (!response.ok) return;
         const payload = (await response.json()) as { status?: string; has_result?: boolean };
         if (cancelled) return;
         if (payload?.status === "done" && payload?.has_result) {
           const resultUrl = `${processorBaseUrl}/api/result?session=${encodeURIComponent(sessionId)}`;
-          const resultResponse = await fetch(resultUrl, { method: "GET" });
+          const resultResponse = await fetch(resultUrl, { method: "GET", cache: "no-store" });
           if (!resultResponse.ok) return;
           const result = (await resultResponse.json()) as EbsData;
           if (cancelled) return;
@@ -405,78 +426,36 @@ function AnalysisPageContent() {
     setElapsedSeconds(0);
     setStatusMessage("Retrying EBS generation...");
   };
-  // 1. Create the state for the current time
-  const [sharedTime, setSharedTime] = useState(0);
-  // const sessionMode = props.mode === "session";
-  // 2. Create a Ref to the EbsViewer (to trigger seeking)
-  // Note: You'll need to make sure EbsViewer exposes a seek method via useImperativeHandle
-  const ebsViewerRef = useRef<{ seekTo: (time: number) => void } | null>(null);
-
-  // 3. Define the seek handler
-  const handleSeek = (time: number) => {
-    setSharedTime(time);
-    // Tell the viewer to move the videos to this time
-    ebsViewerRef.current?.seekTo(time);
-  };
-  type TabType = "ebs" | "feedback" | "diff";
-  const [activeTab, setActiveTab] = useState<TabType>("ebs");
 
   const header = (
     <header className="fixed top-0 left-0 right-0 bg-white/85 backdrop-blur-md border-b border-sky-100 z-50">
       <div className="flex items-center px-6 py-3">
         
-        {/* 1. Left Section: Logo (Flex-1 to push center) */}
+        {/* 1. Left Section: Logo */}
         <div className="flex-1">
-          <Link href="/" className="text-2xl font-bold text-slate-900 tracking-tight">
-            TempoFlow
+          <Link href="/" className="flex items-center">
+            <Image 
+              src="/logo.png" 
+              alt="TempoFlow" 
+              width={140} 
+              height={40}
+              className="rounded"
+              priority
+            />
           </Link>
         </div>
 
-        {/* 2. Middle Section: Centered Tabs */}
-        <nav className="flex-none flex items-center bg-slate-100/80 p-1 rounded-xl border border-slate-200/60 shadow-inner">
-          <button
-            onClick={() => setActiveTab("ebs")}
-            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "ebs"
-                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
-            }`}
-          >
-            EBS VIEWER
-          </button>
-          <button
-            onClick={() => setActiveTab("feedback")}
-            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "feedback"
-                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
-            }`}
-          >
-            FEEDBACK
-          </button>
-          <button
-            onClick={() => setActiveTab("diff")}
-            className={`px-6 py-1.5 text-xs font-bold rounded-lg transition-all duration-200 ${
-              activeTab === "diff"
-                ? "bg-white text-sky-600 shadow-md ring-1 ring-black/5"
-                : "text-slate-500 hover:text-slate-700 hover:bg-white/50"
-            }`}
-          >
-            OVERLAY DIFFERENCE
-          </button>
-        </nav>
-
-        {/* 3. Right Section: Actions (Flex-1 + justify-end) */}
+        {/* 2. Right Section: Actions */}
         <div className="flex-1 flex justify-end items-center gap-3">
           <Link 
             href="/dashboard" 
-            className="px-4 py-2 bg-sky-50 text-sky-700 rounded-full text-sm font-medium hover:bg-sky-100 transition-colors"
+            className="px-4 py-2 text-slate-600 hover:text-slate-900 text-sm font-medium transition-colors"
           >
             Dashboard
           </Link>
           <Link 
             href="/upload" 
-            className="px-4 py-2 bg-slate-900 text-white rounded-full text-sm font-medium hover:bg-slate-800 transition-colors shadow-lg shadow-slate-200"
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-400 text-white rounded-full text-sm font-medium hover:from-blue-600 hover:to-cyan-500 transition-all"
           >
             New Session
           </Link>
@@ -572,14 +551,34 @@ function AnalysisPageContent() {
             <div className="mt-5 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-4 text-sm text-slate-600">
               <p className="font-medium text-slate-900">What is happening now</p>
               <p className="mt-2">
-                TempoFlow is sending both videos to the local Python EBS service, extracting audio, aligning the clips,
-                then building beat-synced segments. Larger files can take a couple of minutes.
+                {isLocalDevProcessorUrl(processorUrl) ? (
+                  <>
+                    TempoFlow is sending both videos to your local A5 EBS service (Python), extracting audio, aligning
+                    the clips, then building beat-synced segments. Short clips are often a few seconds; larger files can
+                    take longer.
+                  </>
+                ) : (
+                  <>
+                    TempoFlow is uploading both videos to the hosted alignment API, then extracting audio, aligning the
+                    clips, and building beat-synced segments. Upload time depends on your network; processing time
+                    depends on clip length (hosted runs can take longer than a local dev server).
+                  </>
+                )}
               </p>
               <p className="mt-2 text-slate-500">
-                Keep this tab active while processing. If the browser suspends the request, retry once after confirming
-                that the local A5 EBS server is still running.
-                  </p>
-                </div>
+                {isLocalDevProcessorUrl(processorUrl) ? (
+                  <>
+                    Keep this tab active while processing. If the browser suspends the request, retry after confirming{" "}
+                    <code className="rounded bg-sky-100 px-1">uvicorn</code> is still running on port 8787.
+                  </>
+                ) : (
+                  <>
+                    Keep this tab active while processing. Very long clips may hit API timeouts — try shorter test
+                    videos if uploads finish but the request fails.
+                  </>
+                )}
+              </p>
+            </div>
 
             {pageError ? (
               <div className="mt-6 rounded-2xl border border-red-100 bg-red-50 px-4 py-4">
@@ -599,9 +598,14 @@ function AnalysisPageContent() {
                   </Link>
                 </div>
               </div>
+            ) : isLocalDevProcessorUrl(processorUrl) ? (
+              <p className="mt-6 text-sm text-slate-500">
+                Point <code className="rounded bg-slate-100 px-1">NEXT_PUBLIC_EBS_PROCESSOR_URL</code> at your local A5
+                server when developing offline.
+              </p>
             ) : (
               <p className="mt-6 text-sm text-slate-500">
-                This test flow requires the local Python EBS service to be running.
+                Using hosted processor: <code className="rounded bg-slate-100 px-1 break-all">{processorUrl}</code>
               </p>
             )}
           </div>
@@ -614,54 +618,21 @@ return (
   <div className="min-h-screen bg-sky-50">
     {header}
     <div className="pt-20 px-6 pb-12">
-      {/* --- EBS VIEWER TAB --- */}
-      {activeTab === "ebs" && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <EbsViewer
-            mode="session"
-            sessionId={session.id}
-            title="TempoFlow EBS Session"
-            referenceVideoUrl={referenceVideoUrl}
-            userVideoUrl={practiceVideoUrl}
-            ebsData={ebsData}
-            referenceName={session.referenceName}
-            practiceName={session.practiceName}
-            footerSlot={
-              <Link href="/upload" className="dl-btn">New Session</Link>
-            }
-          />
-        </div>
-      )}
-
-      {/* --- FEEDBACK TAB --- */}
-      {activeTab === "feedback" && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <FeedbackViewer
-            mode="session"
-            sessionId={session.id}
-            title="TempoFlow EBS Session"
-            referenceVideoUrl={referenceVideoUrl}
-            userVideoUrl={practiceVideoUrl}
-            ebsData={ebsData}
-            referenceName={session.referenceName}
-            practiceName={session.practiceName}
-            footerSlot={
-              <Link href="/upload" className="dl-btn">New Session</Link>
-            }
-          />
-        </div>
-      )}
-
-      {/* --- DIFFERENCE TAB --- */}
-      {activeTab === "diff" && (
-        <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
-          <DifferenceViewer 
+      <div className="animate-in fade-in slide-in-from-bottom-2 duration-300">
+        <FeedbackViewer
+          mode="session"
+          sessionId={session.id}
+          title="TempoFlow EBS Session"
           referenceVideoUrl={referenceVideoUrl}
           userVideoUrl={practiceVideoUrl}
           ebsData={ebsData}
+          referenceName={session.referenceName}
+          practiceName={session.practiceName}
+          footerSlot={
+            <Link href="/upload" className="dl-btn">New Session</Link>
+          }
         />
-        </div>
-      )}
+      </div>
     </div>
   </div>
 );

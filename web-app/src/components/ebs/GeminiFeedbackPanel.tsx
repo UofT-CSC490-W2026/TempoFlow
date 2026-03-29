@@ -1,36 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useCallback, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import type { EbsData, EbsSegment } from "./types";
 import { getSessionVideo } from "../../lib/videoStorage";
+import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
+import { buildGeminiSegmentDebugRows } from "../../lib/geminiDebugInfo";
+import { computePosePriorsForSegment } from "../../lib/geminiPosePriors";
+import {
+  buildFeedbackSegmentKey,
+  getFeedbackSegment,
+  hashEbsData,
+  storeFeedbackSegment,
+} from "../../lib/feedbackStorage";
+import type { GeminiFlatMove, GeminiSegmentResult } from "../../lib/geminiFeedbackTypes";
 
-const DEFAULT_PROCESSOR_BASE = "http://127.0.0.1:8787";
+export type { GeminiFlatMove, GeminiMoveResult, GeminiSegmentResult } from "../../lib/geminiFeedbackTypes";
 
 function getProcessorBaseUrl(): string {
-  const url = process.env.NEXT_PUBLIC_EBS_PROCESSOR_URL ?? `${DEFAULT_PROCESSOR_BASE}/api/process`;
-  return url.replace(/\/api\/process\/?$/, "");
+  return getPublicEbsProcessorUrl().replace(/\/api\/process\/?$/, "");
 }
-
-export type GeminiMoveResult = {
-  move_index: number;
-  time_window: string;
-  micro_timing_label: string;
-  micro_timing_evidence: string;
-  body_parts_involved: string[];
-  coaching_note: string;
-  confidence: string;
-  shared_start_sec?: number;
-  shared_end_sec?: number;
-};
-
-export type GeminiSegmentResult = {
-  segment_index: number;
-  model?: string;
-  moves: GeminiMoveResult[];
-  error?: string;
-};
-
-export type GeminiFlatMove = GeminiMoveResult & { segmentIndex: number };
 
 export const TIMING_LABEL_COLORS: Record<string, string> = {
   "on-time": "#34d399",
@@ -57,6 +45,17 @@ const TIMING_BADGES: Record<
 
 const DEFAULT_BADGE = { label: "Unknown", color: "text-slate-500", bg: "bg-slate-100", dot: "bg-slate-400" };
 
+/** Plain-language hints (plan: reduce early/late vs “fast/slow” confusion). */
+const TIMING_LABEL_FRIENDLY: Record<string, string> = {
+  "on-time": "Matches the reference accent timing in this window.",
+  early: "Ahead of the reference motion or beat.",
+  late: "Behind the reference motion or beat.",
+  rushed: "Tight or sharp—often reads as quick or ahead.",
+  dragged: "Extended finish—can feel slow or behind.",
+  mixed: "Some parts early, some late in the same move.",
+  uncertain: "Not enough clear motion to judge timing.",
+};
+
 function fmtTime(sec: number) {
   const safe = Math.max(0, sec);
   const m = Math.floor(safe / 60);
@@ -70,10 +69,30 @@ type GeminiFeedbackPanelProps = {
   sharedTime: number;
   onSeek: (time: number) => void;
   onFeedbackReady?: (moves: GeminiFlatMove[]) => void;
+  /** When set, pose-based timing priors are computed client-side and sent with each segment request. */
+  referenceVideoUrl?: string | null;
+  userVideoUrl?: string | null;
 };
 
-export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
-  const { sessionId, ebsData, segments, sharedTime, onSeek, onFeedbackReady } = props;
+export type GeminiFeedbackPanelHandle = {
+  /** Queue Gemini move-feedback for this segment (call when BodyPix for that segment is ready). Runs one segment at a time. */
+  enqueueSegmentAfterBodyPix: (segmentIndex: number) => void;
+};
+
+const FETCH_RETRIES = 3;
+
+export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiFeedbackPanelProps>(
+  function GeminiFeedbackPanel(props, ref) {
+  const {
+    sessionId,
+    ebsData,
+    segments,
+    sharedTime,
+    onSeek,
+    onFeedbackReady,
+    referenceVideoUrl,
+    userVideoUrl,
+  } = props;
 
   const [running, setRunning] = useState(false);
   const [segmentsDone, setSegmentsDone] = useState(0);
@@ -81,11 +100,75 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
   const [results, setResults] = useState<GeminiSegmentResult[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [filterLabel, setFilterLabel] = useState<string>("all");
-  const hasRun = useRef(false);
+  const [currentMoveIndex, setCurrentMoveIndex] = useState<number>(0);
+  const [showPipelineDebug, setShowPipelineDebug] = useState(false);
+  const [burnInLabels, setBurnInLabels] = useState(true);
+  const [includeAudio, setIncludeAudio] = useState(false);
+  const [pipelineHint, setPipelineHint] = useState<string | null>(null);
   const listRef = useRef<HTMLDivElement>(null);
   const userHovering = useRef(false);
 
+  const queueRef = useRef<number[]>([]);
+  const drainingRef = useRef(false);
+
   const processorBaseUrl = useMemo(getProcessorBaseUrl, []);
+
+  useEffect(() => {
+    queueRef.current = [];
+    drainingRef.current = false;
+    setResults([]);
+    setSegmentsDone(0);
+    setSegmentsTotal(0);
+    setError(null);
+    setPipelineHint(null);
+  }, [sessionId]);
+
+  const pipelineDebugRows = useMemo(
+    () => buildGeminiSegmentDebugRows(ebsData, segments),
+    [ebsData, segments],
+  );
+
+  const validIndices = useMemo(
+    () =>
+      segments
+        .map((_, i) => i)
+        .filter((i) => {
+          const range = segments[i].beat_idx_range;
+          return range != null && range[1] > range[0];
+        }),
+    [segments],
+  );
+
+  const ebsFingerprint = useMemo(() => hashEbsData(ebsData), [ebsData]);
+
+  useEffect(() => {
+    if (!sessionId || validIndices.length === 0) return;
+    let cancelled = false;
+    void (async () => {
+      const rows: GeminiSegmentResult[] = [];
+      for (const segIndex of validIndices) {
+        const key = buildFeedbackSegmentKey({
+          sessionId,
+          segmentIndex: segIndex,
+          burnInLabels,
+          includeAudio,
+          ebsFingerprint,
+        });
+        const c = await getFeedbackSegment(key);
+        if (c) rows.push(c);
+      }
+      if (cancelled || rows.length === 0) return;
+      setResults((prev) => {
+        const bySeg = new Map<number, GeminiSegmentResult>();
+        for (const r of prev) bySeg.set(r.segment_index, r);
+        for (const r of rows) bySeg.set(r.segment_index, r);
+        return [...bySeg.values()].sort((a, b) => a.segment_index - b.segment_index);
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionId, validIndices, burnInLabels, includeAudio, ebsFingerprint]);
 
   const flatMoves = useMemo<GeminiFlatMove[]>(
     () =>
@@ -99,6 +182,28 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
     if (filterLabel === "all") return flatMoves;
     return flatMoves.filter((m) => m.micro_timing_label === filterLabel);
   }, [flatMoves, filterLabel]);
+
+  // Reset current index when filter changes
+  useEffect(() => {
+    setCurrentMoveIndex(0);
+  }, [filterLabel]);
+
+  // Auto-transition to current move based on sharedTime
+  useEffect(() => {
+    if (filtered.length === 0) return;
+    
+    // Find the move that contains the current time
+    const activeIndex = filtered.findIndex((m) => {
+      const start = m.shared_start_sec ?? 0;
+      const end = m.shared_end_sec ?? start;
+      return sharedTime >= start && sharedTime < end;
+    });
+    
+    // If found and different from current, update
+    if (activeIndex !== -1 && activeIndex !== currentMoveIndex) {
+      setCurrentMoveIndex(activeIndex);
+    }
+  }, [sharedTime, filtered, currentMoveIndex]);
 
   useEffect(() => {
     const container = listRef.current;
@@ -124,87 +229,161 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
     }
   }, [sharedTime, filtered, flatMoves]);
 
-  const runAnalysis = useCallback(async () => {
-    if (running || segments.length === 0 || !sessionId) return;
-    setRunning(true);
-    setError(null);
-    setResults([]);
-    hasRun.current = true;
+  const fetchSegmentWithRetries = useCallback(
+    async (segIndex: number): Promise<GeminiSegmentResult> => {
+      const cacheKey = buildFeedbackSegmentKey({
+        sessionId,
+        segmentIndex: segIndex,
+        burnInLabels,
+        includeAudio,
+        ebsFingerprint,
+      });
+      const cached = await getFeedbackSegment(cacheKey);
+      if (cached) return cached;
 
-    try {
       const [refFile, userFile] = await Promise.all([
         getSessionVideo(sessionId, "reference"),
         getSessionVideo(sessionId, "practice"),
       ]);
       if (!refFile || !userFile) {
-        setError("Could not load video files from local storage.");
-        setRunning(false);
-        return;
+        throw new Error("Could not load video files from local storage.");
       }
 
-      const validIndices = segments
-        .map((_, i) => i)
-        .filter((i) => {
-          const range = segments[i].beat_idx_range;
-          return range && range[1] > range[0];
+      let priorsJson: string | undefined;
+      if (referenceVideoUrl && userVideoUrl) {
+        const priors = await computePosePriorsForSegment({
+          referenceVideoUrl,
+          userVideoUrl,
+          ebsData,
+          segments,
+          segmentIndex: segIndex,
         });
-
-      if (validIndices.length === 0) {
-        setError("No segments with beat data to analyze.");
-        setRunning(false);
-        return;
+        priorsJson = JSON.stringify(priors);
       }
-
-      setSegmentsTotal(validIndices.length);
-      setSegmentsDone(0);
 
       const ebsJson = JSON.stringify(ebsData);
+      let lastErr: Error | null = null;
 
-      const settled = await Promise.allSettled(
-        validIndices.map(async (segIndex) => {
-          const form = new FormData();
-          form.append("ref_video", refFile, refFile.name || "ref.mp4");
-          form.append("user_video", userFile, userFile.name || "user.mp4");
-          form.append("segment_index", String(segIndex));
-          form.append("session_id", sessionId);
-          form.append("ebs_data_json", ebsJson);
+      for (let attempt = 1; attempt <= FETCH_RETRIES; attempt += 1) {
+        const form = new FormData();
+        form.append("ref_video", refFile, refFile.name || "ref.mp4");
+        form.append("user_video", userFile, userFile.name || "user.mp4");
+        form.append("segment_index", String(segIndex));
+        form.append("session_id", sessionId);
+        form.append("ebs_data_json", ebsJson);
+        if (priorsJson) {
+          form.append("pose_priors_json", priorsJson);
+        }
+        form.append("burn_in_labels", burnInLabels ? "true" : "false");
+        form.append("include_audio", includeAudio ? "true" : "false");
 
+        try {
           const res = await fetch(`${processorBaseUrl}/api/move-feedback`, {
             method: "POST",
             body: form,
           });
           if (!res.ok) {
             const body = await res.json().catch(() => ({}));
-            throw new Error((body as { error?: string }).error ?? `Segment ${segIndex} failed`);
+            throw new Error((body as { error?: string }).error ?? `Segment ${segIndex} failed (${res.status})`);
           }
           const data = (await res.json()) as GeminiSegmentResult;
-          setSegmentsDone((n) => n + 1);
+          await storeFeedbackSegment(cacheKey, data);
           return data;
-        }),
-      );
+        } catch (e) {
+          lastErr = e instanceof Error ? e : new Error(String(e));
+          const msg = lastErr.message.toLowerCase();
+          const retryable =
+            msg.includes("timeout") ||
+            msg.includes("network") ||
+            msg.includes("failed to fetch") ||
+            msg.includes("load failed");
+          if (attempt < FETCH_RETRIES && retryable) {
+            await new Promise((r) => window.setTimeout(r, 1000 * attempt));
+            continue;
+          }
+          throw lastErr;
+        }
+      }
+      throw lastErr ?? new Error("Unknown fetch error");
+    },
+    [
+      sessionId,
+      ebsData,
+      segments,
+      processorBaseUrl,
+      referenceVideoUrl,
+      userVideoUrl,
+      burnInLabels,
+      includeAudio,
+      ebsFingerprint,
+    ],
+  );
 
-      const allResults: GeminiSegmentResult[] = settled.map((s, i) => {
-        if (s.status === "fulfilled") return s.value;
-        return {
-          segment_index: validIndices[i],
-          moves: [],
-          error: String((s as PromiseRejectedResult).reason),
-        };
-      });
+  const drainQueue = useCallback(async () => {
+    if (drainingRef.current) return;
+    if (validIndices.length === 0) return;
+    drainingRef.current = true;
+    setRunning(true);
+    setError(null);
+    setSegmentsTotal(validIndices.length);
 
-      allResults.sort((a, b) => a.segment_index - b.segment_index);
-      setResults(allResults);
-
-      const flat: GeminiFlatMove[] = allResults.flatMap((r) =>
-        (r.moves ?? []).map((m) => ({ ...m, segmentIndex: r.segment_index })),
-      );
-      onFeedbackReady?.(flat);
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Gemini analysis failed.");
+    try {
+      while (queueRef.current.length > 0) {
+        const segIndex = queueRef.current.shift()!;
+        const ord = validIndices.indexOf(segIndex) + 1;
+        setPipelineHint(
+          ord > 0
+            ? `Gemini: segment ${segIndex + 1} (${ord}/${validIndices.length})`
+            : `Gemini: segment ${segIndex + 1}`,
+        );
+        try {
+          const data = await fetchSegmentWithRetries(segIndex);
+          setResults((prev) => {
+            const rest = prev.filter((r) => r.segment_index !== segIndex);
+            return [...rest, data].sort((a, b) => a.segment_index - b.segment_index);
+          });
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : String(e);
+          setResults((prev) => {
+            const rest = prev.filter((r) => r.segment_index !== segIndex);
+            return [
+              ...rest,
+              { segment_index: segIndex, moves: [], error: msg },
+            ].sort((a, b) => a.segment_index - b.segment_index);
+          });
+        }
+        setSegmentsDone((n) => n + 1);
+      }
     } finally {
+      drainingRef.current = false;
       setRunning(false);
+      setPipelineHint(null);
+      if (queueRef.current.length > 0) {
+        void drainQueue();
+      }
     }
-  }, [running, segments, sessionId, ebsData, processorBaseUrl, onFeedbackReady]);
+  }, [validIndices, fetchSegmentWithRetries]);
+
+  const enqueueSegmentAfterBodyPix = useCallback(
+    (segmentIndex: number) => {
+      if (!sessionId || validIndices.length === 0) return;
+      if (!validIndices.includes(segmentIndex)) return;
+      if (queueRef.current.includes(segmentIndex)) return;
+      queueRef.current.push(segmentIndex);
+      setPipelineHint(`Queued segment ${segmentIndex + 1} for Gemini…`);
+      void drainQueue();
+    },
+    [sessionId, validIndices],
+  );
+
+  useImperativeHandle(ref, () => ({ enqueueSegmentAfterBodyPix }), [enqueueSegmentAfterBodyPix]);
+
+  useEffect(() => {
+    const flat: GeminiFlatMove[] = results.flatMap((r) =>
+      (r.moves ?? []).map((m) => ({ ...m, segmentIndex: r.segment_index })),
+    );
+    onFeedbackReady?.(flat);
+  }, [results, onFeedbackReady]);
 
   const progressPercent =
     segmentsTotal > 0 ? Math.round((segmentsDone / segmentsTotal) * 100) : 0;
@@ -223,34 +402,13 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
 
   return (
     <div className="rounded-[24px] border border-indigo-100 bg-white shadow-sm overflow-hidden">
-      {/* Header */}
-      <div className="px-5 py-4 border-b border-indigo-50 bg-gradient-to-r from-indigo-50 to-white">
-        <div className="flex items-center justify-between">
-          <div>
-            <h3 className="text-base font-semibold text-slate-900">
-              Gemini Micro-Timing Analysis
-            </h3>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Sends each segment as a low-res video pair to Gemini 2.5 Flash-Lite for move-level micro-timing comparison.
-            </p>
-          </div>
-          <button
-            onClick={runAnalysis}
-            disabled={running || segments.length === 0}
-            className="rounded-full bg-indigo-600 px-4 py-2 text-sm font-medium text-white transition-all hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {running ? "Analyzing..." : hasRun.current ? "Re-run" : "Run Analysis"}
-          </button>
-        </div>
-      </div>
-
       {/* Progress */}
       {running && (
         <div className="px-5 py-3 bg-indigo-50/60 border-b border-indigo-100">
           <div className="flex items-center justify-between text-xs text-slate-600 mb-1.5">
             <span>
               {segmentsDone < segmentsTotal
-                ? `Segment ${segmentsDone + 1} of ${segmentsTotal} (parallel)…`
+                ? `Completed ${segmentsDone} of ${segmentsTotal} segments (sequential)…`
                 : "Finishing up…"}
             </span>
             <span>{progressPercent}%</span>
@@ -324,95 +482,133 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
             </span>
           </div>
 
-          {/* Move list */}
-          <div
-            ref={listRef}
-            onMouseEnter={() => { userHovering.current = true; }}
-            onMouseLeave={() => { userHovering.current = false; }}
-            className="max-h-[420px] overflow-y-auto divide-y divide-indigo-50"
-          >
-            {filtered.map((m, i) => {
-              const badge = TIMING_BADGES[m.micro_timing_label] ?? DEFAULT_BADGE;
-              const mid = ((m.shared_start_sec ?? 0) + (m.shared_end_sec ?? 0)) / 2;
-              const isNear = Math.abs(mid - sharedTime) < 0.8;
+          {/* Move list - single item view with navigation */}
+          <div className="border-t border-indigo-50">
+            {filtered.length > 0 && (
+              <>
+                {/* Navigation header */}
+                <div className="px-5 py-2 border-b border-indigo-50 flex items-center justify-between bg-slate-50/50">
+                  <button
+                    onClick={() => setCurrentMoveIndex((i) => Math.max(0, i - 1))}
+                    disabled={currentMoveIndex === 0}
+                    className="px-3 py-1 text-xs font-medium rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    ◀ Prev
+                  </button>
+                  <span className="text-xs font-medium text-slate-600">
+                    {currentMoveIndex + 1} / {filtered.length}
+                  </span>
+                  <button
+                    onClick={() => setCurrentMoveIndex((i) => Math.min(filtered.length - 1, i + 1))}
+                    disabled={currentMoveIndex >= filtered.length - 1}
+                    className="px-3 py-1 text-xs font-medium rounded-lg bg-white border border-slate-200 text-slate-600 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+                  >
+                    Next ▶
+                  </button>
+                </div>
 
-              return (
-                <button
-                  key={`${m.segmentIndex}-${m.move_index}-${i}`}
-                  onClick={() => onSeek(m.shared_start_sec ?? mid)}
-                  className={`w-full text-left px-5 py-3.5 transition-all hover:bg-indigo-50/50 ${
-                    isNear ? "bg-indigo-50/60 ring-inset ring-1 ring-indigo-200" : ""
-                  }`}
-                >
-                  <div className="flex items-start gap-3">
-                    <div className="flex flex-col items-center gap-1 pt-0.5 shrink-0">
-                      <div className={`w-2.5 h-2.5 rounded-full ${badge.dot}`} />
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        {fmtTime(m.shared_start_sec ?? 0)}
-                      </span>
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="text-[11px] font-mono text-slate-500">
+                {/* Single move display - clickable card */}
+                {(() => {
+                  const m = filtered[currentMoveIndex];
+                  if (!m) return null;
+                  const badge = TIMING_BADGES[m.micro_timing_label] ?? DEFAULT_BADGE;
+                  const mid = ((m.shared_start_sec ?? 0) + (m.shared_end_sec ?? 0)) / 2;
+
+                  return (
+                    <div 
+                      onClick={() => onSeek(m.shared_start_sec ?? mid)}
+                      className="px-5 py-4 cursor-pointer hover:bg-slate-50/50 transition-colors"
+                    >
+                      {/* Header row */}
+                      <div className="flex items-center gap-2 mb-3">
+                        <div className={`w-2.5 h-2.5 rounded-full ${badge.dot}`} />
+                        <span className="text-sm font-mono font-medium text-slate-700">
                           Move {m.move_index}
                         </span>
-                        <span
-                          className={`text-[10px] px-1.5 py-0.5 rounded-full font-semibold uppercase tracking-wide ${badge.bg} ${badge.color}`}
-                        >
+                        <span className={`text-[11px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide ${badge.bg} ${badge.color}`}>
                           {badge.label}
                         </span>
-                        <span className="text-[10px] text-slate-400 font-mono">
-                          {fmtTime(m.shared_start_sec ?? 0)}&ndash;{fmtTime(m.shared_end_sec ?? 0)}
+                        <span className="text-[11px] text-slate-400 font-mono ml-auto">
+                          {fmtTime(m.shared_start_sec ?? 0)}–{fmtTime(m.shared_end_sec ?? 0)}
                         </span>
-                        {m.confidence && (
-                          <span
-                            className={`text-[10px] px-1.5 py-0.5 rounded-full font-medium ${
-                              m.confidence === "high"
-                                ? "bg-emerald-50 text-emerald-600"
-                                : m.confidence === "medium"
-                                  ? "bg-amber-50 text-amber-600"
-                                  : "bg-slate-100 text-slate-500"
-                            }`}
-                          >
-                            {m.confidence}
-                          </span>
-                        )}
-                        <span className="text-[10px] text-slate-400 ml-auto">Seg {m.segmentIndex}</span>
                       </div>
+
+                      {/* Timing explanation */}
+                      {TIMING_LABEL_FRIENDLY[m.micro_timing_label] && (
+                        <p className="text-xs text-slate-500 mb-2 leading-snug">
+                          {TIMING_LABEL_FRIENDLY[m.micro_timing_label]}
+                        </p>
+                      )}
+
+                      {/* Evidence */}
                       {m.micro_timing_evidence && (
-                        <p className="text-[11px] text-slate-600 mt-1.5 leading-snug">
+                        <p className="text-sm text-slate-700 mb-3 leading-relaxed">
                           {m.micro_timing_evidence}
                         </p>
                       )}
+
+                      {/* Meta info row */}
+                      <div className="flex items-center gap-2 flex-wrap mb-3">
+                        {m.confidence && (
+                          <span className={`text-[10px] px-2 py-0.5 rounded-full font-medium ${
+                            m.confidence === "high"
+                              ? "bg-emerald-50 text-emerald-600"
+                              : m.confidence === "medium"
+                                ? "bg-amber-50 text-amber-600"
+                                : "bg-slate-100 text-slate-500"
+                          }`}>
+                            {m.confidence} confidence
+                          </span>
+                        )}
+                        {m.user_relative_to_reference && (
+                          <span className="text-[10px] px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-medium">
+                            vs ref: {m.user_relative_to_reference}
+                          </span>
+                        )}
+                        <span className="text-[10px] text-slate-400">Seg {m.segmentIndex}</span>
+                      </div>
+
+                      {/* Body parts */}
                       {m.body_parts_involved?.length > 0 && (
-                        <div className="flex gap-1 mt-1.5 flex-wrap">
+                        <div className="flex gap-1.5 mb-3 flex-wrap">
                           {m.body_parts_involved.map((bp) => (
                             <span
                               key={bp}
-                              className="text-[10px] px-1.5 py-0.5 rounded bg-slate-100 text-slate-500 font-medium"
+                              className="text-[11px] px-2 py-0.5 rounded-md bg-slate-100 text-slate-600 font-medium"
                             >
                               {bp}
                             </span>
                           ))}
                         </div>
                       )}
-                      {m.coaching_note && (
-                        <p className="text-xs text-indigo-700 mt-2 leading-relaxed font-medium">
-                          {m.coaching_note}
+
+                      {/* Guardrail note */}
+                      {m.guardrail_note && (
+                        <p className="text-xs text-amber-800 bg-amber-50/80 rounded-lg px-3 py-2 mb-3">
+                          {m.guardrail_note}
                         </p>
                       )}
-                    </div>
-                  </div>
-                </button>
-              );
-            })}
-          </div>
 
-          {filtered.length === 0 && (
-            <div className="px-5 py-8 text-center text-sm text-slate-500">
-              No moves match the current filter.
-            </div>
-          )}
+                      {/* Coaching note */}
+                      {m.coaching_note && (
+                        <div className="bg-indigo-50/70 rounded-lg px-3 py-3">
+                          <p className="text-sm text-indigo-800 leading-relaxed font-medium">
+                            {m.coaching_note}
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                })()}
+              </>
+            )}
+
+            {filtered.length === 0 && (
+              <div className="px-5 py-8 text-center text-sm text-slate-500">
+                No moves match the current filter.
+              </div>
+            )}
+          </div>
         </>
       )}
 
@@ -443,9 +639,11 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
               />
             </svg>
           </div>
-          <p className="text-sm font-medium text-slate-700">Ready for Gemini analysis</p>
+          <p className="text-sm font-medium text-slate-700">Waiting for BodyPix / Gemini</p>
           <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
-            Click &ldquo;Run Analysis&rdquo; to send each segment&apos;s video clips to Gemini 2.5 Flash-Lite for per-move micro-timing comparison.
+            Feedback starts automatically when each segment&apos;s BodyPix overlay finishes. Gemini runs one segment at a
+            time on the server (retries on transient network errors). Results are cached in the browser (IndexedDB) per
+            session and analysis, like BodyPix overlays—revisits skip duplicate API calls.
           </p>
           <p className="text-[10px] text-slate-400 mt-3">
             Requires GEMINI_API_KEY on the Python backend
@@ -454,4 +652,6 @@ export function GeminiFeedbackPanel(props: GeminiFeedbackPanelProps) {
       )}
     </div>
   );
-}
+});
+
+GeminiFeedbackPanel.displayName = "GeminiFeedbackPanel";

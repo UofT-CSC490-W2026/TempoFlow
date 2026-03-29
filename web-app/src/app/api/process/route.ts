@@ -2,6 +2,14 @@ import { NextResponse } from "next/server";
 
 const DEFAULT_EBS_PROCESSOR_URL = "http://127.0.0.1:8787/api/process";
 
+function resolveUpstreamProcessorUrl(): string {
+  const direct = process.env.EBS_PROCESSOR_URL;
+  if (direct) return direct;
+  const base = process.env.EBS_BACKEND_URL?.replace(/\/$/, "");
+  if (base) return `${base}/api/process`;
+  return DEFAULT_EBS_PROCESSOR_URL;
+}
+
 export const dynamic = "force-dynamic";
 export const maxDuration = 600;
 
@@ -26,7 +34,7 @@ async function isProcessorReachable(upstreamUrl: string) {
 }
 
 export async function POST(request: Request) {
-  const upstreamUrl = process.env.EBS_PROCESSOR_URL ?? DEFAULT_EBS_PROCESSOR_URL;
+  const upstreamUrl = resolveUpstreamProcessorUrl();
 
   try {
     const formData = await request.formData();

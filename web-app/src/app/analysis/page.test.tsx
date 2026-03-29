@@ -29,8 +29,8 @@ vi.mock("../../lib/ebsStorage", () => ({
 }));
 
 // 3. Mock Sub-components (to keep tests focused on page logic)
-vi.mock("../../components/ebs/EbsViewer", () => ({
-  EbsViewer: () => <div data-testid="ebs-viewer">EBS Viewer Active</div>,
+vi.mock("../../components/ebs/FeedbackViewer", () => ({
+  FeedbackViewer: () => <div data-testid="feedback-viewer">Analysis viewer</div>,
 }));
 
 describe("AnalysisPage", () => {

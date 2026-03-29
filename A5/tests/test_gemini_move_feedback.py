@@ -66,6 +66,53 @@ def test_prepare_clip_ffmpeg_raises_on_error(monkeypatch, tmp_path):
         gm._prepare_clip_ffmpeg("in.mp4", 0.0, 1.0, str(out), 360, "ffmpeg")
 
 
+def test_prepare_clip_ffmpeg_retries_without_drawtext_when_filter_missing(monkeypatch, tmp_path):
+    """Homebrew ffmpeg often lacks drawtext; we retry once without burn-in."""
+    out = tmp_path / "out.mp4"
+    attempts = {"n": 0}
+
+    def _run(*_a, **_k):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            return SimpleNamespace(returncode=1, stderr="No such filter: 'drawtext'")
+        return SimpleNamespace(returncode=0, stderr="")
+
+    monkeypatch.setattr(gm.subprocess, "run", _run)
+    gm._prepare_clip_ffmpeg(
+        "in.mp4",
+        0.0,
+        1.0,
+        str(out),
+        gm.LOW_RES_HEIGHT,
+        "ffmpeg",
+        burn_in_text="REF",
+    )
+    assert attempts["n"] == 2
+
+
+def test_ffmpeg_has_drawtext_detects_filter(monkeypatch):
+    gm._FFMPEG_DRAWTEXT_CACHE.clear()
+
+    def _run(cmd, **_k):
+        if "-filters" in cmd:
+            return SimpleNamespace(stdout=" TSC drawtext        V->V       Draw text\n", stderr="", returncode=0)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(gm.subprocess, "run", _run)
+    assert gm._ffmpeg_has_drawtext("myffmpeg") is True
+    assert gm._ffmpeg_has_drawtext("myffmpeg") is True  # cached
+
+
+def test_ffmpeg_has_drawtext_false_without_filter(monkeypatch):
+    gm._FFMPEG_DRAWTEXT_CACHE.clear()
+    monkeypatch.setattr(
+        gm.subprocess,
+        "run",
+        lambda *a, **k: SimpleNamespace(stdout="  scale  V->V  Scale\n", stderr="", returncode=0),
+    )
+    assert gm._ffmpeg_has_drawtext("ff") is False
+
+
 def _install_mock_cv2(
     monkeypatch,
     *,
@@ -432,4 +479,64 @@ def test_run_move_feedback_pipeline_cleanup_ignores_oserror(monkeypatch):
     # Should not raise due to cleanup failure
     out = gm.run_move_feedback_pipeline("r.mp4", "u.mp4", ebs, segment_index=0)
     assert out["moves"] == []
+
+
+def test_format_pose_priors_for_prompt():
+    assert gm.format_pose_priors_for_prompt(None) == ""
+    assert gm.format_pose_priors_for_prompt({}) == ""
+    text = gm.format_pose_priors_for_prompt(
+        {
+            "moves": [
+                {
+                    "move_index": 1,
+                    "user_relative_to_reference": "behind",
+                    "phase_offset_ms": 40.0,
+                    "prior_confidence": "medium",
+                }
+            ]
+        }
+    )
+    assert "Move 1" in text
+    assert "behind" in text
+
+
+def test_apply_move_feedback_guardrails_conflict_downgrades():
+    result = {
+        "moves": [
+            {"move_index": 1, "micro_timing_label": "late", "confidence": "high"},
+        ]
+    }
+    priors = {
+        "moves": [
+            {
+                "move_index": 1,
+                "user_relative_to_reference": "ahead",
+                "phase_offset_ms": 80.0,
+                "prior_confidence": "high",
+            }
+        ]
+    }
+    out = gm.apply_move_feedback_guardrails(result, priors)
+    assert out["moves"][0]["confidence"] == "low"
+    assert "guardrail_note" in out["moves"][0]
+
+
+def test_apply_move_feedback_guardrails_no_conflict():
+    result = {
+        "moves": [
+            {"move_index": 1, "micro_timing_label": "late", "confidence": "high"},
+        ]
+    }
+    priors = {
+        "moves": [
+            {
+                "move_index": 1,
+                "user_relative_to_reference": "behind",
+                "phase_offset_ms": 80.0,
+                "prior_confidence": "high",
+            }
+        ]
+    }
+    out = gm.apply_move_feedback_guardrails(result, priors)
+    assert out["moves"][0]["confidence"] == "high"
 

@@ -19,6 +19,7 @@ import {
 export type EbsViewerRefs = {
   refVideo: RefObject<HTMLVideoElement | null>;
   userVideo: RefObject<HTMLVideoElement | null>;
+  overlayVideo?: RefObject<HTMLVideoElement | null>;
 };
 
 type PauseOverlayState = {
@@ -82,7 +83,7 @@ export type EbsViewerApi = {
   togglePracticeSpeed: () => void;
 };
 
-export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerApi {
+export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRefs): EbsViewerApi {
   const [ebs, setEbs] = useState<EbsData | null>(null);
   const [segments, setSegments] = useState<EbsSegment[]>([]);
   const [beats, setBeats] = useState<number[]>([]);
@@ -132,14 +133,24 @@ export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerA
   }, []);
 
   const updateTimesFromDom = useCallback(() => {
-    if (!refVideo.current || !userVideo.current || !alignment) return;
+    if (!alignment) return;
+    // In overlay mode, read time from overlay video (user video with clip_2_start_sec offset)
+    if (overlayVideo?.current) {
+      const sharedTime = overlayVideo.current.currentTime - alignment.clip_2_start_sec;
+      console.log("[DEBUG] overlay time:", overlayVideo.current.currentTime, "shared:", sharedTime);
+      setSharedTime(sharedTime);
+      return;
+    }
+    if (!refVideo.current || !userVideo.current) return;
     setRefTime(refVideo.current.currentTime);
     setUserTime(userVideo.current.currentTime);
     setSharedTime(refVideo.current.currentTime - alignment.clip_1_start_sec);
-  }, [alignment, refVideo, userVideo]);
+  }, [alignment, refVideo, userVideo, overlayVideo]);
 
   const syncUserToRef = useCallback(() => {
     if (!refVideo.current || !userVideo.current || !alignment) return;
+    // Skip sync if overlay video is active (overlay mode handles its own sync)
+    if (overlayVideo?.current) return;
     const refElement = refVideo.current;
     const userElement = userVideo.current;
     const refShared = refElement.currentTime - alignment.clip_1_start_sec;
@@ -147,14 +158,24 @@ export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerA
     if (Math.abs(refShared - userShared) > 0.05) {
       userElement.currentTime = alignment.clip_2_start_sec + refShared;
     }
-  }, [alignment, refVideo, userVideo]);
+  }, [alignment, refVideo, userVideo, overlayVideo]);
 
   const seekToSharedInternal = useCallback(
     (sec: number, keepPauseOverlay: boolean) => {
-      if (!refVideo.current || !userVideo.current || !alignment) return;
+      if (!alignment) return;
+      const clamped = Math.max(0, Math.min(sec, sharedLen));
+      // In overlay mode, seek overlay video (user video with clip_2_start_sec offset)
+      if (overlayVideo?.current) {
+        overlayVideo.current.currentTime = alignment.clip_2_start_sec + clamped;
+        if (!keepPauseOverlay) {
+          hidePauseOverlay();
+        }
+        setSharedTime(clamped);
+        return;
+      }
+      if (!refVideo.current || !userVideo.current) return;
       const refElement = refVideo.current;
       const userElement = userVideo.current;
-      const clamped = Math.max(0, Math.min(sec, sharedLen));
       refElement.currentTime = alignment.clip_1_start_sec + clamped;
       userElement.currentTime = alignment.clip_2_start_sec + clamped;
       if (!keepPauseOverlay) {
@@ -162,7 +183,7 @@ export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerA
       }
       updateTimesFromDom();
     },
-    [alignment, hidePauseOverlay, refVideo, sharedLen, updateTimesFromDom, userVideo],
+    [alignment, hidePauseOverlay, refVideo, sharedLen, updateTimesFromDom, userVideo, overlayVideo],
   );
 
   const seekToShared = useCallback(
@@ -185,14 +206,36 @@ export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerA
     playingRef.current = false;
     refVideo.current?.pause();
     userVideo.current?.pause();
+    overlayVideo?.current?.pause();
     setIsPlaying(false);
     if (animIdRef.current != null) {
       window.cancelAnimationFrame(animIdRef.current);
       animIdRef.current = null;
     }
-  }, [refVideo, userVideo]);
+  }, [refVideo, userVideo, overlayVideo]);
 
   const startPlayback = useCallback(() => {
+    console.log("[DEBUG] startPlayback called, overlayVideo?.current:", overlayVideo?.current ? "exists" : "null");
+    if (overlayVideo?.current) {
+      // Overlay mode: play only overlay video
+      hidePauseOverlay();
+      playingRef.current = true;
+      void overlayVideo.current.play().catch((e) => { console.log("[DEBUG] overlay play error:", e); });
+      setIsPlaying(true);
+
+      const tick = () => {
+        updateTimesFromDom();
+        if (playingRef.current) {
+          animIdRef.current = window.requestAnimationFrame(tick);
+        }
+      };
+
+      if (animIdRef.current != null) {
+        window.cancelAnimationFrame(animIdRef.current);
+      }
+      animIdRef.current = window.requestAnimationFrame(tick);
+      return;
+    }
     if (!refVideo.current || !userVideo.current) return;
     hidePauseOverlay();
     playingRef.current = true;
@@ -212,9 +255,10 @@ export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerA
       window.cancelAnimationFrame(animIdRef.current);
     }
     animIdRef.current = window.requestAnimationFrame(tick);
-  }, [hidePauseOverlay, refVideo, syncUserToRef, updateTimesFromDom, userVideo]);
+  }, [hidePauseOverlay, refVideo, syncUserToRef, updateTimesFromDom, userVideo, overlayVideo]);
 
   const togglePlay = useCallback(() => {
+    console.log("[DEBUG] togglePlay called, playingRef.current:", playingRef.current, "overlayVideo?.current:", overlayVideo?.current ? "exists" : "null");
     if (playingRef.current) {
       pausePlayback();
     } else {
@@ -256,15 +300,18 @@ export function useEbsViewer({ refVideo, userVideo }: EbsViewerRefs): EbsViewerA
   }, [currentSegmentIndex, seekToSegment, segments.length]);
 
   const toggleMainSpeed = useCallback(() => {
-    const nextRate = mainPlaybackRate === 1 ? 0.5 : 1;
+    // Cycle: 1 -> 0.5 -> 0.25 -> 1
+    const nextRate = mainPlaybackRate === 1 ? 0.5 : mainPlaybackRate === 0.5 ? 0.25 : 1;
     setMainPlaybackRate(nextRate);
     if (!practice.enabled) {
       const refElement = refVideo.current;
       const userElement = userVideo.current;
+      const overlayElement = overlayVideo?.current;
       if (refElement) refElement.playbackRate = nextRate;
       if (userElement) userElement.playbackRate = nextRate;
+      if (overlayElement) overlayElement.playbackRate = nextRate;
     }
-  }, [mainPlaybackRate, practice.enabled, refVideo, userVideo]);
+  }, [mainPlaybackRate, practice.enabled, refVideo, userVideo, overlayVideo]);
 
   const loadFromJson = useCallback((data: EbsData) => {
     pausePlayback();

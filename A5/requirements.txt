@@ -1,3 +1,6 @@
+# Pin CPU torch/torchvision via PyTorch index (default PyPI wheel pulls CUDA and can exhaust EB disk).
+--extra-index-url https://download.pytorch.org/whl/cpu
+
 fastapi
 uvicorn
 python-multipart
@@ -5,11 +8,15 @@ librosa
 numpy
 soundfile
 scipy
-pytest
-pytest-cov
 matplotlib
 httpx
+certifi
 tqdm
 opencv-python
+torch==2.11.0
+torchvision==0.26.0
 ultralytics
 google-generativeai>=0.8.0
+jinja2
+aiofiles
+python-dotenv

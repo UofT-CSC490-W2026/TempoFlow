@@ -2,6 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
+import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 
 import {
@@ -354,19 +355,26 @@ export default function UploadPage() {
     <div className="min-h-screen bg-sky-50">
       <div className="fixed top-0 left-0 right-0 bg-white/85 backdrop-blur-md border-b border-sky-100 z-10">
         <div className="flex items-center justify-between px-6 py-4">
-          <Link href="/" className="text-2xl font-bold text-gray-900">
-            TempoFlow
+          <Link href="/" className="flex items-center">
+            <Image 
+              src="/logo.png" 
+              alt="TempoFlow" 
+              width={140} 
+              height={40}
+              className="rounded"
+              priority
+            />
           </Link>
           <Link
             href="/dashboard"
-            className="px-4 py-2 bg-sky-50 text-sky-700 rounded-full text-sm font-medium hover:bg-sky-100 transition-all"
+            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-400 text-white rounded-full text-sm font-medium hover:from-blue-600 hover:to-cyan-500 transition-all"
           >
             Dashboard
           </Link>
         </div>
       </div>
 
-      <div className="flex flex-col items-center justify-center min-h-screen px-6 py-24">
+      <div className="flex flex-col items-center justify-center min-h-screen px-6 py-24 pt-28">
         <div className="w-full max-w-4xl space-y-8">
           <div className="text-center">
             <p className="text-sm font-semibold uppercase tracking-[0.18em] text-sky-600">TempoFlow EBS Session</p>

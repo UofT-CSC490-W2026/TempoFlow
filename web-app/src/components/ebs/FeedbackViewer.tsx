@@ -5,18 +5,29 @@ import type { ReactNode } from "react";
 import { useEbsViewer } from "./useEbsViewer";
 import type { EbsData } from "./types";
 import { BodyPixOverlay } from "../BodyPixOverlay";
-import { PrecomputedFrameOverlay } from "../PrecomputedFrameOverlay";
-import { PrecomputedVideoOverlay } from "../PrecomputedVideoOverlay";
-import { generateMoveNetOverlayFrames } from "../../lib/movenetOverlayGenerator";
-import { generateYoloOverlayFrames, type YoloExecutionProvider } from "../../lib/yoloOverlayGenerator";
-import { generateFastSamOverlayFrames } from "../../lib/fastSamOverlayGenerator";
-import { generateBodyPixOverlayFrames } from "../../lib/bodyPixOverlayGenerator";
-import { buildOverlayKey, getSessionOverlay, storeSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
-import { getSessionVideo } from "../../lib/videoStorage";
-import { FeedbackPanel } from "./FeedbackPanel";
-import { FeedbackOverlay } from "./FeedbackOverlay";
-import { GeminiFeedbackPanel, TIMING_LABEL_COLORS, type GeminiFlatMove } from "./GeminiFeedbackPanel";
-import type { DanceFeedback } from "../../lib/bodyPixComparison";
+import { ProgressiveOverlay } from "../ProgressiveOverlay";
+import {
+  BROWSER_BODYPIX_OVERLAY_FPS,
+  BROWSER_BODYPIX_VARIANT,
+  ensureBrowserBodyPixOverlays,
+} from "../../lib/ensureBrowserBodyPixOverlays";
+import { buildOverlayKey, getSessionOverlay, type OverlayArtifact } from "../../lib/overlayStorage";
+import {
+  buildOverlaySegmentPlans,
+  isOverlayArtifactComplete,
+  overlayArtifactHasRenderableData,
+} from "../../lib/overlaySegments";
+import {
+  GeminiFeedbackPanel,
+  TIMING_LABEL_COLORS,
+  type GeminiFeedbackPanelHandle,
+  type GeminiFlatMove,
+} from "./GeminiFeedbackPanel";
+import {
+  buildFeedbackSegmentKey,
+  getFeedbackSegment,
+  hashEbsData,
+} from "../../lib/feedbackStorage";
 
 type ManualViewerProps = {
   mode?: "manual";
@@ -52,6 +63,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [refVideoUrl, setRefVideoUrl] = useState<string | null>(null);
   const [userVideoUrl, setUserVideoUrl] = useState<string | null>(null);
   const [status, setStatus] = useState<{ message: string; type?: "error" | "success" } | null>(null);
+  const [viewMode, setViewMode] = useState<"side" | "overlay">("side");
+  const [overlayViewSource, setOverlayViewSource] = useState<"reference" | "user" | "both">("reference");
+  const overlayVideoRef = useRef<HTMLVideoElement>(null);
+  const [overlayCurrentTime, setOverlayCurrentTime] = useState(0);
   
   const {
     state,
@@ -75,7 +90,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
     setPracticeLoop,
     setPauseAtMoveEnd,
     togglePracticeSpeed,
-  } = useEbsViewer({ refVideo, userVideo });
+  } = useEbsViewer({ refVideo, userVideo, overlayVideo: viewMode === "overlay" ? overlayVideoRef : undefined });
 
   const viewerVisible = sessionMode || showViewer;
   const canLaunch = (sessionMode || refLoaded) && (sessionMode || userLoaded) && (sessionMode || jsonLoaded);
@@ -86,68 +101,191 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const sessionPracticeName = sessionProps?.practiceName ?? null;
   const sessionFooterSlot = sessionProps?.footerSlot ?? null;
   const sessionId = sessionProps?.sessionId ?? null;
-  const [overlayMode, setOverlayMode] = useState<"precomputed" | "live">("precomputed");
-  const [showMoveNet, setShowMoveNet] = useState(false);
-  const [showYolo, setShowYolo] = useState(false);
-  const [showYoloPose, setShowYoloPose] = useState(false);
-  const [showBodyPix, setShowBodyPix] = useState(false);
-  const [showFastSam, setShowFastSam] = useState(false);
-  const [showFeedback, setShowFeedback] = useState(true);
-  const [danceFeedback, setDanceFeedback] = useState<DanceFeedback[]>([]);
+  /** Fixed defaults: precomputed BodyPix in browser (see ensureBrowserBodyPixOverlays). */
+  const overlayMode: "precomputed" | "live" = "precomputed";
+  const showBodyPix = true;
+  const showFeedback = true;
   const [geminiFeedback, setGeminiFeedback] = useState<GeminiFlatMove[]>([]);
-  const [overlayMethod, setOverlayMethod] = useState<"pose-fill" | "sam3-experimental" | "sam3-roboflow">("pose-fill");
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
-  const [segProvider, setSegProvider] = useState<YoloExecutionProvider>("wasm");
-  const [segGenerator, setSegGenerator] = useState<"python" | "browser">("python");
-  const [refPoseArtifact, setRefPoseArtifact] = useState<OverlayArtifact | null>(null);
-  const [refYoloArtifact, setRefYoloArtifact] = useState<OverlayArtifact | null>(null);
-  const [userPoseArtifact, setUserPoseArtifact] = useState<OverlayArtifact | null>(null);
-  const [userYoloArtifact, setUserYoloArtifact] = useState<OverlayArtifact | null>(null);
-  const [refYoloPoseArmsArtifact, setRefYoloPoseArmsArtifact] = useState<OverlayArtifact | null>(null);
-  const [refYoloPoseLegsArtifact, setRefYoloPoseLegsArtifact] = useState<OverlayArtifact | null>(null);
-  const [userYoloPoseArmsArtifact, setUserYoloPoseArmsArtifact] = useState<OverlayArtifact | null>(null);
-  const [userYoloPoseLegsArtifact, setUserYoloPoseLegsArtifact] = useState<OverlayArtifact | null>(null);
-  const [refFastSamArtifact, setRefFastSamArtifact] = useState<OverlayArtifact | null>(null);
-  const [userFastSamArtifact, setUserFastSamArtifact] = useState<OverlayArtifact | null>(null);
+  const [overlayCacheReady, setOverlayCacheReady] = useState(false);
   const [refBodyPixArtifact, setRefBodyPixArtifact] = useState<OverlayArtifact | null>(null);
   const [userBodyPixArtifact, setUserBodyPixArtifact] = useState<OverlayArtifact | null>(null);
-  // Lower FPS dramatically reduces precompute time (model + WebP encode).
-  const OVERLAY_FPS = 12;
+  const autoBodyPixStartedRef = useRef(false);
+  const geminiFeedbackRef = useRef<GeminiFeedbackPanelHandle>(null);
+  const autoGeminiQueuedRef = useRef<Set<number>>(new Set());
+  const ebsFingerprint = useMemo(() => (sessionEbsData ? hashEbsData(sessionEbsData) : ""), [sessionEbsData]);
+
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
-    const variant = overlayMethod;
-    const [rp, ry, rpa, rpl, rbp, up, uy, upa, upl, ubp, rf, uf] = await Promise.all([
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "reference", fps: OVERLAY_FPS, variant })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "reference", fps: OVERLAY_FPS, variant: segProvider })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-arms", side: "reference", fps: OVERLAY_FPS, variant: "python" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-legs", side: "reference", fps: OVERLAY_FPS, variant: "python" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "bodypix", side: "reference", fps: OVERLAY_FPS, variant: "bodypix24" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "movenet", side: "practice", fps: OVERLAY_FPS, variant })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo", side: "practice", fps: OVERLAY_FPS, variant: segProvider })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-arms", side: "practice", fps: OVERLAY_FPS, variant: "python" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "yolo-pose-legs", side: "practice", fps: OVERLAY_FPS, variant: "python" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "bodypix", side: "practice", fps: OVERLAY_FPS, variant: "bodypix24" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "fastsam", side: "reference", fps: OVERLAY_FPS, variant: "wasm" })),
-      getSessionOverlay(buildOverlayKey({ sessionId, type: "fastsam", side: "practice", fps: OVERLAY_FPS, variant: "wasm" })),
+    const [rbp, ubp] = await Promise.all([
+      getSessionOverlay(
+        buildOverlayKey({
+          sessionId,
+          type: "bodypix",
+          side: "reference",
+          fps: BROWSER_BODYPIX_OVERLAY_FPS,
+          variant: BROWSER_BODYPIX_VARIANT,
+        }),
+      ),
+      getSessionOverlay(
+        buildOverlayKey({
+          sessionId,
+          type: "bodypix",
+          side: "practice",
+          fps: BROWSER_BODYPIX_OVERLAY_FPS,
+          variant: BROWSER_BODYPIX_VARIANT,
+        }),
+      ),
     ]);
-    setRefPoseArtifact(rp);
-    setRefYoloArtifact(ry);
-    setRefYoloPoseArmsArtifact(rpa);
-    setRefYoloPoseLegsArtifact(rpl);
     setRefBodyPixArtifact(rbp);
-    setUserPoseArtifact(up);
-    setUserYoloArtifact(uy);
-    setUserYoloPoseArmsArtifact(upa);
-    setUserYoloPoseLegsArtifact(upl);
     setUserBodyPixArtifact(ubp);
-    setRefFastSamArtifact(rf);
-    setUserFastSamArtifact(uf);
-  }, [overlayMethod, segProvider, sessionId]);
-  
+  }, [sessionId]);
+
   useEffect(() => {
-    void loadCachedOverlays();
+    let cancelled = false;
+    void (async () => {
+      await loadCachedOverlays();
+      if (!cancelled) setOverlayCacheReady(true);
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, [loadCachedOverlays]);
+
+  useEffect(() => {
+    if (
+      !sessionMode ||
+      !overlayCacheReady ||
+      !sessionId ||
+      !activeReferenceVideoUrl ||
+      !activeUserVideoUrl ||
+      !sessionEbsData
+    ) {
+      return;
+    }
+    const plans = buildOverlaySegmentPlans(sessionEbsData);
+    const n = plans.length;
+    const refOk =
+      n > 0
+        ? isOverlayArtifactComplete(refBodyPixArtifact, n)
+        : overlayArtifactHasRenderableData(refBodyPixArtifact);
+    const userOk =
+      n > 0
+        ? isOverlayArtifactComplete(userBodyPixArtifact, n)
+        : overlayArtifactHasRenderableData(userBodyPixArtifact);
+    if (refOk && userOk) return;
+    if (autoBodyPixStartedRef.current) return;
+
+    autoBodyPixStartedRef.current = true;
+    setOverlayBusy(true);
+    setOverlayStatus("Generating BodyPix overlays…");
+
+    void ensureBrowserBodyPixOverlays({
+      sessionId,
+      referenceVideoUrl: activeReferenceVideoUrl,
+      userVideoUrl: activeUserVideoUrl,
+      ebsData: sessionEbsData,
+      refVideo,
+      userVideo,
+      existingRef: refBodyPixArtifact,
+      existingUser: userBodyPixArtifact,
+      setRefArtifact: setRefBodyPixArtifact,
+      setUserArtifact: setUserBodyPixArtifact,
+      onStatus: setOverlayStatus,
+      onSegmentComplete: (segmentIndex) => {
+        queueMicrotask(() => {
+          geminiFeedbackRef.current?.enqueueSegmentAfterBodyPix(segmentIndex);
+        });
+      },
+    })
+      .catch((err) => {
+        setOverlayStatus(err instanceof Error ? err.message : "BodyPix overlay generation failed.");
+      })
+      .finally(() => {
+        setOverlayBusy(false);
+      });
+  }, [
+    sessionMode,
+    overlayCacheReady,
+    sessionId,
+    activeReferenceVideoUrl,
+    activeUserVideoUrl,
+    sessionEbsData,
+    refBodyPixArtifact,
+    userBodyPixArtifact,
+  ]);
+
+  // Auto-resume: when BodyPix is already cached but Gemini is missing, auto-enqueue those segments
+  useEffect(() => {
+    if (
+      !sessionMode ||
+      !overlayCacheReady ||
+      !sessionId ||
+      !sessionEbsData ||
+      !refBodyPixArtifact ||
+      !userBodyPixArtifact
+    ) {
+      return;
+    }
+
+    const plans = buildOverlaySegmentPlans(sessionEbsData);
+    const n = plans.length;
+    if (n === 0) return;
+
+    // Only proceed if BodyPix is fully complete
+    const refComplete = isOverlayArtifactComplete(refBodyPixArtifact, n);
+    const userComplete = isOverlayArtifactComplete(userBodyPixArtifact, n);
+    if (!refComplete || !userComplete) return;
+
+    // Check each segment for BodyPix present but Gemini missing
+    void (async () => {
+      for (let i = 0; i < n; i++) {
+        if (autoGeminiQueuedRef.current.has(i)) continue;
+
+        // Verify segment has BodyPix data
+        const hasBodyPix =
+          (refBodyPixArtifact?.segments?.[i]?.frames?.length ?? 0) > 0 &&
+          (userBodyPixArtifact?.segments?.[i]?.frames?.length ?? 0) > 0;
+        if (!hasBodyPix) continue;
+
+        // Check if Gemini already cached (default settings: burnIn=true, audio=false)
+        const key = buildFeedbackSegmentKey({
+          sessionId,
+          segmentIndex: i,
+          burnInLabels: true,
+          includeAudio: false,
+          ebsFingerprint,
+        });
+        const cached = await getFeedbackSegment(key);
+        if (!cached) {
+          // Also check with audio=true variant
+          const keyAudio = buildFeedbackSegmentKey({
+            sessionId,
+            segmentIndex: i,
+            burnInLabels: true,
+            includeAudio: true,
+            ebsFingerprint,
+          });
+          const cachedAudio = await getFeedbackSegment(keyAudio);
+          if (!cachedAudio) {
+            autoGeminiQueuedRef.current.add(i);
+            queueMicrotask(() => {
+              geminiFeedbackRef.current?.enqueueSegmentAfterBodyPix(i);
+            });
+          }
+        }
+      }
+    })();
+  }, [
+    sessionMode,
+    overlayCacheReady,
+    sessionId,
+    sessionEbsData,
+    refBodyPixArtifact,
+    userBodyPixArtifact,
+    ebsFingerprint,
+  ]);
 
   useEffect(() => {
     if (sessionMode) return;
@@ -156,6 +294,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
       if (userVideoUrl) URL.revokeObjectURL(userVideoUrl);
     };
   }, [refVideoUrl, sessionMode, userVideoUrl]);
+
+  useEffect(() => {
+    autoBodyPixStartedRef.current = false;
+    setOverlayCacheReady(false);
+  }, [sessionId]);
 
   useEffect(() => {
     if (!sessionEbsData) return;
@@ -173,13 +316,14 @@ export function FeedbackViewer(props: EbsViewerProps) {
     if (userVideo.current) {
       userVideo.current.playbackRate = state.mainPlaybackRate;
     }
-    const id = window.requestAnimationFrame(() => {
-      if (state.segments.length) {
+    // Only seek to segment 0 on initial load if we haven't started yet
+    if (state.sharedTime === 0 && state.segments.length) {
+      const id = window.requestAnimationFrame(() => {
         seekToSegment(0);
-      }
-    });
-    return () => window.cancelAnimationFrame(id);
-  }, [seekToSegment, state.mainPlaybackRate, state.segments.length, viewerVisible]);
+      });
+      return () => window.cancelAnimationFrame(id);
+    }
+  }, [seekToSegment, state.mainPlaybackRate, state.segments.length, state.sharedTime, viewerVisible]);
 
   useEffect(() => {
     if (!viewerVisible) return;
@@ -231,6 +375,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
     state.practice.enabled,
     togglePlay,
     viewerVisible,
+    viewMode,
   ]);
 
   const fmtTime = (sec: number) => {
@@ -334,22 +479,58 @@ export function FeedbackViewer(props: EbsViewerProps) {
         </>
       );
     }, [sessionMode, sessionPracticeName, sessionReferenceName]);
-  const SEVERITY_COLORS: Record<string, string> = {
-    good: "#34d399",     // emerald-400
-    minor: "#fbbf24",    // amber-400
-    moderate: "#fb923c", // orange-400
-    major: "#f87171",    // red-400
-  };
-  const getSegmentAnalysisColor = useCallback((start: number, end: number) => {
-    const relevant = danceFeedback.filter(
-      (fb) => fb.timestamp >= start && fb.timestamp <= end
-    );
 
-    if (relevant.some((fb) => fb.severity === "major")) return "#f87171";    // Red
-    if (relevant.some((fb) => fb.severity === "moderate")) return "#fb923c"; // Orange
-    if (relevant.some((fb) => fb.severity === "minor")) return "#fbbf24";    // Amber
-    return null; // No errors
-  }, [danceFeedback]);
+  // Overlay diff: get frame from per-segment BodyPix artifacts for current time
+  const getOverlayDiffFrame = useCallback((
+    artifact: OverlayArtifact | null,
+    currentTimeSec: number
+  ): string | Blob | null => {
+    if (!artifact?.segments?.length) return null;
+    
+    // Find which segment contains this time
+    for (const seg of artifact.segments) {
+      if (currentTimeSec >= seg.startSec && currentTimeSec < seg.endSec) {
+        if (!seg.frames?.length) return null;
+        const segTime = currentTimeSec - seg.startSec;
+        const frameIdx = Math.floor(segTime * seg.fps);
+        const clampedIdx = Math.max(0, Math.min(frameIdx, seg.frames.length - 1));
+        return seg.frames[clampedIdx] ?? null;
+      }
+    }
+    return null;
+  }, []);
+
+  const refOverlayFrame = viewMode === "overlay" 
+    ? getOverlayDiffFrame(refBodyPixArtifact, overlayCurrentTime)
+    : null;
+  const userOverlayFrame = viewMode === "overlay"
+    ? getOverlayDiffFrame(userBodyPixArtifact, overlayCurrentTime)
+    : null;
+
+  // Sync overlay video time updates to local state for frame rendering only
+  useEffect(() => {
+    if (viewMode !== "overlay" || !overlayVideoRef.current) return;
+    const video = overlayVideoRef.current;
+    
+    const handleTimeUpdate = () => {
+      setOverlayCurrentTime(video.currentTime);
+    };
+    
+    video.addEventListener("timeupdate", handleTimeUpdate);
+    return () => video.removeEventListener("timeupdate", handleTimeUpdate);
+  }, [viewMode]);
+
+  // Initial sync when switching to overlay mode
+  useEffect(() => {
+    if (viewMode === "overlay" && overlayVideoRef.current && state.sharedTime > 0) {
+      const timeDiff = Math.abs(overlayVideoRef.current.currentTime - state.sharedTime);
+      if (timeDiff > 0.1) {
+        overlayVideoRef.current.currentTime = state.sharedTime;
+      }
+      setOverlayCurrentTime(state.sharedTime);
+    }
+  }, [viewMode]);
+
   return (
     <div className="ebs-viewer-root">
       {viewerVisible && (
@@ -373,126 +554,191 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 <span className="ebs-tag orange">{mode}</span>
               </>
               <div className="flex-1" />
-              <p className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                currently using BodyPix
-              </p>
+              {/* View mode toggle */}
+              <div className="flex items-center gap-2 mr-4">
+                <span className="text-xs text-slate-500">View:</span>
+                <button
+                  onClick={() => setViewMode("side")}
+                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                    viewMode === "side"
+                      ? "bg-slate-800 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                  title="Side-by-side view"
+                >
+                  Side
+                </button>
+                <button
+                  onClick={() => setViewMode("overlay")}
+                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
+                    viewMode === "overlay"
+                      ? "bg-slate-800 text-white"
+                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                  }`}
+                  title="Overlay diff view (uses existing BodyPix)"
+                >
+                  Overlay
+                </button>
+                {viewMode === "overlay" && (
+                  <>
+                    <span className="text-xs text-slate-400">|</span>
+                    <button
+                      onClick={() => setOverlayViewSource("reference")}
+                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                        overlayViewSource === "reference"
+                          ? "bg-blue-500 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                      title="Show reference overlay on user video"
+                    >
+                      Ref
+                    </button>
+                    <button
+                      onClick={() => setOverlayViewSource("user")}
+                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                        overlayViewSource === "user"
+                          ? "bg-blue-500 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                      title="Show user overlay on user video"
+                    >
+                      User
+                    </button>
+                    <button
+                      onClick={() => setOverlayViewSource("both")}
+                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
+                        overlayViewSource === "both"
+                          ? "bg-blue-500 text-white"
+                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
+                      }`}
+                      title="Show both overlays"
+                    >
+                      Both
+                    </button>
+                  </>
+                )}
+              </div>
             </div>
           ) : (
             <div className="ebs-inline-note">Aligned videos loaded...</div>
           )}
         </div>
-          <div className="videos">
-            <div className="video-panel">
-              <div className="video-label">
-                Reference (Clip 1)
-                <span className="time-display">{fmtTimeFull(state.refTime)}</span>
+          {(overlayStatus || overlayBusy) && sessionMode ? (
+            <div className="mb-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-2 text-xs text-slate-700">
+              {overlayBusy ? `${overlayStatus ?? "Working…"}` : overlayStatus}
+            </div>
+          ) : null}
+          {viewMode === "side" ? (
+            <div className="videos">
+              <div className="video-panel">
+                <div className="video-label">
+                  Reference ({sessionReferenceName || "Clip 1"})
+                  <span className="time-display">{fmtTimeFull(state.refTime)}</span>
+                </div>
+                <div className="relative">
+                  <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
+                  {sessionMode && showBodyPix ? (
+                    overlayMode === "precomputed" ? (
+                      <ProgressiveOverlay videoRef={refVideo} artifact={refBodyPixArtifact} />
+                    ) : (
+                      <BodyPixOverlay videoRef={refVideo} opacity={0.68} color={{ r: 50, g: 200, b: 100 }} />
+                    )
+                  ) : null}
+                </div>
+                <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
+                <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
+                  <div className="seg-pause-card">
+                    <div className="seg-done-num">{state.pauseOverlay.label}</div>
+                    <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
+                    <div className="seg-done-hint">Space to continue · → next section</div>
+                  </div>
+                </div>
               </div>
-              <div className="relative">
-                <video ref={refVideo} src={activeReferenceVideoUrl ?? undefined} playsInline />
-                {sessionMode && showBodyPix ? (
-                  overlayMode === "precomputed" ? (
-                    refBodyPixArtifact ? (
-                      refBodyPixArtifact.video ? (
-                        <PrecomputedVideoOverlay
-                          videoRef={refVideo}
-                          overlayBlob={refBodyPixArtifact.video}
-                          mimeType={refBodyPixArtifact.videoMime}
-                        />
-                      ) : refBodyPixArtifact.frames ? (
-                        <PrecomputedFrameOverlay
-                          videoRef={refVideo}
-                          frames={refBodyPixArtifact.frames ?? []}
-                          fps={refBodyPixArtifact.fps}
-                        />
-                      ) : null
-                    ) : null
-                  ) : (
-                    <BodyPixOverlay videoRef={refVideo} opacity={0.68} />
-                  )
-                ) : null}
-                
-              </div>
-              <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
-              <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
-                <div className="seg-pause-card">
-                  <div className="seg-done-num">{state.pauseOverlay.label}</div>
-                  <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
-                  <div className="seg-done-hint">Space to continue · → next section</div>
+              <div className="video-panel">
+                <div className="video-label">
+                  User ({sessionPracticeName || "Clip 2"})
+                  <span className="time-display">{fmtTimeFull(state.userTime)}</span>
+                </div>
+                <div className="relative">
+                  <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
+                  {sessionMode && showBodyPix ? (
+                    overlayMode === "precomputed" ? (
+                      <ProgressiveOverlay videoRef={userVideo} artifact={userBodyPixArtifact} />
+                    ) : (
+                      <BodyPixOverlay videoRef={userVideo} opacity={0.68} color={{ r: 255, g: 100, b: 50 }} />
+                    )
+                  ) : null}
+                </div>
+                <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
+                <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
+                  <div className="seg-pause-card">
+                    <div className="seg-done-num">{state.pauseOverlay.label}</div>
+                    <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
+                    <div className="seg-done-hint">Space to continue · → next section</div>
+                  </div>
                 </div>
               </div>
             </div>
-            <div className="video-panel">
-              <div className="video-label">
-                User (Clip 2)
-                <span className="time-display">{fmtTimeFull(state.userTime)}</span>
-              </div>
-              <div className="relative">
-                <video ref={userVideo} src={activeUserVideoUrl ?? undefined} playsInline />
-                {sessionMode && showBodyPix ? (
-                  overlayMode === "precomputed" ? (
-                    userBodyPixArtifact ? (
-                      userBodyPixArtifact.video ? (
-                        <PrecomputedVideoOverlay
-                          videoRef={userVideo}
-                          overlayBlob={userBodyPixArtifact.video}
-                          mimeType={userBodyPixArtifact.videoMime}
-                        />
-                      ) : userBodyPixArtifact.frames ? (
-                        <PrecomputedFrameOverlay
-                          videoRef={userVideo}
-                          frames={userBodyPixArtifact.frames ?? []}
-                          fps={userBodyPixArtifact.fps}
-                        />
-                      ) : null
-                    ) : null
-                  ) : (
-                    <BodyPixOverlay videoRef={userVideo} opacity={0.68} />
-                  )
-                ) : null}
-                {sessionMode && showFeedback && danceFeedback.length > 0 ? (
-                  <FeedbackOverlay
-                    refVideoRef={refVideo}
-                    videoRef={userVideo}
-                    feedback={danceFeedback}
-                    sharedTime={state.sharedTime}
+          ) : (
+            /* Overlay diff view - reuses existing BodyPix per-segment data */
+            <div className="videos single-view">
+              <div className="video-panel" style={{ maxWidth: "100%", width: "100%" }}>
+                <div className="video-label">
+                  <span>User ({sessionPracticeName || "Practice"})</span>
+                </div>
+                <div className="relative" style={{ aspectRatio: "16/9", background: "#000" }}>
+                  {/* Base: User video (synced with timeline) */}
+                  <video
+                    ref={overlayVideoRef}
+                    src={activeUserVideoUrl ?? undefined}
+                    className="absolute inset-0 w-full h-full object-contain z-0"
+                    playsInline
                   />
-                ) : null}
-              </div>
-              <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
-              <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
-                <div className="seg-pause-card">
-                  <div className="seg-done-num">{state.pauseOverlay.label}</div>
-                  <div className="seg-done-label">{state.pauseOverlay.completionLabel}</div>
-                  <div className="seg-done-hint">Space to continue · → next section</div>
+                  {/* Layer 1: Reference ghost (BodyPix overlay) - tinted green */}
+                  {(overlayViewSource === "reference" || overlayViewSource === "both") && refOverlayFrame && (
+                    <img
+                      src={refOverlayFrame instanceof Blob ? URL.createObjectURL(refOverlayFrame) : refOverlayFrame}
+                      alt="Reference ghost"
+                      className="absolute inset-0 w-full h-full object-contain pointer-events-none z-10"
+                      style={{
+                        mixBlendMode: "multiply",
+                        filter: "brightness(0.7) saturate(0) sepia(0.6) hue-rotate(90deg) saturate(1.2) drop-shadow(2px 2px 0 #22c55e) drop-shadow(-2px -2px 0 #22c55e) drop-shadow(2px -2px 0 #22c55e) drop-shadow(-2px 2px 0 #22c55e)",
+                        opacity: 0.6,
+                      }}
+                    />
+                  )}
+                  {/* Layer 2: User BodyPix overlay - tinted red-orange */}
+                  {(overlayViewSource === "user" || overlayViewSource === "both") && userOverlayFrame && (
+                    <img
+                      src={userOverlayFrame instanceof Blob ? URL.createObjectURL(userOverlayFrame) : userOverlayFrame}
+                      alt="User overlay"
+                      className="absolute inset-0 w-full h-full object-contain pointer-events-none z-20"
+                      style={{
+                        mixBlendMode: "multiply",
+                        filter: "brightness(0.7) saturate(0) sepia(0.6) hue-rotate(320deg) saturate(1.2) drop-shadow(2px 2px 0 #ef4444) drop-shadow(-2px -2px 0 #ef4444) drop-shadow(2px -2px 0 #ef4444) drop-shadow(-2px 2px 0 #ef4444)",
+                        opacity: 0.5,
+                      }}
+                    />
+                  )}
                 </div>
               </div>
             </div>
-          </div>
+          )}
           {sessionMode && showFeedback && sessionId && sessionEbsData && state.segments.length > 0 && (
             <div className="mt-4 mb-2">
               <GeminiFeedbackPanel
+                ref={geminiFeedbackRef}
                 sessionId={sessionId}
                 ebsData={sessionEbsData}
                 segments={state.segments}
                 sharedTime={state.sharedTime}
                 onSeek={seekToShared}
                 onFeedbackReady={setGeminiFeedback}
-              />
-            </div>
-          )}
-          {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
-            <div className="mt-4 mb-2">
-              <FeedbackPanel
                 referenceVideoUrl={activeReferenceVideoUrl}
                 userVideoUrl={activeUserVideoUrl}
-                segments={state.segments}
-                sharedTime={state.sharedTime}
-                onSeek={seekToShared}
-                onFeedbackReady={setDanceFeedback}
               />
             </div>
           )}
-
           {!state.practice.enabled && hasSegments && (
             <>
               <div className="transport">
@@ -506,8 +752,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <button className="transport-btn" onClick={seekToNextSegment} title="Next segment">
                     ▶▶
                   </button>
-                  <button className="transport-btn" onClick={toggleMainSpeed} title="Toggle 0.5x speed">
-                    {state.mainPlaybackRate === 1 ? "1x" : "0.5x"}
+                  <button className="transport-btn" onClick={toggleMainSpeed} title="Toggle playback speed">
+                    {state.mainPlaybackRate === 1 ? "1x" : state.mainPlaybackRate === 0.5 ? "0.5x" : "0.25x"}
                   </button>
                   <button
                     className="transport-btn practice-btn"
@@ -538,7 +784,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 </div>
               </div>
 
-              <div className="timeline">
+              <div className="timeline" style={{ position: "relative", zIndex: 10 }}>
                 <div className="timeline-track relative overflow-hidden" ref={timelineTrackRef} onClick={handleTimelineClick}>
                     {/* 0. GEMINI MOVE BANDS (Bottom-most layer) */}
                     {showFeedback && geminiFeedback.map((m, i) => {
@@ -561,25 +807,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                       );
                     })}
 
-                    {/* 1. HEATMAP LAYER (BodyPix strips) */}
-                    {showFeedback && danceFeedback.map((fb, i) => (
-                      <div
-                        key={`heat-${i}`}
-                        className="absolute top-0 bottom-0 w-[3px] z-[1]"
-                        style={{
-                          left: `${(fb.timestamp / sharedLen) * 100}%`,
-                          backgroundColor: SEVERITY_COLORS[fb.severity] || "#cbd5e1",
-                          boxShadow: fb.severity === 'major' ? `0 0 8px ${SEVERITY_COLORS.major}` : 'none',
-                        }}
-                      />
-                    ))}
-
-                    {/* 2. SEGMENTS LAYER (Middle Layer - Make these transparent!) */}
+                    {/* 1. SEGMENTS LAYER */}
                     {state.segments.map((segment, index) => {
-                      const analysisColor = getSegmentAnalysisColor(
-                        segment.shared_start_sec, 
-                        segment.shared_end_sec
-                      );
                       const isActive = index === state.currentSegmentIndex;
 
                       return (
@@ -593,11 +822,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
                           style={{
                             left: `${(segment.shared_start_sec / sharedLen) * 100}%`,
                             width: `${((segment.shared_end_sec - segment.shared_start_sec) / sharedLen) * 100}%`,
-                            // OVERRIDE: If there's an error color, use it. 
-                            // We use a slight transparency so the "Active" blue still shows through if needed.
-                            backgroundColor: analysisColor ? `${analysisColor}${isActive ? 'CC' : '66'}` : undefined,
-                            borderColor: analysisColor || undefined,
-                            borderWidth: analysisColor ? '1px' : '0px',
                           }}
                           onClick={(event) => {
                             event.stopPropagation();

@@ -40,8 +40,10 @@ This project provides:
 3.  **Install dependencies:**
 
     ```bash
-    pip install -r requirements.txt
+    pip install -r requirements-dev.txt
     ```
+
+    (Use `requirements.txt` only for a minimal runtime install; `requirements-dev.txt` adds pytest for local tests.)
 
 ## Running the API
 

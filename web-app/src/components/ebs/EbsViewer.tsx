@@ -30,8 +30,7 @@ import {
   type OverlaySegmentPlan,
 } from "../../lib/overlaySegments";
 import { getSessionVideo } from "../../lib/videoStorage";
-import { FeedbackOverlay } from "./FeedbackOverlay";
-import type { DanceFeedback } from "../../lib/bodyPixComparison";
+import { getPublicEbsProcessorUrl } from "../../lib/ebsProcessorUrl";
 
 type FileDropProps = {
   label: string;
@@ -158,19 +157,18 @@ export function EbsViewer(props: EbsViewerProps) {
   const sessionPracticeName = sessionProps?.practiceName ?? null;
   const sessionFooterSlot = sessionProps?.footerSlot ?? null;
   const sessionId = sessionProps?.sessionId ?? null;
-  const [overlayMode, setOverlayMode] = useState<"precomputed" | "live">("precomputed");
-  const [showMoveNet, setShowMoveNet] = useState(false);
-  const [showYolo, setShowYolo] = useState(false);
-  const [showYoloPose, setShowYoloPose] = useState(false);
-  const [showBodyPix, setShowBodyPix] = useState(false);
-  const [showFastSam, setShowFastSam] = useState(false);
+  const [overlayMode] = useState<"precomputed" | "live">("precomputed");
+  const showMoveNet = false;
+  const showYolo = false;
+  const showYoloPose = false;
+  const showBodyPix = true;
+  const showFastSam = false;
   const [showFeedback, setShowFeedback] = useState(false);
-  const [danceFeedback, setDanceFeedback] = useState<DanceFeedback[]>([]);
   const [overlayMethod, setOverlayMethod] = useState<"pose-fill" | "sam3-experimental" | "sam3-roboflow">("pose-fill");
   const [overlayBusy, setOverlayBusy] = useState(false);
   const [overlayStatus, setOverlayStatus] = useState<string | null>(null);
-  const [segProvider, setSegProvider] = useState<YoloExecutionProvider>("wasm");
-  const [segGenerator, setSegGenerator] = useState<"python" | "browser">("python");
+  const [segProvider] = useState<YoloExecutionProvider>("wasm");
+  const [segGenerator] = useState<"python" | "browser">("browser");
   const [refPoseArtifact, setRefPoseArtifact] = useState<OverlayArtifact | null>(null);
   const [refYoloArtifact, setRefYoloArtifact] = useState<OverlayArtifact | null>(null);
   const [userPoseArtifact, setUserPoseArtifact] = useState<OverlayArtifact | null>(null);
@@ -251,8 +249,7 @@ export function EbsViewer(props: EbsViewerProps) {
       setOverlayStatus(null);
 
       try {
-        const processorUrl =
-          (process.env.NEXT_PUBLIC_EBS_PROCESSOR_URL as string | undefined) ?? "http://127.0.0.1:8787/api/process";
+        const processorUrl = getPublicEbsProcessorUrl();
         const baseUrl = processorUrl.replace(/\/api\/process\s*$/, "");
         const sleep = (ms: number) => new Promise((resolve) => window.setTimeout(resolve, ms));
 
@@ -1670,126 +1667,6 @@ export function EbsViewer(props: EbsViewerProps) {
       {viewerVisible && (
         <div className="ebs-viewer visible">
           <div className="ebs-top-bar">
-            {sessionMode ? (
-            <div className="flex flex-col gap-3 items-end">
-              <div className="flex flex-wrap items-center gap-2 justify-end">
-                <select
-                  value={overlayMode}
-                  onChange={(e) => setOverlayMode(e.target.value as "precomputed" | "live")}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  aria-label="Overlay mode"
-                >
-                  <option value="precomputed">Precomputed</option>
-                  <option value="live">Live</option>
-                </select>
-                <select
-                  value={segGenerator}
-                  onChange={(e) => setSegGenerator(e.target.value as "python" | "browser")}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  aria-label="Overlay generator"
-                >
-                  <option value="python">Python (fast)</option>
-                  <option value="browser">Browser (slow)</option>
-                </select>
-                <select
-                  value={segProvider}
-                  onChange={(e) => setSegProvider(e.target.value as YoloExecutionProvider)}
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  aria-label="Segmentation backend"
-                >
-                  <option value="wasm">CPU (WASM)</option>
-                  <option value="webgpu">WebGPU (experimental)</option>
-                </select>
-                <button
-                  onClick={() => setShowMoveNet((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showMoveNet ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  MoveNet
-                </button>
-                <button
-                  onClick={() => setShowYolo((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showYolo ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  YOLO
-                </button>
-                <button
-                  onClick={() => setShowYoloPose((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showYoloPose ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  YOLO Pose
-                </button>
-                <button
-                  onClick={() => setShowBodyPix((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showBodyPix ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  BodyPix
-                </button>
-                <button
-                  onClick={() => setShowFastSam((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showFastSam ? "bg-slate-900 text-white border-slate-900" : "bg-white text-slate-700 border-slate-200"
-                  }`}
-                >
-                  FastSAM
-                </button>                
-                {/* moved to new tab 
-                <button
-                  onClick={() => setShowFeedback((v) => !v)}
-                  className={`rounded-full px-3 py-1.5 text-xs font-semibold border transition-all ${
-                    showFeedback ? "bg-violet-600 text-white border-violet-600" : "bg-white text-violet-700 border-violet-200 hover:bg-violet-50"
-                  }`}
-                >
-                  Feedback
-                </button>*/}
-                {/*do we have options for this tho
-                 <select
-                  value={overlayMethod}
-                  onChange={(e) =>
-                    setOverlayMethod(e.target.value as "pose-fill" | "sam3-experimental" | "sam3-roboflow")
-                  }
-                  className="rounded-full border border-slate-200 bg-white px-3 py-1.5 text-xs text-slate-700"
-                  disabled={!showMoveNet || overlayMode !== "live"}
-                  aria-label="Pose overlay style"
-                >
-                  <option value="pose-fill">Pose fill</option>
-                  <option value="sam3-experimental">SAM3-style</option>
-                  <option value="sam3-roboflow">Roboflow SAM3</option>
-                </select> */}
-                {/* Generation Buttons (Sky themed) */}
-                <div className="flex gap-1 ml-2 pl-2 border-l border-slate-200">
-                  <button
-                    onClick={() => void generateOverlays("movenet")}
-                    disabled={overlayBusy || !showMoveNet}
-                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                  >
-                    Gen MoveNet
-                  </button>
-                  <button
-                    onClick={() => void generateOverlays("yolo")}
-                    disabled={overlayBusy || !showYolo}
-                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                  >
-                    Gen YOLO
-                  </button>
-                  <button
-                    onClick={() => void generateOverlays("bodypix")}
-                    disabled={overlayBusy || !showBodyPix}
-                    className="rounded-full bg-sky-50 px-3 py-1.5 text-xs font-semibold text-sky-700 transition-all hover:bg-sky-100 disabled:opacity-50"
-                  >
-                    Gen BodyPix
-                  </button>
-                </div>
-                </div>
-              </div>
-            ) : null}
             {hasSegments ? (
               <div className="ebs-toggle">
                 <label htmlFor="chk-pause">Pause at segment end</label>
@@ -1812,9 +1689,8 @@ export function EbsViewer(props: EbsViewerProps) {
           ) : null}
           {sessionMode && missingPrecomputed ? (
             <div className="mb-3 rounded-2xl border border-amber-100 bg-amber-50 px-4 py-2 text-xs text-amber-900">
-              Precomputed overlays are enabled, but frames haven’t been generated yet. Click <b>Gen MoveNet</b> /{" "}
-              <b>Gen YOLO</b> / <b>Gen YOLO Pose</b> / <b>Gen BodyPix</b> once, then playback will be synced
-              (no realtime lag).
+              Precomputed overlays are enabled, but cached frames aren’t available yet. Open the Analysis tab on the
+              session page to generate BodyPix overlays automatically.
             </div>
           ) : null}
 
@@ -1911,14 +1787,6 @@ export function EbsViewer(props: EbsViewerProps) {
                     <PoseOverlay videoRef={userVideo} color="#10b981" method={overlayMethod} />
                   )
                 ) : null}
-                {sessionMode && showFeedback && danceFeedback.length > 0 ? (
-                  <FeedbackOverlay
-                    refVideoRef={refVideo}
-                    videoRef={userVideo}
-                    feedback={danceFeedback}
-                    sharedTime={state.sharedTime}
-                  />
-                ) : null}
               </div>
               <div className={`beat-flash${state.beatFlashOn ? " on" : ""}`} />
               <div className={`seg-pause-overlay${state.pauseOverlay.visible ? " visible" : ""}`}>
@@ -1930,20 +1798,6 @@ export function EbsViewer(props: EbsViewerProps) {
               </div>
             </div>
           </div>
-{/* moved to new tab
-          {sessionMode && showFeedback && activeReferenceVideoUrl && activeUserVideoUrl && state.segments.length > 0 && (
-            <div className="mt-4 mb-2">
-              <FeedbackPanel
-                referenceVideoUrl={activeReferenceVideoUrl}
-                userVideoUrl={activeUserVideoUrl}
-                segments={state.segments}
-                sharedTime={state.sharedTime}
-                onSeek={seekToShared}
-                onFeedbackReady={setDanceFeedback}
-              />
-            </div>
-          )} */}
-
           {!state.practice.enabled && hasSegments && (
             <>
               <div className="transport">

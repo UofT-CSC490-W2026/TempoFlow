@@ -28,10 +28,10 @@ def test_candidate_from_env_which(monkeypatch):
         assert fp._candidate_from_env("EBS_FFMPEG_PATH") == "/usr/bin/ffmpeg"
 
 
-def test_candidate_from_env_raw_fallback(monkeypatch):
+def test_candidate_from_env_missing_path_returns_none(monkeypatch):
     monkeypatch.setenv("EBS_FFMPEG_PATH", "/no/such/file")
     with patch.object(fp.shutil, "which", return_value=None):
-        assert fp._candidate_from_env("EBS_FFMPEG_PATH") == "/no/such/file"
+        assert fp._candidate_from_env("EBS_FFMPEG_PATH") is None
 
 
 def test_resolve_ffmpeg_prefers_env(tmp_path, monkeypatch):

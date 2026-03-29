@@ -1,10 +1,16 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from dotenv import load_dotenv
+
+# Load A5/.env before any code that reads os.environ (e.g. eval config, Gemini).
+load_dotenv(Path(__file__).resolve().parent.parent / ".env")
+
 import asyncio
 import json
 import threading
 import uuid
-from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, File, Form, UploadFile
@@ -12,9 +18,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse
 
 from src.alignment_and_segmentation.router import router as alignment_router
-from src.ebs_web_adapter import process_uploads, process_videos_from_paths, save_upload
+from src.ebs_web_adapter import process_videos_from_paths, save_upload, save_upload_async
 from src.overlay_api import router as overlay_router
-from src.gemini_move_feedback import run_move_feedback_pipeline
+from src.eval.runner import run_move_feedback_pipeline
+from src.eval import router as eval_router
 
 app = FastAPI(title="Audio Alignment API")
 app.add_middleware(
@@ -25,14 +32,44 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
+@app.middleware("http")
+async def add_cross_origin_resource_policy(request, call_next):
+    """Allow browser JS to read cross-origin fetch() responses when the web app uses COEP.
+
+    Next.js sends Cross-Origin-Embedder-Policy: require-corp (for WASM/WebGPU). In that mode,
+    responses from CloudFront/EB must include this header or the client sees Failed to fetch.
+    """
+    response = await call_next(request)
+    response.headers["Cross-Origin-Resource-Policy"] = "cross-origin"
+    return response
+
+
 # Include routers
 app.include_router(alignment_router, prefix="/a5")
 app.include_router(overlay_router)
+app.include_router(eval_router)
 
 SESSION_STATUS: dict[str, str] = {}
 SESSION_RESULTS: dict[str, dict[str, Any]] = {}
 
 MOVE_FEEDBACK_JOBS: dict[str, dict[str, Any]] = {}
+
+
+def _parse_optional_bool(val: str | None, default: bool) -> bool:
+    if val is None or str(val).strip() == "":
+        return default
+    return str(val).strip().lower() in ("1", "true", "yes", "on")
+
+
+def _parse_pose_priors_json(raw: str | None) -> dict[str, Any] | None:
+    if not raw or not str(raw).strip():
+        return None
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    return data if isinstance(data, dict) else None
 
 
 def _move_feedback_worker(
@@ -41,6 +78,9 @@ def _move_feedback_worker(
     user_path: str,
     ebs_data: dict[str, Any],
     segment_index: int,
+    pose_priors: dict[str, Any] | None,
+    burn_in_labels: bool,
+    include_audio: bool,
 ) -> None:
     """Background worker for Gemini micro-timing move feedback."""
     try:
@@ -50,6 +90,9 @@ def _move_feedback_worker(
             user_video_path=user_path,
             ebs_artifact=ebs_data,
             segment_index=segment_index,
+            pose_priors=pose_priors,
+            burn_in_labels=burn_in_labels,
+            include_audio=include_audio,
         )
         MOVE_FEEDBACK_JOBS[job_id]["result"] = result
         MOVE_FEEDBACK_JOBS[job_id]["status"] = "done"
@@ -94,14 +137,29 @@ async def process(
             {"error": "Both ref_video/user_video (or file_a/file_b) are required."},
             status_code=400,
         )
+
+    ref_tmp: str | None = None
+    user_tmp: str | None = None
     try:
-        artifact = process_uploads(ref, usr)
+        ref_tmp = await save_upload_async(ref, "ref")
+        user_tmp = await save_upload_async(usr, "user")
+        # librosa/CPU work must not block the asyncio loop — otherwise GET /api/status never runs
+        # and the web UI polls "idle" forever while the POST is in progress.
+        artifact = await asyncio.to_thread(process_videos_from_paths, ref_tmp, user_tmp)
         SESSION_RESULTS[sid] = artifact
         SESSION_STATUS[sid] = "done"
         return JSONResponse(artifact, status_code=200)
     except Exception as exc:
         SESSION_STATUS[sid] = "error"
         return JSONResponse({"error": str(exc)}, status_code=500)
+    finally:
+        for p in (ref_tmp, user_tmp):
+            if not p:
+                continue
+            try:
+                Path(p).unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 @app.get("/api/status")
@@ -133,6 +191,9 @@ async def move_feedback_start(
     segment_index: int = Form(...),
     session_id: str | None = Form(default=None),
     ebs_data_json: str | None = Form(default=None),
+    pose_priors_json: str | None = Form(default=None),
+    burn_in_labels: str | None = Form(default=None),
+    include_audio: str | None = Form(default=None),
 ):
     """Start an async Gemini move-feedback job for a single EBS segment.
 
@@ -180,9 +241,13 @@ async def move_feedback_start(
             "segment_index": segment_index,
         }
 
+        pose_priors = _parse_pose_priors_json(pose_priors_json)
+        burn_in = _parse_optional_bool(burn_in_labels, True)
+        audio_on = _parse_optional_bool(include_audio, False)
+
         t = threading.Thread(
             target=_move_feedback_worker,
-            args=(job_id, ref_tmp, user_tmp, ebs_data, segment_index),
+            args=(job_id, ref_tmp, user_tmp, ebs_data, segment_index, pose_priors, burn_in, audio_on),
             daemon=True,
         )
         t.start()
@@ -205,6 +270,9 @@ async def move_feedback_sync(
     segment_index: int = Form(...),
     session_id: str | None = Form(default=None),
     ebs_data_json: str | None = Form(default=None),
+    pose_priors_json: str | None = Form(default=None),
+    burn_in_labels: str | None = Form(default=None),
+    include_audio: str | None = Form(default=None),
 ):
     """Synchronous variant — blocks until Gemini returns feedback JSON."""
     sid = (session_id or "").strip() or "default"
@@ -236,12 +304,22 @@ async def move_feedback_sync(
                 status_code=400,
             )
 
+        pose_priors = _parse_pose_priors_json(pose_priors_json)
+        burn_in = _parse_optional_bool(burn_in_labels, True)
+        audio_on = _parse_optional_bool(include_audio, False)
+
         feedback = await asyncio.to_thread(
             run_move_feedback_pipeline,
-            ref_video_path=ref_tmp,
-            user_video_path=user_tmp,
-            ebs_artifact=ebs_data,
-            segment_index=segment_index,
+            ref_tmp,
+            user_tmp,
+            ebs_data,
+            segment_index,
+            None,
+            None,
+            None,
+            pose_priors,
+            burn_in,
+            audio_on,
         )
         return JSONResponse(feedback, status_code=200)
     except Exception as exc:

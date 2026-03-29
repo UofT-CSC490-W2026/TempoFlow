@@ -1,0 +1,217 @@
+{% extends "base.html" %}
+{% block title %}Review {{ video_id }} / {{ segment_id }}{% endblock %}
+{% block extra_css %}
+<style>
+  .seg-header { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:8px; }
+  .move-section { margin-bottom:28px; }
+  .move-title { font-size:15px; font-weight:600; margin-bottom:10px; padding-bottom:6px;
+                border-bottom:1px solid var(--border); }
+  .model-grid {
+    display:grid; gap:16px;
+    grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  }
+  .model-col {
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius); padding:14px; position:relative;
+  }
+  .model-col h4 { font-size:14px; font-weight:700; margin-bottom:8px; color:var(--accent); }
+  .evidence { font-size:13px; color:var(--text2); margin:6px 0; line-height:1.5; }
+  .coaching { font-size:13px; margin:4px 0 10px; font-style:italic; color:var(--text); }
+  .rating-row { display:flex; align-items:center; gap:8px; margin-bottom:6px; }
+  .rating-row label { font-size:12px; color:var(--text2); width:110px; flex-shrink:0; }
+  .preferred-row { display:flex; align-items:center; gap:8px; margin-top:8px; }
+  .preferred-row input { width:16px; height:16px; }
+  .error-msg { color:var(--red); font-size:13px; font-style:italic; }
+  .submit-bar {
+    position:sticky; bottom:0; background:var(--bg); padding:16px 0;
+    border-top:1px solid var(--border); text-align:center; z-index:10;
+  }
+  .expert-bar {
+    display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+    margin-bottom:16px; padding:12px 16px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius);
+  }
+  .expert-bar select {
+    padding:6px 10px; border:1px solid var(--border); border-radius:var(--radius);
+    font-size:14px; background:#fff; font-weight:500;
+  }
+  .expert-status { font-size:13px; color:var(--text2); }
+  .expert-done { color:var(--green); font-weight:600; }
+</style>
+{% endblock %}
+{% block content %}
+<div class="seg-header">
+  <h1 style="margin-bottom:0">{{ video_id }}</h1>
+  <span style="color:var(--text2);font-size:14px">/ {{ segment_id }}</span>
+</div>
+
+<div class="pill-nav">
+{% for s in segments %}
+  <a class="pill{% if s == segment_id %} active{% endif %}{% if s in unrated %} unrated{% endif %}"
+     href="/review/{{ video_id }}/{{ s }}?expert={{ current_expert }}">{{ s }}</a>
+{% endfor %}
+</div>
+
+<div class="expert-bar">
+  <label style="font-size:14px;font-weight:500">Rating as:</label>
+  <select id="expertSelect" onchange="switchExpert(this.value)">
+    {% for eid in expert_ids %}
+    <option value="{{ eid }}" {% if eid == current_expert %}selected{% endif %}>
+      {{ eid | replace('_', ' ') | title }}
+    </option>
+    {% endfor %}
+  </select>
+  <span class="expert-status">
+    This segment: <span class="expert-done">{{ seg_experts_done | length }}</span> / {{ expert_ids | length }} experts rated
+    {% if seg_experts_done %}
+    ({{ seg_experts_done | join(', ') | replace('_', ' ') }})
+    {% endif %}
+  </span>
+</div>
+
+{% if not models %}
+<div class="card empty-state"><p>No model outputs found for this segment.</p></div>
+{% else %}
+
+{% set all_moves_idx = [] %}
+{% for m in models %}
+  {% if m.moves %}
+    {% for mv in m.moves %}
+      {% if mv.move_index not in all_moves_idx %}
+        {% if all_moves_idx.append(mv.move_index) %}{% endif %}
+      {% endif %}
+    {% endfor %}
+  {% endif %}
+{% endfor %}
+
+{% for mi in all_moves_idx|sort %}
+<div class="move-section">
+  <div class="move-title">
+    Move {{ mi }}
+    {% for m in models %}{% if m.moves %}{% for mv in m.moves %}{% if mv.move_index == mi %}
+      <span style="font-weight:400;color:var(--text2);font-size:13px;margin-left:8px">{{ mv.time_window | default('') }}</span>
+    {% endif %}{% endfor %}{% endif %}{% endfor %}
+  </div>
+  <div class="model-grid">
+  {% for m in models %}
+    {% set move = namespace(data=none) %}
+    {% if m.moves %}{% for mv in m.moves %}{% if mv.move_index == mi %}{% set move.data = mv %}{% endif %}{% endfor %}{% endif %}
+    <div class="model-col" data-model-id="{{ m.model_id }}" data-move-index="{{ mi }}">
+      <h4>{{ m.model_id }}</h4>
+      {% if m.error %}
+        <p class="error-msg">Model error: {{ m.error }}</p>
+      {% elif move.data %}
+        {% set lbl = move.data.micro_timing_label | default('') | lower %}
+        {% if lbl == 'on-time' %}{% set badge_cls = 'badge-green' %}
+        {% elif lbl in ('early', 'late') %}{% set badge_cls = 'badge-amber' %}
+        {% elif lbl in ('rushed', 'dragged') %}{% set badge_cls = 'badge-red' %}
+        {% else %}{% set badge_cls = 'badge-gray' %}{% endif %}
+        <span class="badge {{ badge_cls }}">{{ move.data.micro_timing_label | default('—') }}</span>
+        <span class="badge badge-gray" style="margin-left:4px">{{ move.data.confidence | default('') }}</span>
+        <p class="evidence">{{ move.data.micro_timing_evidence | default('') }}</p>
+        <div style="margin:6px 0">
+          {% for bp in move.data.body_parts_involved | default([]) %}<span class="tag">{{ bp }}</span>{% endfor %}
+        </div>
+        {% if move.data.coaching_note %}<p class="coaching">{{ move.data.coaching_note }}</p>{% endif %}
+      {% else %}
+        <p class="evidence">No data for this move.</p>
+      {% endif %}
+
+      <hr style="border:none;border-top:1px solid var(--border);margin:10px 0">
+      {% set key = m.model_id ~ '_' ~ mi %}
+      {% set ex = existing_ratings.get(key, {}) %}
+      <div class="rating-row"><label>Label Accuracy</label>
+        <input type="number" min="1" max="5" class="r-input" data-field="label_accuracy" value="{{ ex.get('label_accuracy','') }}"></div>
+      <div class="rating-row"><label>Body Specificity</label>
+        <input type="number" min="1" max="5" class="r-input" data-field="body_part_specificity" value="{{ ex.get('body_part_specificity','') }}"></div>
+      <div class="rating-row"><label>Timing Gran.</label>
+        <input type="number" min="1" max="5" class="r-input" data-field="timing_granularity" value="{{ ex.get('timing_granularity','') }}"></div>
+      <div class="rating-row"><label>Coaching Act.</label>
+        <input type="number" min="1" max="5" class="r-input" data-field="coaching_actionability" value="{{ ex.get('coaching_actionability','') }}"></div>
+      <div class="rating-row"><label>Confidence Cal.</label>
+        <input type="number" min="1" max="5" class="r-input" data-field="confidence_calibration" value="{{ ex.get('confidence_calibration','') }}"></div>
+      <div class="rating-row"><label>Occlusion</label>
+        <input type="number" min="1" max="5" class="r-input" data-field="occlusion_handling" value="{{ ex.get('occlusion_handling','') }}"></div>
+      <div class="rating-row"><label>Notes</label>
+        <textarea class="r-input" data-field="notes">{{ ex.get('notes','') }}</textarea></div>
+      <div class="preferred-row">
+        <input type="checkbox" class="r-input" data-field="preferred" {% if ex.get('preferred') %}checked{% endif %}>
+        <label style="font-size:13px">Preferred</label>
+      </div>
+    </div>
+  {% endfor %}
+  </div>
+</div>
+{% endfor %}
+
+<div class="submit-bar">
+  <button class="btn" id="submitBtn" onclick="submitRatings()">Submit Ratings as {{ current_expert | replace('_', ' ') | title }}</button>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function switchExpert(eid){
+  const url=new URL(location.href);
+  url.searchParams.set('expert',eid);
+  location.href=url.toString();
+}
+
+function submitRatings(){
+  const btn=document.getElementById('submitBtn');
+  const expert=document.getElementById('expertSelect').value;
+  btn.disabled=true; btn.textContent='Saving…';
+
+  const ratings=[];
+  document.querySelectorAll('.model-col').forEach(col=>{
+    const mid=col.dataset.modelId, mi=parseInt(col.dataset.moveIndex);
+    const r={model_id:mid, move_index:mi};
+    let hasValue=false;
+    col.querySelectorAll('.r-input').forEach(inp=>{
+      const f=inp.dataset.field;
+      if(inp.type==='checkbox'){r[f]=inp.checked;}
+      else if(inp.tagName==='TEXTAREA'){r[f]=inp.value;}
+      else{
+        const v=parseInt(inp.value);
+        if(!isNaN(v)){r[f]=v; hasValue=true;}
+      }
+    });
+    if(hasValue) ratings.push(r);
+  });
+
+  if(!ratings.length){
+    showToast('Fill in at least one rating per move',false);
+    btn.disabled=false; btn.textContent='Submit Ratings as '+expert.replace('_',' ');
+    return;
+  }
+
+  fetch('/review/rate',{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({
+      video_id:'{{ video_id }}',
+      segment_id:'{{ segment_id }}',
+      expert_id:expert,
+      ratings:ratings
+    })
+  })
+  .then(r=>r.json())
+  .then(d=>{
+    if(d.ok){
+      showToast('Ratings saved for '+expert.replace('_',' ')+'!',true);
+      const unrated={{ unrated | list | tojson }};
+      const current='{{ segment_id }}';
+      const next=unrated.filter(s=>s!==current)[0];
+      if(next) setTimeout(()=>location.href='/review/{{ video_id }}/'+next+'?expert='+expert, 800);
+      else setTimeout(()=>location.reload(), 800);
+    } else {
+      showToast(d.error||'Save failed',false);
+    }
+  })
+  .catch(e=>showToast('Network error',false))
+  .finally(()=>{btn.disabled=false; btn.textContent='Submit Ratings as '+expert.replace('_',' ');});
+}
+</script>
+{% endblock %}
