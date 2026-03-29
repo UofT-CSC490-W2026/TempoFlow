@@ -232,15 +232,13 @@ function AnalysisPageContent() {
             // Only retry on likely-transient Chrome suspend; "Failed to fetch" is often COEP/CORS (retry won't help).
             const isTransientSuspend = message.includes("ERR_NETWORK_IO_SUSPENDED");
             if (!isTransientSuspend || attempt === 1) {
-              throw error;
-            }
           }
         }
 
         if (!response || !payload) {
-          throw lastError ?? new Error(`Failed to reach the EBS processor at ${processorUrl}.`);
+          throw lastError ?? new Error(`Failed to reach the local EBS processor at ${processorUrl}.`);
         }
-
+          throw lastError ?? new Error(`Failed to reach the EBS processor at ${processorUrl}.`);
         if (!response.ok) {
           throw new Error(payload.error ?? "Failed to generate EBS data for this session.");
         }
@@ -269,6 +267,8 @@ function AnalysisPageContent() {
         const message =
           error instanceof Error
             ? error.message
+            : "Failed to generate EBS data. Start the local Python service and try again.";
+        const isSuspended =
             : "Failed to generate EBS data for this session.";
         const isChromeIoSuspended = message.includes("ERR_NETWORK_IO_SUSPENDED");
         const isFetchFailed =
@@ -280,8 +280,6 @@ function AnalysisPageContent() {
           ? "Browser network I/O was suspended during upload (often caused by the tab going to background, laptop sleep, or aggressive throttling). Keep this tab active and retry."
           : isFetchFailed
             ? hostedHint
-            : message;
-
         updateSession(session.id, {
           status: "error",
           ebsStatus: "error",
@@ -358,13 +356,13 @@ function AnalysisPageContent() {
         const statusUrl = `${processorBaseUrl}/api/status?session=${encodeURIComponent(sessionId)}`;
         const response = await fetch(statusUrl, { method: "GET" });
         if (!response.ok) return;
-        const payload = (await response.json()) as { status?: string; has_result?: boolean };
+        const response = await fetch(statusUrl, { method: "GET", cache: "no-store" });
         if (cancelled) return;
         if (payload?.status === "done" && payload?.has_result) {
           const resultUrl = `${processorBaseUrl}/api/result?session=${encodeURIComponent(sessionId)}`;
           const resultResponse = await fetch(resultUrl, { method: "GET" });
           if (!resultResponse.ok) return;
-          const result = (await resultResponse.json()) as EbsData;
+          const resultResponse = await fetch(resultUrl, { method: "GET", cache: "no-store" });
           if (cancelled) return;
           await storeSessionEbs(sessionId, result);
           await adoptArtifact(result, "EBS processor");
