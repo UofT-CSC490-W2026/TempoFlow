@@ -724,16 +724,18 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const getNormalizedReferenceOverlayStyle = useCallback(
     (segment: OverlaySegmentArtifact | null) => {
       const normalization = segment?.meta?.normalization as
-        | { scale?: number; translateX?: number; translateY?: number; pivotX?: number; pivotY?: number }
+        | { scaleX?: number; scaleY?: number; translateX?: number; translateY?: number; pivotX?: number; pivotY?: number }
         | undefined;
       if (!normalization) return undefined;
-      const scale = Number(normalization.scale);
+      const scaleX = Number(normalization.scaleX);
+      const scaleY = Number(normalization.scaleY);
       const translateX = Number(normalization.translateX);
       const translateY = Number(normalization.translateY);
       const pivotX = Number(normalization.pivotX);
       const pivotY = Number(normalization.pivotY);
       if (
-        !Number.isFinite(scale) ||
+        !Number.isFinite(scaleX) ||
+        !Number.isFinite(scaleY) ||
         !Number.isFinite(translateX) ||
         !Number.isFinite(translateY) ||
         !Number.isFinite(pivotX) ||
@@ -743,7 +745,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
       }
       return {
         transformOrigin: `${(pivotX * 100).toFixed(3)}% ${(pivotY * 100).toFixed(3)}%`,
-        transform: `translate(${(translateX * 100).toFixed(3)}%, ${(translateY * 100).toFixed(3)}%) scale(${scale.toFixed(4)})`,
+        transform: `translate(${(translateX * 100).toFixed(3)}%, ${(translateY * 100).toFixed(3)}%) scale(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)})`,
       };
     },
     [],
@@ -758,26 +760,28 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const activeMoveReadiness = useMemo(() => {
     const inFlight = overlayDetector === "yolo" ? yoloSegmentProgress : bodyPixSegmentProgress;
     const readySharedCutoffBySegment = new Map<number, number>();
+    const segmentReadyByIndex = state.segments.map((segment, index) => {
+      if (overlayDetector === "yolo") {
+        return Boolean(
+          getRenderableSegment(refYoloArtifact, index) &&
+            getRenderableSegment(userYoloArtifact, index) &&
+            getRenderableSegment(refYoloPoseArmsArtifact, index) &&
+            getRenderableSegment(refYoloPoseLegsArtifact, index) &&
+            getRenderableSegment(userYoloPoseArmsArtifact, index) &&
+            getRenderableSegment(userYoloPoseLegsArtifact, index),
+        );
+      }
+
+      return Boolean(getRenderableSegment(refBodyPixArtifact, index) && getRenderableSegment(userBodyPixArtifact, index));
+    });
 
     state.segments.forEach((segment, index) => {
-      const segmentComplete =
-        overlayDetector === "yolo"
-          ? Boolean(
-              getRenderableSegment(refYoloArtifact, index) &&
-                getRenderableSegment(userYoloArtifact, index) &&
-                getRenderableSegment(refYoloPoseArmsArtifact, index) &&
-                getRenderableSegment(refYoloPoseLegsArtifact, index) &&
-                getRenderableSegment(userYoloPoseArmsArtifact, index) &&
-                getRenderableSegment(userYoloPoseLegsArtifact, index),
-            )
-          : Boolean(getRenderableSegment(refBodyPixArtifact, index) && getRenderableSegment(userBodyPixArtifact, index));
-
-      if (segmentComplete) {
+      if (segmentReadyByIndex[index]) {
         readySharedCutoffBySegment.set(index, segment.shared_end_sec);
         return;
       }
 
-      if (inFlight?.segmentIndex === index) {
+      if (overlayDetector === "bodypix" && inFlight?.segmentIndex === index) {
         const duration = Math.max(0, segment.shared_end_sec - segment.shared_start_sec);
         readySharedCutoffBySegment.set(
           index,
@@ -787,6 +791,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
     });
 
     const moveReadyBySegment = segmentMoves.map((moves, segmentIndex) => {
+      if (overlayDetector === "yolo") {
+        return moves.map(() => segmentReadyByIndex[segmentIndex] ?? false);
+      }
       const cutoff = readySharedCutoffBySegment.get(segmentIndex);
       return moves.map((move) => cutoff != null && move.endSec <= cutoff + 0.04);
     });
@@ -796,11 +803,14 @@ export function FeedbackViewer(props: EbsViewerProps) {
       0,
     );
     const totalMoves = segmentMoves.reduce((total, moves) => total + moves.length, 0);
+    const readySegments = segmentReadyByIndex.filter(Boolean).length;
 
     return {
       readySharedCutoffBySegment,
+      segmentReadyByIndex,
       moveReadyBySegment,
       readyMoves,
+      readySegments,
       totalMoves,
     };
   }, [
@@ -820,9 +830,13 @@ export function FeedbackViewer(props: EbsViewerProps) {
     userBodyPixArtifact,
   ]);
   const moveReadySummary =
-    activeMoveReadiness.totalMoves > 0
-      ? `${activeMoveReadiness.readyMoves}/${activeMoveReadiness.totalMoves} moves ready`
-      : null;
+    overlayDetector === "yolo"
+      ? state.segments.length > 0
+        ? `${activeMoveReadiness.readySegments}/${state.segments.length} segments ready`
+        : null
+      : activeMoveReadiness.totalMoves > 0
+        ? `${activeMoveReadiness.readyMoves}/${activeMoveReadiness.totalMoves} moves ready`
+        : null;
 
   const mapArtifactToOverlayTimeline = useCallback(
     (
@@ -1395,18 +1409,28 @@ export function FeedbackViewer(props: EbsViewerProps) {
                       {fmtTime(segment.shared_start_sec)} - {fmtTime(segment.shared_end_sec)}
                     </div>
                     {segmentMoves[index]?.length ? (
-                      <div
-                        className={`text-[10px] ${
-                          activeMoveReadiness.moveReadyBySegment[index]?.every(Boolean)
-                            ? "text-emerald-600"
-                            : activeMoveReadiness.moveReadyBySegment[index]?.some(Boolean)
-                              ? "text-amber-600"
-                              : "text-slate-400"
-                        }`}
-                      >
-                        {activeMoveReadiness.moveReadyBySegment[index]?.filter(Boolean).length ?? 0}/
-                        {segmentMoves[index].length} moves ready
-                      </div>
+                      overlayDetector === "yolo" ? (
+                        <div
+                          className={`text-[10px] ${
+                            activeMoveReadiness.segmentReadyByIndex[index] ? "text-emerald-600" : "text-slate-400"
+                          }`}
+                        >
+                          {activeMoveReadiness.segmentReadyByIndex[index] ? "Segment ready" : "Segment processing"}
+                        </div>
+                      ) : (
+                        <div
+                          className={`text-[10px] ${
+                            activeMoveReadiness.moveReadyBySegment[index]?.every(Boolean)
+                              ? "text-emerald-600"
+                              : activeMoveReadiness.moveReadyBySegment[index]?.some(Boolean)
+                                ? "text-amber-600"
+                                : "text-slate-400"
+                          }`}
+                        >
+                          {activeMoveReadiness.moveReadyBySegment[index]?.filter(Boolean).length ?? 0}/
+                          {segmentMoves[index].length} moves ready
+                        </div>
+                      )
                     ) : null}
                     <button
                       className="seg-practice-btn"

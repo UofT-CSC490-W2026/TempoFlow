@@ -14,7 +14,7 @@ import {
 } from "./overlaySegments";
 
 export const BROWSER_YOLO_OVERLAY_FPS = 12;
-export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v9";
+export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v11";
 
 type VideoSide = "reference" | "practice";
 type PoseLayer = "arms" | "legs";
@@ -121,30 +121,42 @@ function buildNormalizationMeta(
 
   if (!pairs.length) return null;
 
-  const scaleSamples = pairs.map(({ referencePerson, practicePerson }) => {
-    const heightRatio = practicePerson.height / Math.max(referencePerson.height, 0.08);
-    const widthRatio = practicePerson.width / Math.max(referencePerson.width, 0.05);
-    return heightRatio * 0.82 + widthRatio * 0.18;
+  const buildUnionBounds = (people: PosePersonSummary[]) => ({
+    minX: Math.min(...people.map((person) => person.min_x)),
+    maxX: Math.max(...people.map((person) => person.max_x)),
+    minY: Math.min(...people.map((person) => person.min_y)),
+    maxY: Math.max(...people.map((person) => person.max_y)),
   });
-  const sortedScaleSamples = [...scaleSamples].sort((a, b) => a - b);
-  const medianIndex = Math.floor(sortedScaleSamples.length / 2);
-  const rawScale =
-    sortedScaleSamples.length % 2 === 0
-      ? (sortedScaleSamples[medianIndex - 1] + sortedScaleSamples[medianIndex]) / 2
-      : sortedScaleSamples[medianIndex];
-  const scale = Math.max(0.35, Math.min(1.65, rawScale));
 
-  const pivotX = pairs.reduce((sum, pair) => sum + pair.referencePerson.anchor_x, 0) / pairs.length;
-  const targetX = pairs.reduce((sum, pair) => sum + pair.practicePerson.anchor_x, 0) / pairs.length;
-  const pivotY = Math.max(...pairs.map((pair) => pair.referencePerson.anchor_y));
-  const targetY = Math.max(...pairs.map((pair) => pair.practicePerson.anchor_y));
+  const referenceGroup = pairs.map((pair) => pair.referencePerson);
+  const practiceGroup = pairs.map((pair) => pair.practicePerson);
+  const referenceBounds = buildUnionBounds(referenceGroup);
+  const practiceBounds = buildUnionBounds(practiceGroup);
+
+  const referenceWidth = Math.max(0.05, referenceBounds.maxX - referenceBounds.minX);
+  const referenceHeight = Math.max(0.08, referenceBounds.maxY - referenceBounds.minY);
+  const practiceWidth = Math.max(0.05, practiceBounds.maxX - practiceBounds.minX);
+  const practiceHeight = Math.max(0.08, practiceBounds.maxY - practiceBounds.minY);
+
+  // For overlay diff we want the reference ghost to literally fit the practice layout,
+  // so use independent width/height scaling instead of a uniform scale.
+  const scaleX = Math.max(0.2, Math.min(2.8, practiceWidth / referenceWidth));
+  const scaleY = Math.max(0.2, Math.min(2.8, practiceHeight / referenceHeight));
+
+  const pivotX = (referenceBounds.minX + referenceBounds.maxX) / 2;
+  const targetX = (practiceBounds.minX + practiceBounds.maxX) / 2;
+  const pivotY = referenceBounds.maxY;
+  const targetY = practiceBounds.maxY;
 
   return {
-    scale,
+    scaleX,
+    scaleY,
     translateX: targetX - pivotX,
     translateY: targetY - pivotY,
     pivotX,
     pivotY,
+    referenceBounds,
+    practiceBounds,
     matchedPersonCount: pairs.length,
     referencePersonCount: refPeople.length,
     practicePersonCount: practicePeople.length,
