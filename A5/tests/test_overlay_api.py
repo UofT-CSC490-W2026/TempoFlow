@@ -461,35 +461,38 @@ class _MockMasks:
 
 
 class _MockKeypoints:
-    def __init__(self):
-        xy = np.zeros((1, 17, 2), dtype=np.float32)
-        conf = np.ones((1, 17), dtype=np.float32)
-        xy[0, 5] = [10, 10]
-        xy[0, 6] = [30, 10]
-        xy[0, 11] = [12, 35]
-        xy[0, 12] = [28, 35]
-        xy[0, 0] = [20, 8]
+    def __init__(self, num_people: int = 1):
+        xy = np.zeros((num_people, 17, 2), dtype=np.float32)
+        conf = np.ones((num_people, 17), dtype=np.float32)
+        for idx in range(num_people):
+            offset = idx * 8
+            xy[idx, 5] = [10 + offset, 10]
+            xy[idx, 6] = [30 + offset, 10]
+            xy[idx, 11] = [12 + offset, 35]
+            xy[idx, 12] = [28 + offset, 35]
+            xy[idx, 0] = [20 + offset, 8]
         self.xy = _MockTensor(xy)
         self.conf = _MockTensor(conf)
 
 
 class _MockResult:
-    def __init__(self, h: int, w: int, with_masks: bool = False, with_keypoints: bool = False):
+    def __init__(self, h: int, w: int, with_masks: bool = False, with_keypoints: bool = False, num_people: int = 1):
         self.masks = _MockMasks(h, w) if with_masks else None
-        self.keypoints = _MockKeypoints() if with_keypoints else None
+        self.keypoints = _MockKeypoints(num_people=num_people) if with_keypoints else None
 
 
 class _MockYOLO:
-    def __init__(self, mode: str, h: int, w: int):
+    def __init__(self, mode: str, h: int, w: int, num_people: int = 1):
         self._mode = mode
         self._h = h
         self._w = w
+        self._num_people = num_people
 
     def predict(self, frame, **kwargs):
         if self._mode == "seg":
             return [_MockResult(self._h, self._w, with_masks=True)]
         if self._mode == "pose":
-            return [_MockResult(self._h, self._w, with_keypoints=True)]
+            return [_MockResult(self._h, self._w, with_keypoints=True, num_people=self._num_people)]
         return [_MockResult(self._h, self._w)]
 
 
@@ -549,7 +552,13 @@ class _MockCapture:
         return None
 
 
-def _install_mock_cv2_and_ultralytics(monkeypatch, mode: str, opened_capture: bool = True, opened_writer: bool = True):
+def _install_mock_cv2_and_ultralytics(
+    monkeypatch,
+    mode: str,
+    opened_capture: bool = True,
+    opened_writer: bool = True,
+    pose_people: int = 1,
+):
     cap = _MockCapture(opened=opened_capture, frames=1)
     writer = _MockWriter(opened=opened_writer)
     cv2 = types.SimpleNamespace(
@@ -573,7 +582,7 @@ def _install_mock_cv2_and_ultralytics(monkeypatch, mode: str, opened_capture: bo
         if "seg" in path_str:
             return _MockYOLO("seg", 48, 64)
         if "pose" in path_str:
-            return _MockYOLO("pose", 48, 64)
+            return _MockYOLO("pose", 48, 64, num_people=pose_people)
         return _MockYOLO(mode, 48, 64)
 
     ultralytics = types.SimpleNamespace(YOLO=_make_yolo)
@@ -626,6 +635,32 @@ def test_run_pose_overlay_job_success(monkeypatch, tmp_path):
     assert oa.POSE_JOBS[jid]["frames_written"] == 1
     # Both arms and legs writes go through writers in this mocked path.
     assert len(writer.frames) >= 1
+    oa.POSE_JOBS.pop(jid, None)
+
+
+def test_run_pose_overlay_job_renders_all_detected_people(monkeypatch, tmp_path):
+    _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose", pose_people=2)
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    pose_weights = tmp_path / "yolo26n-pose.pt"
+    pose_weights.write_bytes(b"w")
+    seg_weights = tmp_path / "yolo26n-seg.pt"
+    seg_weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda name: pose_weights if "pose" in name else seg_weights)
+
+    calls: list[tuple[np.ndarray, np.ndarray | None]] = []
+
+    def fake_render_pose_layers(xy, conf, w, h, arms_color, legs_color):
+        calls.append((xy.copy(), None if conf is None else conf.copy()))
+        return np.zeros((h, w, 3), dtype=np.uint8), np.zeros((h, w, 3), dtype=np.uint8)
+
+    monkeypatch.setattr(oa, "_render_pose_layers", fake_render_pose_layers)
+    monkeypatch.setattr(oa, "_predict_segmentation_mask", lambda frame, model, w, h: np.ones((h, w), dtype=np.uint8) * 255)
+
+    jid = "pose-multi-person"
+    oa.POSE_JOBS[jid] = {"status": "queued"}
+    oa._run_pose_overlay_job(jid, "/tmp/in.mp4", "/tmp/arms.webm", "/tmp/legs.webm", "#f00", "#0f0", 1)
+    assert oa.POSE_JOBS[jid]["status"] == "done"
+    assert len(calls) == 2
     oa.POSE_JOBS.pop(jid, None)
 
 

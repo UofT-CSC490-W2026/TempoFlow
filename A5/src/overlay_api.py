@@ -34,6 +34,15 @@ def _scaled_bgr(color_hex: str, scale: float) -> tuple[int, int, int]:
     return (int(round(b * scale)), int(round(g * scale)), int(round(r * scale)))
 
 
+def _lifted_bgr(color_hex: str, lift: float) -> tuple[int, int, int]:
+    r, g, b = _hex_to_rgb(color_hex)
+    lift = max(0.0, min(1.0, lift))
+    rr = int(round(r + (255 - r) * lift))
+    gg = int(round(g + (255 - g) * lift))
+    bb = int(round(b + (255 - b) * lift))
+    return (bb, gg, rr)
+
+
 def _expected_frames(duration_sec: float, fps: int) -> int:
     if duration_sec <= 0:
         return 1
@@ -63,10 +72,44 @@ def _visible_pose_point(xy: Any, conf: Any, idx: int, threshold: float = 0.25) -
         return None
 
 
-def _draw_pose_segment(overlay: Any, start: tuple[int, int] | None, end: tuple[int, int] | None, width: int, color: tuple[int, int, int]) -> None:
-    if start is None or end is None or width <= 0:
-        return
-    import cv2  # type: ignore
+def _iter_pose_instances(keypoints: Any) -> list[tuple[Any, Any | None]]:
+    xy_tensor = getattr(keypoints, "xy", None)
+    if xy_tensor is None:
+        return []
+
+    conf_tensor = getattr(keypoints, "conf", None)
+    try:
+        count = len(xy_tensor)
+    except Exception:
+        count = 0
+
+    poses: list[tuple[Any, Any | None]] = []
+    for idx in range(count):
+        try:
+            xy = xy_tensor[idx].detach().cpu().numpy()  # type: ignore[attr-defined]
+            conf = (
+                conf_tensor[idx].detach().cpu().numpy()  # type: ignore[attr-defined]
+                if conf_tensor is not None and idx < len(conf_tensor)
+                else None
+            )
+            poses.append((xy, conf))
+        except Exception:
+            continue
+    return poses
+
+
+def _scale_points(points: Any, scale: float) -> Any:
+    import numpy as np  # type: ignore
+
+    pts = np.asarray(points, dtype=np.float32)
+    if pts.size == 0:
+        return pts.astype(np.int32)
+    center = np.mean(pts, axis=0)
+    scaled = center + (pts - center) * float(scale)
+    return np.round(scaled).astype(np.int32)
+
+
+def _segment_polygon_points(start: tuple[int, int], end: tuple[int, int], width: float) -> Any:
     import numpy as np  # type: ignore
 
     sx, sy = float(start[0]), float(start[1])
@@ -74,9 +117,9 @@ def _draw_pose_segment(overlay: Any, start: tuple[int, int] | None, end: tuple[i
     dx = ex - sx
     dy = ey - sy
     length = math.hypot(dx, dy)
+    half = max(1.0, width / 2.0)
     if length <= 1e-6:
-        half = max(1.0, width / 2.0)
-        pts = np.array(
+        return np.array(
             [
                 [sx - half, sy - half],
                 [sx + half, sy - half],
@@ -85,22 +128,64 @@ def _draw_pose_segment(overlay: Any, start: tuple[int, int] | None, end: tuple[i
             ],
             dtype=np.int32,
         )
-        cv2.fillConvexPoly(overlay, pts, color, lineType=cv2.LINE_AA)
-        return
 
-    px = -dy / length
-    py = dx / length
-    half = width / 2.0
+    ux = dx / length
+    uy = dy / length
+    px = -uy
+    py = ux
+    bevel = min(length * 0.22, half * 0.9)
+    inner = half * 0.78
     pts = np.array(
         [
-            [sx + px * half, sy + py * half],
-            [sx - px * half, sy - py * half],
-            [ex - px * half, ey - py * half],
-            [ex + px * half, ey + py * half],
+            [sx + ux * bevel + px * half, sy + uy * bevel + py * half],
+            [sx + px * inner, sy + py * inner],
+            [sx - px * inner, sy - py * inner],
+            [sx + ux * bevel - px * half, sy + uy * bevel - py * half],
+            [ex - ux * bevel - px * half, ey - uy * bevel - py * half],
+            [ex - px * inner, ey - py * inner],
+            [ex + px * inner, ey + py * inner],
+            [ex - ux * bevel + px * half, ey - uy * bevel + py * half],
         ],
         dtype=np.int32,
     )
-    cv2.fillConvexPoly(overlay, pts, color, lineType=cv2.LINE_AA)
+    return pts
+
+
+def _draw_styled_pose_circle(
+    overlay: Any,
+    center: tuple[int, int] | None,
+    radius: int,
+    fill_color: tuple[int, int, int],
+    outline_color: tuple[int, int, int],
+    highlight_color: tuple[int, int, int] | None = None,
+) -> None:
+    if center is None or radius <= 0:
+        return
+    import cv2  # type: ignore
+
+    outline_radius = max(radius + 1, int(round(radius * 1.08)))
+    cv2.circle(overlay, center, outline_radius, outline_color, thickness=-1, lineType=cv2.LINE_AA)
+    cv2.circle(overlay, center, radius, fill_color, thickness=-1, lineType=cv2.LINE_AA)
+    if highlight_color is not None and radius >= 10:
+        cv2.circle(
+            overlay,
+            center,
+            max(1, int(round(radius * 0.24))),
+            highlight_color,
+            thickness=-1,
+            lineType=cv2.LINE_AA,
+        )
+
+
+def _draw_pose_segment(overlay: Any, start: tuple[int, int] | None, end: tuple[int, int] | None, width: int, color: tuple[int, int, int]) -> None:
+    if start is None or end is None or width <= 0:
+        return
+    import cv2  # type: ignore
+    outer_pts = _segment_polygon_points(start, end, width)
+    inner_pts = _scale_points(outer_pts, 0.88)
+    outline = tuple(max(0, min(255, int(round(channel * 0.42)))) for channel in color)
+    cv2.fillConvexPoly(overlay, outer_pts, outline, lineType=cv2.LINE_AA)
+    cv2.fillConvexPoly(overlay, inner_pts, color, lineType=cv2.LINE_AA)
 
 
 def _draw_pose_circle(
@@ -133,13 +218,15 @@ def _draw_pose_torso_head(
     rh = _visible_pose_point(xy, conf, 12)
     nose = _visible_pose_point(xy, conf, 0, threshold=0.2)
 
-    fill = _scaled_bgr(color_hex, 0.28 * intensity)
-    edge = _scaled_bgr(color_hex, 0.52 * intensity)
-    glow = _scaled_bgr(color_hex, 0.18 * intensity)
+    fill = _scaled_bgr(color_hex, 0.36 * intensity + 0.16)
+    edge = _scaled_bgr(color_hex, 0.24 * intensity + 0.14)
+    highlight = _lifted_bgr(color_hex, 0.1 * intensity + 0.04)
+    glow = _scaled_bgr(color_hex, 0.1 * intensity)
 
     if ls and rs and lh and rh:
         pts = np.array([ls, rs, rh, lh], dtype=np.int32)
-        cv2.fillConvexPoly(overlay, pts, fill, lineType=cv2.LINE_AA)
+        cv2.fillConvexPoly(overlay, pts, edge, lineType=cv2.LINE_AA)
+        cv2.fillConvexPoly(overlay, _scale_points(pts, 0.93), fill, lineType=cv2.LINE_AA)
 
     if nose is not None:
         head_radius = max(int(round(shoulder_width * 0.28)), 18)
@@ -151,13 +238,13 @@ def _draw_pose_torso_head(
             thickness=-1,
             lineType=cv2.LINE_AA,
         )
-        cv2.circle(overlay, nose, head_radius, edge, thickness=-1, lineType=cv2.LINE_AA)
+        _draw_styled_pose_circle(overlay, nose, head_radius, fill, edge, None)
 
-    torso_r = max(int(round(max(shoulder_width * 0.25, 10) * intensity)), 6)
-    _draw_pose_circle(overlay, ls, torso_r, edge)
-    _draw_pose_circle(overlay, rs, torso_r, edge)
-    _draw_pose_circle(overlay, lh, torso_r, edge)
-    _draw_pose_circle(overlay, rh, torso_r, edge)
+    torso_r = max(int(round(max(shoulder_width * 0.17, 8) * intensity)), 5)
+    _draw_styled_pose_circle(overlay, ls, torso_r, fill, edge, None)
+    _draw_styled_pose_circle(overlay, rs, torso_r, fill, edge, None)
+    _draw_styled_pose_circle(overlay, lh, torso_r, fill, edge, None)
+    _draw_styled_pose_circle(overlay, rh, torso_r, fill, edge, None)
 
 
 def _render_pose_layers(
@@ -183,45 +270,45 @@ def _render_pose_layers(
     else:
         shoulder_width = 60.0
 
-    limb_width = max(int(round(shoulder_width * 0.7)), 18)
-    arm_edge = _scaled_bgr(arms_color, 0.78)
-    leg_edge = _scaled_bgr(legs_color, 0.78)
+    limb_width = max(int(round(shoulder_width * 0.54)), 14)
+    arm_fill = _lifted_bgr(arms_color, 0.08)
+    leg_fill = _lifted_bgr(legs_color, 0.08)
 
     _draw_pose_torso_head(arms_overlay, xy, conf, arms_color, shoulder_width, intensity=0.5)
     _draw_pose_torso_head(legs_overlay, xy, conf, legs_color, shoulder_width, intensity=0.5)
 
-    _draw_pose_segment(arms_overlay, ls, _visible_pose_point(xy, conf, 7), limb_width, arm_edge)
+    _draw_pose_segment(arms_overlay, ls, _visible_pose_point(xy, conf, 7), limb_width, arm_fill)
     _draw_pose_segment(
         arms_overlay,
         _visible_pose_point(xy, conf, 7),
         _visible_pose_point(xy, conf, 9),
-        max(int(round(limb_width * 0.86)), 10),
-        arm_edge,
+        max(int(round(limb_width * 0.82)), 10),
+        arm_fill,
     )
-    _draw_pose_segment(arms_overlay, rs, _visible_pose_point(xy, conf, 8), limb_width, arm_edge)
+    _draw_pose_segment(arms_overlay, rs, _visible_pose_point(xy, conf, 8), limb_width, arm_fill)
     _draw_pose_segment(
         arms_overlay,
         _visible_pose_point(xy, conf, 8),
         _visible_pose_point(xy, conf, 10),
-        max(int(round(limb_width * 0.86)), 10),
-        arm_edge,
+        max(int(round(limb_width * 0.82)), 10),
+        arm_fill,
     )
 
-    _draw_pose_segment(legs_overlay, lh, _visible_pose_point(xy, conf, 13), int(round(limb_width * 1.05)), leg_edge)
+    _draw_pose_segment(legs_overlay, lh, _visible_pose_point(xy, conf, 13), int(round(limb_width * 0.96)), leg_fill)
     _draw_pose_segment(
         legs_overlay,
         _visible_pose_point(xy, conf, 13),
         _visible_pose_point(xy, conf, 15),
-        max(int(round(limb_width * 0.9)), 10),
-        leg_edge,
+        max(int(round(limb_width * 0.82)), 10),
+        leg_fill,
     )
-    _draw_pose_segment(legs_overlay, rh, _visible_pose_point(xy, conf, 14), int(round(limb_width * 1.05)), leg_edge)
+    _draw_pose_segment(legs_overlay, rh, _visible_pose_point(xy, conf, 14), int(round(limb_width * 0.96)), leg_fill)
     _draw_pose_segment(
         legs_overlay,
         _visible_pose_point(xy, conf, 14),
         _visible_pose_point(xy, conf, 16),
-        max(int(round(limb_width * 0.9)), 10),
-        leg_edge,
+        max(int(round(limb_width * 0.82)), 10),
+        leg_fill,
     )
 
     return arms_overlay, legs_overlay
@@ -451,9 +538,10 @@ def _run_pose_overlay_job(
         result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
         if result and getattr(result[0], "keypoints", None) is not None and len(result[0].keypoints.xy) > 0:
             kp = result[0].keypoints
-            xy = kp.xy[0].detach().cpu().numpy()  # type: ignore[attr-defined]
-            conf = kp.conf[0].detach().cpu().numpy() if getattr(kp, "conf", None) is not None else None  # type: ignore[attr-defined]
-            arms_overlay, legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
+            for xy, conf in _iter_pose_instances(kp):
+                pose_arms_overlay, pose_legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
+                arms_overlay = np.maximum(arms_overlay, pose_arms_overlay)
+                legs_overlay = np.maximum(legs_overlay, pose_legs_overlay)
             seg_mask = _predict_segmentation_mask(frame, seg_model, w, h)
             arms_overlay = _clip_overlay_to_mask(arms_overlay, seg_mask)
             legs_overlay = _clip_overlay_to_mask(legs_overlay, seg_mask)
@@ -554,24 +642,23 @@ def _run_bodypx_job(job_id: str, tmp_in: str, out_path: str, arms_color: str, le
         result = model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
         if result and getattr(result[0], "keypoints", None) is not None and len(result[0].keypoints.xy) > 0:
             kp = result[0].keypoints
-            xy = kp.xy[0].detach().cpu().numpy()  # type: ignore[attr-defined]
-            conf = kp.conf[0].detach().cpu().numpy() if getattr(kp, "conf", None) is not None else None  # type: ignore[attr-defined]
-            arms_overlay, legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
-            overlay = np.maximum(arms_overlay, legs_overlay)
-            shoulder_width = 60.0
-            ls = _visible_pose_point(xy, conf, 5)
-            rs = _visible_pose_point(xy, conf, 6)
-            if ls and rs:
-                shoulder_width = math.hypot(ls[0] - rs[0], ls[1] - rs[1])
-            _draw_pose_torso_head(overlay, xy, conf, torso_color, shoulder_width, intensity=0.55)
-            nose = _visible_pose_point(xy, conf, 0, threshold=0.2)
-            if nose is not None:
-                _draw_pose_circle(
-                    overlay,
-                    nose,
-                    max(int(round(max(shoulder_width * 0.3, 18) * 0.9)), 10),
-                    _scaled_bgr(head_color, 0.6),
-                )
+            for xy, conf in _iter_pose_instances(kp):
+                arms_overlay, legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
+                overlay = np.maximum(overlay, np.maximum(arms_overlay, legs_overlay))
+                shoulder_width = 60.0
+                ls = _visible_pose_point(xy, conf, 5)
+                rs = _visible_pose_point(xy, conf, 6)
+                if ls and rs:
+                    shoulder_width = math.hypot(ls[0] - rs[0], ls[1] - rs[1])
+                _draw_pose_torso_head(overlay, xy, conf, torso_color, shoulder_width, intensity=0.55)
+                nose = _visible_pose_point(xy, conf, 0, threshold=0.2)
+                if nose is not None:
+                    _draw_pose_circle(
+                        overlay,
+                        nose,
+                        max(int(round(max(shoulder_width * 0.3, 18) * 0.9)), 10),
+                        _scaled_bgr(head_color, 0.6),
+                    )
 
         last_overlay = overlay
         slack = out_dt * 0.25

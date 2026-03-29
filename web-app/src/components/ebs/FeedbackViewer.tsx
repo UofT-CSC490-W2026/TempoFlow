@@ -695,17 +695,17 @@ export function FeedbackViewer(props: EbsViewerProps) {
   );
   const referenceYoloLayers = useMemo(
     () => [
-      { key: "ref-yolo-seg", artifact: refYoloArtifact, opacity: 0.58, className: "z-10" },
-      { key: "ref-yolo-legs", artifact: refYoloPoseLegsArtifact, opacity: 0.84, className: "z-20" },
-      { key: "ref-yolo-arms", artifact: refYoloPoseArmsArtifact, opacity: 0.94, className: "z-30" },
+      { key: "ref-yolo-seg", artifact: refYoloArtifact, opacity: 0.5, className: "z-10" },
+      { key: "ref-yolo-legs", artifact: refYoloPoseLegsArtifact, opacity: 0.5, className: "z-20" },
+      { key: "ref-yolo-arms", artifact: refYoloPoseArmsArtifact, opacity: 0.54, className: "z-30" },
     ],
     [refYoloArtifact, refYoloPoseArmsArtifact, refYoloPoseLegsArtifact],
   );
   const userYoloLayers = useMemo(
     () => [
-      { key: "user-yolo-seg", artifact: userYoloArtifact, opacity: 0.6, className: "z-10" },
-      { key: "user-yolo-legs", artifact: userYoloPoseLegsArtifact, opacity: 0.86, className: "z-20" },
-      { key: "user-yolo-arms", artifact: userYoloPoseArmsArtifact, opacity: 0.96, className: "z-30" },
+      { key: "user-yolo-seg", artifact: userYoloArtifact, opacity: 0.52, className: "z-10" },
+      { key: "user-yolo-legs", artifact: userYoloPoseLegsArtifact, opacity: 0.52, className: "z-20" },
+      { key: "user-yolo-arms", artifact: userYoloPoseArmsArtifact, opacity: 0.56, className: "z-30" },
     ],
     [userYoloArtifact, userYoloPoseArmsArtifact, userYoloPoseLegsArtifact],
   );

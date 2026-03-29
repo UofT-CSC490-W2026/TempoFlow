@@ -14,7 +14,7 @@ import {
 } from "./overlaySegments";
 
 export const BROWSER_YOLO_OVERLAY_FPS = 12;
-export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v4";
+export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v6";
 
 type VideoSide = "reference" | "practice";
 type PoseLayer = "arms" | "legs";
@@ -55,13 +55,13 @@ export type YoloOverlayChunkPlan = {
 };
 
 const YOLO_SEG_COLORS: Record<VideoSide, string> = {
-  reference: "#38bdf8",
-  practice: "#fb923c",
+  reference: "#6ec6f5",
+  practice: "#f2b37b",
 };
 
 const YOLO_POSE_COLORS: Record<VideoSide, { arms: string; legs: string }> = {
-  reference: { arms: "#7dd3fc", legs: "#60a5fa" },
-  practice: { arms: "#fdba74", legs: "#f97316" },
+  reference: { arms: "#91d5fa", legs: "#78bef2" },
+  practice: { arms: "#f6c699", legs: "#e7a975" },
 };
 
 function getOverlayBaseUrl() {
