@@ -428,6 +428,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
     // Keep this tied to the session/input lifecycle only.
     // Depending on overlay artifact state makes React clean up the in-flight run
     // after each completed segment update, which aborts the remaining segments.
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- overlay artifact updates are produced by the
+  // in-flight YOLO run itself; tracking them here aborts the remaining segments mid-pipeline.
   }, [
     sessionMode,
     overlayCacheReady,
@@ -1391,90 +1393,91 @@ export function FeedbackViewer(props: EbsViewerProps) {
               </div>
 
               <div className="timeline" style={{ position: "relative", zIndex: 10 }}>
-                <div className="timeline-track relative" ref={timelineTrackRef} onClick={handleTimelineClick}>
-                    {/* 1. SEGMENTS LAYER */}
-                    {state.segments.map((segment, index) => {
-                      const isActive = index === state.currentSegmentIndex;
-                      const feedbackStyle = segmentFeedbackStyles[index];
+                <div className="relative">
+                  <div className="timeline-track relative" ref={timelineTrackRef} onClick={handleTimelineClick}>
+                      {/* 1. SEGMENTS LAYER */}
+                      {state.segments.map((segment, index) => {
+                        const isActive = index === state.currentSegmentIndex;
+                        const feedbackStyle = segmentFeedbackStyles[index];
 
-                      return (
-                        <div
-                          key={`seg-track-${index}`}
-                          className={[
-                            "timeline-segment transition-colors duration-500",
-                            isActive ? "active" : "",
-                            segmentDoneSet.has(index) ? "done" : "",
-                          ].filter(Boolean).join(" ")}
-                          style={{
-                            left: `${(segment.shared_start_sec / sharedLen) * 100}%`,
-                            width: `${((segment.shared_end_sec - segment.shared_start_sec) / sharedLen) * 100}%`,
-                            background: feedbackStyle?.fill,
-                            borderColor: feedbackStyle?.border,
-                            boxShadow: feedbackStyle ? `inset 0 0 0 1px ${feedbackStyle.border}, 0 8px 20px ${feedbackStyle.glow}` : undefined,
-                          }}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            seekToSegment(index);
-                          }}
-                        >
-                          {index}
-                        </div>
-                      );
-                    })}
+                        return (
+                          <div
+                            key={`seg-track-${index}`}
+                            className={[
+                              "timeline-segment transition-colors duration-500",
+                              isActive ? "active" : "",
+                              segmentDoneSet.has(index) ? "done" : "",
+                            ].filter(Boolean).join(" ")}
+                            style={{
+                              left: `${(segment.shared_start_sec / sharedLen) * 100}%`,
+                              width: `${((segment.shared_end_sec - segment.shared_start_sec) / sharedLen) * 100}%`,
+                              background: feedbackStyle?.fill,
+                              borderColor: feedbackStyle?.border,
+                              boxShadow: feedbackStyle ? `inset 0 0 0 1px ${feedbackStyle.border}, 0 8px 20px ${feedbackStyle.glow}` : undefined,
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              seekToSegment(index);
+                            }}
+                          >
+                            {index}
+                          </div>
+                        );
+                      })}
 
-                    {/* 3. PLAYHEAD (Top Layer) */}
-                    <div
-                      className="timeline-playhead z-[10] shadow-md"
-                      style={{ left: `${sharedLen > 0 ? (state.sharedTime / sharedLen) * 100 : 0}%` }}
-                    />
-                </div>
-                    {showFeedback && sharedLen > 0 && (
-                  <div className="pointer-events-none absolute left-0 right-0 top-0 z-[9] h-[52px] overflow-visible">
-                    {geminiFeedback.map((move, index) => {
-                      const start = move.shared_start_sec ?? 0;
-                      const end = move.shared_end_sec ?? start;
-                      const mid = start + Math.max(end - start, 0.04) / 2;
-                      const color = TIMING_LABEL_COLORS[move.micro_timing_label] ?? "#94a3b8";
-                      return (
-                        <button
-                          key={`gflag-${index}`}
-                          type="button"
-                          className="pointer-events-auto absolute z-[8] -translate-x-1/2 cursor-pointer bg-transparent p-0 border-0"
-                          title={`Move ${move.move_index}: ${move.micro_timing_label}`}
-                          style={{
-                            left: `${(mid / sharedLen) * 100}%`,
-                            top: "0px",
-                            height: "52px",
-                            width: "16px",
-                          }}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            seekToShared(start);
-                          }}
-                        >
-                          <span
-                            className="absolute left-1/2 top-[4px] -translate-x-1/2 rounded-full"
-                            style={{
-                              width: "3px",
-                              height: "42px",
-                              backgroundColor: color,
-                              boxShadow: `0 0 0 1px rgba(255,255,255,0.95), 0 0 12px ${color}`,
-                            }}
-                          />
-                          <span
-                            className="absolute left-1/2 top-0 -translate-x-1/2 rounded-full"
-                            style={{
-                              width: "10px",
-                              height: "10px",
-                              backgroundColor: color,
-                              boxShadow: `0 0 0 2px rgba(255,255,255,0.96), 0 2px 8px ${color}`,
-                            }}
-                          />
-                        </button>
-                      );
-                    })}
+                      {/* 3. PLAYHEAD (Top Layer) */}
+                      <div
+                        className="timeline-playhead z-[10] shadow-md"
+                        style={{ left: `${sharedLen > 0 ? (state.sharedTime / sharedLen) * 100 : 0}%` }}
+                      />
                   </div>
-                )}
+                  {showFeedback && sharedLen > 0 && (
+                    <div className="pointer-events-none absolute inset-x-0 top-0 z-[9] h-[52px] overflow-visible">
+                      {geminiFeedback.map((move, index) => {
+                        const start = move.shared_start_sec ?? 0;
+                        const markerTime = start;
+                        const color = TIMING_LABEL_COLORS[move.micro_timing_label] ?? "#94a3b8";
+                        return (
+                          <button
+                            key={`gflag-${index}`}
+                            type="button"
+                            className="pointer-events-auto absolute z-[8] -translate-x-1/2 cursor-pointer bg-transparent p-0 border-0"
+                            title={`Move ${move.move_index}: ${move.micro_timing_label}`}
+                            style={{
+                              left: `${(markerTime / sharedLen) * 100}%`,
+                              top: "0px",
+                              height: "52px",
+                              width: "16px",
+                            }}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              seekToShared(markerTime);
+                            }}
+                          >
+                            <span
+                              className="absolute left-1/2 top-[4px] -translate-x-1/2 rounded-full"
+                              style={{
+                                width: "3px",
+                                height: "42px",
+                                backgroundColor: color,
+                                boxShadow: `0 0 0 1px rgba(255,255,255,0.95), 0 0 12px ${color}`,
+                              }}
+                            />
+                            <span
+                              className="absolute left-1/2 top-0 -translate-x-1/2 rounded-full"
+                              style={{
+                                width: "10px",
+                                height: "10px",
+                                backgroundColor: color,
+                                boxShadow: `0 0 0 2px rgba(255,255,255,0.96), 0 2px 8px ${color}`,
+                              }}
+                            />
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
                 <div className="beat-markers">
                   {state.beats.map((beat, index) => (
                     <div
