@@ -57,9 +57,10 @@ vi.mock("./GeminiFeedbackPanel", () => {
             shared_end_sec: 6,
             micro_timing_label: "early",
             confidence: "high",
+            user_relative_to_reference: "behind",
             coaching_note: "Delay the right step slightly to match the guide.",
             micro_timing_evidence: "The step starts a touch ahead of the reference.",
-            body_parts_involved: ["legs"],
+            body_parts_involved: ["right leg", "torso"],
           },
         ];
         props.onFeedbackReady?.(props.feedbackDifficulty === "beginner" ? [] : moves);
@@ -337,7 +338,9 @@ describe("FeedbackViewer", () => {
       />,
     );
 
-    expect((await screen.findAllByLabelText(/Visual cue at/i)).length).toBeGreaterThan(0);
+    const visualMarkers = await screen.findAllByLabelText(/Visual cue at/i);
+    expect(visualMarkers.length).toBeGreaterThan(0);
+    expect(visualMarkers[0]?.getAttribute("aria-label")).toMatch(/Visual cue at 0:02\.[12]/i);
     expect(await screen.findByLabelText(/Gemini cue at/i)).toBeInTheDocument();
     expect(container.querySelector(".timeline-feedback-marker.visual.moderate")).not.toBeNull();
     expect(container.querySelector(".timeline-feedback-marker.gemini.minor")).not.toBeNull();

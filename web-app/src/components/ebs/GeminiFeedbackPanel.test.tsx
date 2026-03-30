@@ -122,7 +122,8 @@ describe("GeminiFeedbackPanel", () => {
         shared_start_sec: 1.2,
         shared_end_sec: 2.0,
         confidence: "high",
-        body_parts_involved: ["legs"],
+        user_relative_to_reference: "behind",
+        body_parts_involved: ["left leg", "torso"],
       },
     ],
   };

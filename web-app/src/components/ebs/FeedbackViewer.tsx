@@ -49,7 +49,12 @@ import {
   passesVisualFeedbackDifficulty,
   type FeedbackDifficulty,
 } from "./feedbackDifficulty";
-import { buildGeminiOverlayCue, buildOverlayVisualCue, pickActiveSegmentFeedback } from "./overlayFeedbackCue";
+import {
+  buildGeminiOverlayCue,
+  buildOverlayVisualCue,
+  getVisualCueTimingWindow,
+  pickActiveSegmentFeedback,
+} from "./overlayFeedbackCue";
 import { shouldIgnoreViewerShortcutTarget } from "./keyboardShortcutTargets";
 
 type ManualViewerProps = {
@@ -1065,9 +1070,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
             difficulty: feedbackDifficulty,
           });
           if (!row) return null;
+          const cueWindow = getVisualCueTimingWindow(segment, row.featureFamily);
           return {
             id: `visual:${segmentIndex}:${phaseMoment.key}:${row.featureFamily ?? "generic"}:${row.timestamp.toFixed(3)}`,
-            time: phaseMoment.time,
+            time: cueWindow.startTime,
             kind: "visual" as const,
             seriousness: getVisualMarkerSeriousness(row.severity),
             label: "Visual cue",
@@ -1363,6 +1369,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
     ],
   );
 
+  const currentFeedbackDifficultyOption = useMemo(
+    () => FEEDBACK_DIFFICULTY_OPTIONS.find((option) => option.value === feedbackDifficulty) ?? null,
+    [feedbackDifficulty],
+  );
+
   const activeGeminiMove = useMemo(() => {
     if (!geminiFeedback.length) return null;
 
@@ -1409,6 +1420,22 @@ export function FeedbackViewer(props: EbsViewerProps) {
       yPct: Math.max(0.14, Math.min(0.86, shiftedY)),
     };
   }, [overlayGeminiCue, overlayVisualCue]);
+
+  const feedbackSupportText = useMemo(() => {
+    if (!showFeedback) return null;
+    if (!overlayVisualCue && !activeGeminiMove && activeVideoSegmentIndex >= 0) {
+      return {
+        text: "Matching closely right now.",
+        calm: true,
+      };
+    }
+    return currentFeedbackDifficultyOption
+      ? {
+          text: currentFeedbackDifficultyOption.hint,
+          calm: false,
+        }
+      : null;
+  }, [activeGeminiMove, activeVideoSegmentIndex, currentFeedbackDifficultyOption, overlayVisualCue, showFeedback]);
 
   useEffect(() => {
     const activeFeedbackCueKey = [overlayVisualCue?.id ?? "", positionedOverlayGeminiCue?.id ?? ""]
@@ -1482,7 +1509,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   </div>
                 ) : null}
                 {showFeedback ? (
-                  <div className="mode-group mode-group-compact">
+                  <div className="mode-group mode-group-compact feedback-difficulty-group">
                     <div className="mode-group-label">Difficulty</div>
                     <div className="mode-switch mode-switch-soft">
                       {FEEDBACK_DIFFICULTY_OPTIONS.map((option) => (
@@ -1501,6 +1528,14 @@ export function FeedbackViewer(props: EbsViewerProps) {
                         </button>
                       ))}
                     </div>
+                    {feedbackSupportText ? (
+                      <div
+                        className={`feedback-difficulty-hint${feedbackSupportText.calm ? " calm" : ""}`}
+                        aria-live="polite"
+                      >
+                        {feedbackSupportText.text}
+                      </div>
+                    ) : null}
                   </div>
                 ) : null}
               </div>

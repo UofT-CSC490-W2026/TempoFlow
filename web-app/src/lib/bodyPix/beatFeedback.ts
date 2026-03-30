@@ -21,6 +21,20 @@ import type {
 } from "./types";
 
 type FrameSample = SampledPoseFrame;
+const BODY_CONFIDENCE_MIN = 0.3;
+const MIN_FEATURE_FRAME_RATIO = 0.45;
+
+function hasConfidence(keypoints: Keypoint[], indices: number[]) {
+  return indices.every((index) => (keypoints[index]?.score ?? 0) >= BODY_CONFIDENCE_MIN);
+}
+
+function minFeatureSamples(frameCount: number) {
+  return Math.max(2, Math.ceil(frameCount * MIN_FEATURE_FRAME_RATIO));
+}
+
+function meanIfEnough(samples: number[], minSamples: number) {
+  return samples.length >= minSamples ? meanOfSamples(samples) : null;
+}
 
 function jointMotionBetweenFrames(prev: Keypoint[], curr: Keypoint[]): number {
   const prevA = jointAnglesDegFromKeypoints(prev);
@@ -57,78 +71,120 @@ function microTimingDeviation(refM: number[], userM: number[]): number {
 }
 
 type UpperBodyFeat = {
-  shoulderY: number;
-  elbowY: number;
-  wristY: number;
-  armOpen: number;
-  torsoRot: number;
+  shoulderY: number | null;
+  elbowY: number | null;
+  wristY: number | null;
+  armOpen: number | null;
+  torsoRot: number | null;
 };
 
-function upperBodyFeat(frames: FrameSample[]): UpperBodyFeat {
-  const rows: UpperBodyFeat[] = [];
+function upperBodyFeat(frames: FrameSample[]): UpperBodyFeat | null {
+  const minSamples = minFeatureSamples(frames.length);
+  const shoulderYs: number[] = [];
+  const elbowYs: number[] = [];
+  const wristYs: number[] = [];
+  const armOpens: number[] = [];
+  const torsoRots: number[] = [];
+
   for (const f of frames) {
-    const nk = normalizeKeypoints(f.keypoints);
+    const raw = f.keypoints;
+    const nk = normalizeKeypoints(raw);
     const ls = nk[5];
     const rs = nk[6];
-    if (ls.score < 0.2 || rs.score < 0.2) continue;
     const le = nk[7];
     const re = nk[8];
     const lw = nk[9];
     const rw = nk[10];
     const lh = nk[11];
     const rh = nk[12];
-    const shoulderY = (ls.y + rs.y) / 2;
-    const elbowY = (le.y + re.y) / 2;
-    const wristY = (lw.y + rw.y) / 2;
-    const armOpen = Math.hypot(lw.x - rw.x, lw.y - rw.y);
-    const shMid = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
-    const hipMid = { x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2 };
-    const torsoRot = Math.atan2(shMid.y - hipMid.y, shMid.x - hipMid.x);
-    rows.push({ shoulderY, elbowY, wristY, armOpen, torsoRot });
+
+    if (hasConfidence(raw, [5, 6])) {
+      shoulderYs.push((ls.y + rs.y) / 2);
+    }
+    if (hasConfidence(raw, [7, 8])) {
+      elbowYs.push((le.y + re.y) / 2);
+    }
+    if (hasConfidence(raw, [9, 10])) {
+      wristYs.push((lw.y + rw.y) / 2);
+      armOpens.push(Math.hypot(lw.x - rw.x, lw.y - rw.y));
+    }
+    if (hasConfidence(raw, [5, 6, 11, 12])) {
+      const shMid = { x: (ls.x + rs.x) / 2, y: (ls.y + rs.y) / 2 };
+      const hipMid = { x: (lh.x + rh.x) / 2, y: (lh.y + rh.y) / 2 };
+      torsoRots.push(Math.atan2(shMid.y - hipMid.y, shMid.x - hipMid.x));
+    }
   }
-  if (rows.length === 0) {
-    return { shoulderY: 0, elbowY: 0, wristY: 0, armOpen: 0, torsoRot: 0 };
-  }
-  return {
-    shoulderY: meanOfSamples(rows.map((r) => r.shoulderY)),
-    elbowY: meanOfSamples(rows.map((r) => r.elbowY)),
-    wristY: meanOfSamples(rows.map((r) => r.wristY)),
-    armOpen: meanOfSamples(rows.map((r) => r.armOpen)),
-    torsoRot: meanOfSamples(rows.map((r) => r.torsoRot)),
+
+  const feat: UpperBodyFeat = {
+    shoulderY: meanIfEnough(shoulderYs, minSamples),
+    elbowY: meanIfEnough(elbowYs, minSamples),
+    wristY: meanIfEnough(wristYs, minSamples),
+    armOpen: meanIfEnough(armOpens, minSamples),
+    torsoRot: meanIfEnough(torsoRots, minSamples),
   };
+  const available = Object.values(feat).filter((value) => value != null).length;
+  return available >= 3 ? feat : null;
 }
 
-function upperBodyDeviation(ref: UpperBodyFeat, user: UpperBodyFeat): number {
-  return Math.min(
-    1,
-    Math.abs(ref.shoulderY - user.shoulderY) * 0.85 +
-      Math.abs(ref.elbowY - user.elbowY) * 0.85 +
-      Math.abs(ref.wristY - user.wristY) * 0.85 +
-      Math.abs(ref.armOpen - user.armOpen) * 0.55 +
-      wrapAngleDiffRad(ref.torsoRot, user.torsoRot) * 0.45,
-  );
+const UPPER_BODY_TOTAL_WEIGHT = 3.55;
+
+function upperBodyDeviation(ref: UpperBodyFeat | null, user: UpperBodyFeat | null): number | null {
+  if (!ref || !user) return null;
+
+  let totalWeight = 0;
+  let weightedSum = 0;
+
+  const addLinear = (a: number | null, b: number | null, weight: number) => {
+    if (a == null || b == null) return;
+    totalWeight += weight;
+    weightedSum += Math.abs(a - b) * weight;
+  };
+
+  addLinear(ref.shoulderY, user.shoulderY, 0.85);
+  addLinear(ref.elbowY, user.elbowY, 0.85);
+  addLinear(ref.wristY, user.wristY, 0.85);
+  addLinear(ref.armOpen, user.armOpen, 0.55);
+  if (ref.torsoRot != null && user.torsoRot != null) {
+    totalWeight += 0.45;
+    weightedSum += wrapAngleDiffRad(ref.torsoRot, user.torsoRot) * 0.45;
+  }
+
+  if (totalWeight < UPPER_BODY_TOTAL_WEIGHT * 0.58) {
+    return null;
+  }
+
+  return Math.min(1, weightedSum * (UPPER_BODY_TOTAL_WEIGHT / totalWeight));
 }
 
 type LowerBodyFeat = {
-  hipShiftX: number;
-  kneeBendDeg: number;
-  stepDir: number;
-  footSpread: number;
+  hipShiftX: number | null;
+  kneeBendDeg: number | null;
+  stepDir: number | null;
+  footSpread: number | null;
 };
 
-function lowerBodyFeat(frames: FrameSample[]): LowerBodyFeat {
-  const first = normalizeKeypoints(frames[0]!.keypoints);
-  const last = normalizeKeypoints(frames[frames.length - 1]!.keypoints);
-  const hip0 = (first[11].x + first[12].x) / 2;
-  const hip1 = (last[11].x + last[12].x) / 2;
-  const hipShiftX = hip1 - hip0;
-  const a0x = (first[15].x + first[16].x) / 2;
-  const a0y = (first[15].y + first[16].y) / 2;
-  const a1x = (last[15].x + last[16].x) / 2;
-  const a1y = (last[15].y + last[16].y) / 2;
-  const stepDir = Math.atan2(a1y - a0y, a1x - a0x);
+function findBoundaryFrame(
+  frames: FrameSample[],
+  indices: number[],
+  fromEnd = false,
+): FrameSample | null {
+  const ordered = fromEnd ? [...frames].reverse() : frames;
+  return ordered.find((frame) => hasConfidence(frame.keypoints, indices)) ?? null;
+}
+
+function lowerBodyFeat(frames: FrameSample[]): LowerBodyFeat | null {
+  const minSamples = minFeatureSamples(frames.length);
+  const firstHipFrame = findBoundaryFrame(frames, [11, 12]);
+  const lastHipFrame = findBoundaryFrame(frames, [11, 12], true);
+  const firstAnkleFrame = findBoundaryFrame(frames, [15, 16]);
+  const lastAnkleFrame = findBoundaryFrame(frames, [15, 16], true);
+  const firstHip = firstHipFrame ? normalizeKeypoints(firstHipFrame.keypoints) : null;
+  const lastHip = lastHipFrame ? normalizeKeypoints(lastHipFrame.keypoints) : null;
+  const firstAnkle = firstAnkleFrame ? normalizeKeypoints(firstAnkleFrame.keypoints) : null;
+  const lastAnkle = lastAnkleFrame ? normalizeKeypoints(lastAnkleFrame.keypoints) : null;
   const bends: number[] = [];
   const spreads: number[] = [];
+
   for (const f of frames) {
     const k = f.keypoints;
     const lk = computeAngle(k[11], k[13], k[15]);
@@ -137,25 +193,61 @@ function lowerBodyFeat(frames: FrameSample[]): LowerBodyFeat {
       bends.push(Math.max(0, 180 - lk));
       bends.push(Math.max(0, 180 - rk));
     }
-    const nk = normalizeKeypoints(k);
-    spreads.push(Math.hypot(nk[15].x - nk[16].x, nk[15].y - nk[16].y));
+    if (hasConfidence(k, [15, 16])) {
+      const nk = normalizeKeypoints(k);
+      spreads.push(Math.hypot(nk[15].x - nk[16].x, nk[15].y - nk[16].y));
+    }
   }
-  return {
-    hipShiftX,
-    kneeBendDeg: bends.length ? meanOfSamples(bends) : 0,
-    stepDir,
-    footSpread: meanOfSamples(spreads),
+
+  const feat: LowerBodyFeat = {
+    hipShiftX:
+      firstHip && lastHip
+        ? (lastHip[11].x + lastHip[12].x) / 2 - (firstHip[11].x + firstHip[12].x) / 2
+        : null,
+    kneeBendDeg: meanIfEnough(bends, minSamples),
+    stepDir:
+      firstAnkle && lastAnkle
+        ? Math.atan2(
+            (lastAnkle[15].y + lastAnkle[16].y) / 2 - (firstAnkle[15].y + firstAnkle[16].y) / 2,
+            (lastAnkle[15].x + lastAnkle[16].x) / 2 - (firstAnkle[15].x + firstAnkle[16].x) / 2,
+          )
+        : null,
+    footSpread: meanIfEnough(spreads, minSamples),
   };
+  const available = Object.values(feat).filter((value) => value != null).length;
+  return available >= 2 ? feat : null;
 }
 
-function lowerBodyDeviation(ref: LowerBodyFeat, user: LowerBodyFeat): number {
-  return Math.min(
-    1,
-    Math.abs(ref.hipShiftX - user.hipShiftX) * 0.9 +
-      Math.abs(ref.kneeBendDeg - user.kneeBendDeg) / 55 +
-      wrapAngleDiffRad(ref.stepDir, user.stepDir) * 0.5 +
-      Math.abs(ref.footSpread - user.footSpread) * 0.65,
-  );
+const LOWER_BODY_TOTAL_WEIGHT = 3.05;
+
+function lowerBodyDeviation(ref: LowerBodyFeat | null, user: LowerBodyFeat | null): number | null {
+  if (!ref || !user) return null;
+
+  let totalWeight = 0;
+  let weightedSum = 0;
+
+  if (ref.hipShiftX != null && user.hipShiftX != null) {
+    totalWeight += 0.9;
+    weightedSum += Math.abs(ref.hipShiftX - user.hipShiftX) * 0.9;
+  }
+  if (ref.kneeBendDeg != null && user.kneeBendDeg != null) {
+    totalWeight += 1;
+    weightedSum += Math.abs(ref.kneeBendDeg - user.kneeBendDeg) / 55;
+  }
+  if (ref.stepDir != null && user.stepDir != null) {
+    totalWeight += 0.5;
+    weightedSum += wrapAngleDiffRad(ref.stepDir, user.stepDir) * 0.5;
+  }
+  if (ref.footSpread != null && user.footSpread != null) {
+    totalWeight += 0.65;
+    weightedSum += Math.abs(ref.footSpread - user.footSpread) * 0.65;
+  }
+
+  if (totalWeight < LOWER_BODY_TOTAL_WEIGHT * 0.55) {
+    return null;
+  }
+
+  return Math.min(1, weightedSum * (LOWER_BODY_TOTAL_WEIGHT / totalWeight));
 }
 
 function attackTransitionDeviation(ref: AttackFeat, user: AttackFeat): number {
@@ -202,14 +294,20 @@ export function buildFamilyFeedbackForSegment(
   }
 
   if (refSeg.length > 0 && userSeg.length > 0) {
-    families.push({
-      family: "upper_body",
-      dev: upperBodyDeviation(upperBodyFeat(refSeg), upperBodyFeat(userSeg)),
-    });
-    families.push({
-      family: "lower_body",
-      dev: lowerBodyDeviation(lowerBodyFeat(refSeg), lowerBodyFeat(userSeg)),
-    });
+    const upperDev = upperBodyDeviation(upperBodyFeat(refSeg), upperBodyFeat(userSeg));
+    const lowerDev = lowerBodyDeviation(lowerBodyFeat(refSeg), lowerBodyFeat(userSeg));
+    if (upperDev != null) {
+      families.push({
+        family: "upper_body",
+        dev: upperDev,
+      });
+    }
+    if (lowerDev != null) {
+      families.push({
+        family: "lower_body",
+        dev: lowerDev,
+      });
+    }
   }
 
   if (refM.length > 0 && userM.length > 0) {

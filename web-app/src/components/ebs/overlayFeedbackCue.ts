@@ -403,6 +403,22 @@ function getVisualCueHalfWindowSec(durationSec: number, family: FeedbackFeatureF
   }
 }
 
+export function getVisualCueTimingWindow(
+  segment: EbsSegment,
+  family: FeedbackFeatureFamily | undefined,
+) {
+  const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
+  const targetPhase = getVisualCueTargetPhase(family);
+  const targetTime = segment.shared_start_sec + duration * targetPhase;
+  const halfWindowSec = getVisualCueHalfWindowSec(duration, family);
+
+  return {
+    targetTime,
+    startTime: Math.max(segment.shared_start_sec, targetTime - halfWindowSec),
+    endTime: Math.min(segment.shared_end_sec, targetTime + halfWindowSec),
+  };
+}
+
 export function pickActiveSegmentFeedback(params: {
   feedback: DanceFeedback[];
   segment: EbsSegment | null;
@@ -447,11 +463,8 @@ export function pickActiveSegmentFeedback(params: {
 
   if (!candidate) return null;
 
-  const targetPhase = getVisualCueTargetPhase(candidate.featureFamily);
-  const targetTime = segment.shared_start_sec + duration * targetPhase;
-  const halfWindowSec = getVisualCueHalfWindowSec(duration, candidate.featureFamily);
-
-  return Math.abs(sharedTime - targetTime) <= halfWindowSec ? candidate : null;
+  const cueWindow = getVisualCueTimingWindow(segment, candidate.featureFamily);
+  return sharedTime >= cueWindow.startTime && sharedTime <= cueWindow.endTime ? candidate : null;
 }
 
 export function buildOverlayVisualCue(params: {

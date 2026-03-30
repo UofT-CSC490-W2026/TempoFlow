@@ -229,13 +229,19 @@ describe("compareWithBodyPix (integration)", () => {
       return makeSegResponse(0, { sparse: true });
     });
     const compareWithBodyPix = await importCompare();
-    await compareWithBodyPix({
+    const res = await compareWithBodyPix({
       referenceVideoUrl: "ref.mp4",
       userVideoUrl: "user.mp4",
       segments: [{ shared_start_sec: 0, shared_end_sec: 0.5 }],
       poseFps: 15,
     });
     expect(call).toBeGreaterThan(0);
+    expect(
+      res.feedback.some(
+        (feedback) =>
+          feedback.featureFamily === "upper_body" || feedback.featureFamily === "lower_body",
+      ),
+    ).toBe(false);
   });
 
   it("covers upperBodyFeat shoulder gate and lowerBody knee nulls", async () => {
@@ -380,12 +386,17 @@ describe("compareWithBodyPix (integration)", () => {
   it("hits upperBodyFeat fallback when every frame lacks confident shoulders", async () => {
     segmentPersonPartsMock.mockImplementation(() => makeSegResponse(0, { lowShoulders: true }));
     const compareWithBodyPix = await importCompare();
-    await compareWithBodyPix({
+    const res = await compareWithBodyPix({
       referenceVideoUrl: "ref.mp4",
       userVideoUrl: "user.mp4",
       segments: [{ shared_start_sec: 0, shared_end_sec: 0.4 }],
       poseFps: 10,
     });
+    expect(
+      res.feedback.some(
+        (feedback) => feedback.featureFamily === "upper_body" && feedback.severity !== "good",
+      ),
+    ).toBe(false);
   });
 
   it("hits lowerBodyFeat with no valid knee angles but valid ankle spread", async () => {

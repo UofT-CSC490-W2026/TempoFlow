@@ -244,12 +244,28 @@
   flex: 0 0 auto;
 }
 
+.feedback-difficulty-group {
+  align-items: flex-start;
+  gap: 6px;
+}
+
 .mode-group-label {
   font-size: 11px;
   font-weight: 700;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: var(--text2);
+}
+
+.feedback-difficulty-hint {
+  max-width: 280px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--text2);
+}
+
+.feedback-difficulty-hint.calm {
+  color: #15803d;
 }
 
 .mode-switch {
