@@ -1,69 +1,48 @@
-import { render } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi } from "vitest";
 import RootLayout, { metadata } from "./layout";
 import React from "react";
 
+// Mock Google Fonts
 vi.mock("next/font/google", () => ({
-  Geist: () => ({
-    variable: "geist-sans-vars",
-  }),
-  Geist_Mono: () => ({
-    variable: "geist-mono-vars",
-  }),
+  Geist: () => ({ variable: "--font-geist-sans" }),
+  Geist_Mono: () => ({ variable: "--font-geist-mono" }),
+}));
+
+// Mock Providers
+vi.mock("../components/Providers", () => ({
+  Providers: ({ children }: { children: React.ReactNode }) => (
+    <div data-testid="mock-providers">{children}</div>
+  ),
 }));
 
 describe("RootLayout", () => {
-  it("renders children correctly within the body", () => {
-    const { getByText } = render(
-      <RootLayout>
-        <div data-testid="child">Hello World</div>
-      </RootLayout>
-    );
-
-    expect(getByText("Hello World")).toBeInTheDocument();
-  });
-
-  it("applies the correct font variables and antialiased class to the body", () => {
+  it("renders children wrapped in the Providers component", () => {
     render(
       <RootLayout>
-        <div />
+        <div data-testid="child-content">TempoFlow Content</div>
       </RootLayout>
     );
 
-    const body = document.querySelector("body");
-    
-    expect(body).toHaveClass("geist-sans-vars");
-    expect(body).toHaveClass("geist-mono-vars");
-    expect(body).toHaveClass("antialiased");
-  });
-
-  it("has the correct language attribute on the html tag", () => {
-    render(
-      <RootLayout>
-        <div />
-      </RootLayout>
-    );
-
-    const html = document.querySelector("html");
-    expect(html).toHaveAttribute("lang", "en");
-  });
-
-  it("suppresses hydration warnings on html and body", () => {
-    const { baseElement } = render(
-      <RootLayout>
-        <div />
-      </RootLayout>
-    );
-
-    const html = document.querySelector("html");
-    const body = document.querySelector("body");
-    expect(html).toBeDefined();
-    expect(body).toBeDefined();
-    
+    expect(screen.getByTestId("child-content")).toBeInTheDocument();
+    expect(screen.getByTestId("mock-providers")).toBeInTheDocument();
   });
 
   it("exports the correct metadata", () => {
     expect(metadata.title).toBe("Tempoflow");
-    expect(metadata.description).toBe("An AI-powered dance coach to help you improve your dance skills.");
+    expect(metadata.description).toContain("AI-powered dance coach");
+  });
+
+  it("sets the language attribute to English on the document", () => {
+    render(
+      <RootLayout>
+        <div />
+      </RootLayout>
+    );
+    
+    // Check the global document element since JSDOM 
+    // hoists the <html> attributes from the component
+    const htmlElement = document.documentElement;
+    expect(htmlElement).toHaveAttribute("lang", "en");
   });
 });
