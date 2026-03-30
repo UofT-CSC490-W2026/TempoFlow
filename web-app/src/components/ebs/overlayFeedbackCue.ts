@@ -378,6 +378,31 @@ function choosePositionFeedback(feedback: DanceFeedback[]) {
   );
 }
 
+function getVisualCueTargetPhase(family: FeedbackFeatureFamily | undefined) {
+  switch (family) {
+    case "micro_timing":
+      return 0.14;
+    case "attack_transition":
+      return 0.86;
+    case "upper_body":
+    case "lower_body":
+    default:
+      return 0.5;
+  }
+}
+
+function getVisualCueHalfWindowSec(durationSec: number, family: FeedbackFeatureFamily | undefined) {
+  switch (family) {
+    case "micro_timing":
+    case "attack_transition":
+      return clamp(durationSec * 0.05, 0.18, 0.35);
+    case "upper_body":
+    case "lower_body":
+    default:
+      return clamp(durationSec * 0.07, 0.22, 0.45);
+  }
+}
+
 export function pickActiveSegmentFeedback(params: {
   feedback: DanceFeedback[];
   segment: EbsSegment | null;
@@ -413,13 +438,20 @@ export function pickActiveSegmentFeedback(params: {
   const transition = byFamily.get("attack_transition") ?? null;
   const strongest = chooseStrongest(relevant);
 
-  if (phase < 0.28) {
-    return micro ?? position ?? transition ?? strongest;
-  }
-  if (phase < 0.72) {
-    return position ?? micro ?? transition ?? strongest;
-  }
-  return transition ?? position ?? micro ?? strongest;
+  const candidate =
+    phase < 0.28
+      ? (micro ?? position ?? transition ?? strongest)
+      : phase < 0.72
+        ? (position ?? micro ?? transition ?? strongest)
+        : (transition ?? position ?? micro ?? strongest);
+
+  if (!candidate) return null;
+
+  const targetPhase = getVisualCueTargetPhase(candidate.featureFamily);
+  const targetTime = segment.shared_start_sec + duration * targetPhase;
+  const halfWindowSec = getVisualCueHalfWindowSec(duration, candidate.featureFamily);
+
+  return Math.abs(sharedTime - targetTime) <= halfWindowSec ? candidate : null;
 }
 
 export function buildOverlayVisualCue(params: {

@@ -114,9 +114,9 @@ vi.mock("../../lib/visualFeedbackStorage", () => ({
 
 describe("FeedbackViewer", () => {
   const mockState = {
-    sharedTime: 10,
-    refTime: 10,
-    userTime: 10,
+    sharedTime: 4.5,
+    refTime: 4.5,
+    userTime: 4.5,
     isPlaying: false,
     mainPlaybackRate: 1,
     segments: [
@@ -337,7 +337,7 @@ describe("FeedbackViewer", () => {
       />,
     );
 
-    expect(await screen.findByLabelText(/Visual cue at/i)).toBeInTheDocument();
+    expect((await screen.findAllByLabelText(/Visual cue at/i)).length).toBeGreaterThan(0);
     expect(await screen.findByLabelText(/Gemini cue at/i)).toBeInTheDocument();
     expect(container.querySelector(".timeline-feedback-marker.visual.moderate")).not.toBeNull();
     expect(container.querySelector(".timeline-feedback-marker.gemini.minor")).not.toBeNull();
@@ -355,7 +355,7 @@ describe("FeedbackViewer", () => {
     );
 
     fireEvent.click(await screen.findByLabelText(/Gemini cue at/i));
-    expect(mockActions.seekToShared).toHaveBeenCalledWith(5);
+    expect(mockActions.seekToShared).toHaveBeenCalledWith(4);
   });
 
   it("switches to practice mode when requested", () => {
@@ -366,6 +366,16 @@ describe("FeedbackViewer", () => {
   });
 
   it("shows local visual feedback on the overlay video", async () => {
+    (useEbsViewer as any).mockReturnValue({
+      state: {
+        ...mockState,
+        sharedTime: 2.5,
+        refTime: 2.5,
+        userTime: 2.5,
+      },
+      ...mockActions,
+    });
+
     render(
       <FeedbackViewer
         mode="session"
@@ -383,6 +393,16 @@ describe("FeedbackViewer", () => {
   });
 
   it("shows local visual feedback on the user clip in split view", async () => {
+    (useEbsViewer as any).mockReturnValue({
+      state: {
+        ...mockState,
+        sharedTime: 2.5,
+        refTime: 2.5,
+        userTime: 2.5,
+      },
+      ...mockActions,
+    });
+
     render(
       <FeedbackViewer
         mode="session"

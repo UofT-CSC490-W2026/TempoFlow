@@ -1047,27 +1047,47 @@ export function FeedbackViewer(props: EbsViewerProps) {
   }, [feedbackBySegment, state.segments]);
 
   const timelineFeedbackMarkers = useMemo<TimelineFeedbackMarker[]>(() => {
-    const visualMarkers = visualFeedbackRows
-      .filter((row) => (row.severity ?? "good") !== "good")
-      .filter((row) => passesVisualFeedbackDifficulty(row, feedbackDifficulty))
-      .map<TimelineFeedbackMarker>((row) => ({
-        id: `visual:${row.segmentIndex}:${row.featureFamily ?? "generic"}:${row.timestamp.toFixed(3)}`,
-        time: row.timestamp,
-        kind: "visual",
-        seriousness: getVisualMarkerSeriousness(row.severity),
-        label: "Visual cue",
-        title: row.message,
-      }));
+    const visualMarkers = state.segments.flatMap<TimelineFeedbackMarker>((segment, segmentIndex) => {
+      const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
+      const phaseMoments = [
+        { key: "early", time: segment.shared_start_sec + duration * 0.14 },
+        { key: "middle", time: segment.shared_start_sec + duration * 0.5 },
+        { key: "late", time: segment.shared_start_sec + duration * 0.86 },
+      ] as const;
+
+      return phaseMoments
+        .map((phaseMoment) => {
+          const row = pickActiveSegmentFeedback({
+            feedback: visualFeedbackRows,
+            segment,
+            segmentIndex,
+            sharedTime: phaseMoment.time,
+            difficulty: feedbackDifficulty,
+          });
+          if (!row) return null;
+          return {
+            id: `visual:${segmentIndex}:${phaseMoment.key}:${row.featureFamily ?? "generic"}:${row.timestamp.toFixed(3)}`,
+            time: phaseMoment.time,
+            kind: "visual" as const,
+            seriousness: getVisualMarkerSeriousness(row.severity),
+            label: "Visual cue",
+            title: row.message,
+          } satisfies TimelineFeedbackMarker;
+        })
+        .filter((marker): marker is TimelineFeedbackMarker => marker != null)
+        .filter((marker, index, markers) => {
+          const previous = markers[index - 1];
+          return !previous || previous.title !== marker.title || Math.abs(previous.time - marker.time) > 0.08;
+        });
+    });
 
     const geminiMarkers = geminiFeedback
       .filter((move) => passesGeminiFeedbackDifficulty(move, feedbackDifficulty))
       .map<TimelineFeedbackMarker>((move) => {
         const start = move.shared_start_sec ?? 0;
-        const end = move.shared_end_sec ?? start;
-        const mid = start + Math.max(0, end - start) / 2;
         return {
           id: `gemini:${move.segmentIndex}:${move.move_index}:${move.micro_timing_label ?? "cue"}`,
-          time: mid,
+          time: start,
           kind: "gemini",
           seriousness: getGeminiMarkerSeriousness(move.micro_timing_label),
           label: "Gemini cue",
@@ -1081,7 +1101,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
         const previous = markers[index - 1];
         return !previous || previous.id !== marker.id;
       });
-  }, [feedbackDifficulty, geminiFeedback, visualFeedbackRows]);
+  }, [feedbackDifficulty, geminiFeedback, state.segments, visualFeedbackRows]);
 
   const mapArtifactToOverlayTimeline = useCallback(
     (
@@ -1346,18 +1366,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const activeGeminiMove = useMemo(() => {
     if (!geminiFeedback.length) return null;
 
-    const active = geminiFeedback.find((move) => {
+    return geminiFeedback.find((move) => {
       const start = move.shared_start_sec ?? 0;
       const end = move.shared_end_sec ?? start;
       return state.sharedTime >= start && state.sharedTime < end;
     });
-    if (active) return active;
-
-    return geminiFeedback.reduce<GeminiFlatMove | null>((best, move) => {
-      const mid = ((move.shared_start_sec ?? 0) + (move.shared_end_sec ?? 0)) / 2;
-      const bestMid = best ? ((best.shared_start_sec ?? 0) + (best.shared_end_sec ?? 0)) / 2 : Infinity;
-      return !best || Math.abs(mid - state.sharedTime) < Math.abs(bestMid - state.sharedTime) ? move : best;
-    }, null);
   }, [geminiFeedback, state.sharedTime]);
 
   const overlayGeminiCue = useMemo(
