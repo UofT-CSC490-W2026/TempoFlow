@@ -1137,7 +1137,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
                 normalization: normalizationMeta,
                 segSummary: referenceResult.segResult.summary ?? null,
                 poseSummary: referenceResult.poseResult?.summary ?? null,
-                poseFrames: referenceResult.poseResult?.poseFrames ?? [],
+                poseFrames:
+                  referenceResult.poseResult && "poseFrames" in referenceResult.poseResult
+                    ? referenceResult.poseResult.poseFrames ?? []
+                    : [],
               },
             }),
           ),
@@ -1199,7 +1202,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
                 layer: "seg",
                 segSummary: practiceResult.segResult.summary ?? null,
                 poseSummary: practiceResult.poseResult?.summary ?? null,
-                poseFrames: practiceResult.poseResult?.poseFrames ?? [],
+                poseFrames:
+                  practiceResult.poseResult && "poseFrames" in practiceResult.poseResult
+                    ? practiceResult.poseResult.poseFrames ?? []
+                    : [],
               },
             }),
           ),

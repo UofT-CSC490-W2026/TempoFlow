@@ -66,6 +66,7 @@ import {
   buildOverlayVisualCue,
   getVisualCueTimingWindow,
   pickActiveSegmentFeedback,
+  type OverlayVisualCue,
 } from "./overlayFeedbackCue";
 import { shouldIgnoreViewerShortcutTarget } from "./keyboardShortcutTargets";
 import { getSession, updateSession } from "../../lib/sessionStorage";
@@ -1571,66 +1572,68 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const timelineFeedbackMarkers = useMemo<TimelineFeedbackMarker[]>(() => {
     const visualMarkers = !showAngleFeedback
       ? []
-      : state.segments.flatMap<TimelineFeedbackMarker>((segment, segmentIndex) => {
-      if (feedbackDifficulty === "advanced") {
-        const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
-        const halfWindowSec = Math.min(0.28, Math.max(0.12, duration * 0.04));
+      : state.segments.flatMap((segment, segmentIndex): TimelineFeedbackMarker[] => {
+          if (feedbackDifficulty === "advanced") {
+            const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
+            const halfWindowSec = Math.min(0.28, Math.max(0.12, duration * 0.04));
 
-        return visualFeedbackRows
-          .filter(
-            (row) =>
-              row.segmentIndex === segmentIndex && passesVisualFeedbackDifficulty(row, feedbackDifficulty),
-          )
-          .map((row) => ({
-            id: `visual:${segmentIndex}:${row.featureFamily ?? "generic"}:${row.jointName ?? "generic"}:${row.timestamp.toFixed(3)}`,
-            segmentIndex,
-            time: Math.max(segment.shared_start_sec, row.timestamp - halfWindowSec),
-            kind: "visual" as const,
-            seriousness: getVisualMarkerSeriousness(row.severity),
-            label: "Visual cue",
-            title: row.message,
-          }))
-          .filter((marker, index, markers) => {
-            const previous = markers[index - 1];
-            return !previous || previous.title !== marker.title || Math.abs(previous.time - marker.time) > 0.08;
-          });
-      }
+            return visualFeedbackRows
+              .filter(
+                (row) =>
+                  row.segmentIndex === segmentIndex && passesVisualFeedbackDifficulty(row, feedbackDifficulty),
+              )
+              .map((row) => ({
+                id: `visual:${segmentIndex}:${row.featureFamily ?? "generic"}:${row.jointName ?? "generic"}:${row.timestamp.toFixed(3)}`,
+                segmentIndex,
+                time: Math.max(segment.shared_start_sec, row.timestamp - halfWindowSec),
+                kind: "visual" as const,
+                seriousness: getVisualMarkerSeriousness(row.severity),
+                label: "Visual cue",
+                title: row.message,
+              }))
+              .filter((marker, index, markers) => {
+                const previous = markers[index - 1];
+                return !previous || previous.title !== marker.title || Math.abs(previous.time - marker.time) > 0.08;
+              });
+          }
 
-      const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
-      const phaseMoments = [
-        { key: "early", time: segment.shared_start_sec + duration * 0.14 },
-        { key: "middle", time: segment.shared_start_sec + duration * 0.5 },
-        { key: "late", time: segment.shared_start_sec + duration * 0.86 },
-      ] as const;
+          const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
+          const phaseMoments = [
+            { key: "early", time: segment.shared_start_sec + duration * 0.14 },
+            { key: "middle", time: segment.shared_start_sec + duration * 0.5 },
+            { key: "late", time: segment.shared_start_sec + duration * 0.86 },
+          ] as const;
 
-      return phaseMoments
-        .map((phaseMoment) => {
-          const row = pickActiveSegmentFeedback({
-            feedback: visualFeedbackRows,
-            segment,
-            segmentIndex,
-            sharedTime: phaseMoment.time,
-            difficulty: feedbackDifficulty,
-          });
-          if (!row) return null;
-          const cueWindow = getVisualCueTimingWindow(segment, row.featureFamily);
-          return {
-            id: `visual:${segmentIndex}:${phaseMoment.key}:${row.featureFamily ?? "generic"}:${row.jointName ?? "generic"}:${row.timestamp.toFixed(3)}`,
-            segmentIndex,
-            time: cueWindow.startTime,
-            kind: "visual" as const,
-            seriousness: getVisualMarkerSeriousness(row.severity),
-            label: "Visual cue",
-            title: row.message,
-          } satisfies TimelineFeedbackMarker;
-        })
-        .filter((marker): marker is TimelineFeedbackMarker => marker != null)
-        .filter((marker, index, markers) => {
-          const previous = markers[index - 1];
-          return !previous || previous.title !== marker.title || Math.abs(previous.time - marker.time) > 0.08;
-        })
-        .filter((marker, index) => feedbackDifficulty !== "beginner" || index < 2);
-      });
+          const markers = phaseMoments.reduce<TimelineFeedbackMarker[]>((acc, phaseMoment) => {
+            const row = pickActiveSegmentFeedback({
+              feedback: visualFeedbackRows,
+              segment,
+              segmentIndex,
+              sharedTime: phaseMoment.time,
+              difficulty: feedbackDifficulty,
+            });
+            if (!row) return acc;
+
+            const cueWindow = getVisualCueTimingWindow(segment, row.featureFamily);
+            acc.push({
+              id: `visual:${segmentIndex}:${phaseMoment.key}:${row.featureFamily ?? "generic"}:${row.jointName ?? "generic"}:${row.timestamp.toFixed(3)}`,
+              segmentIndex,
+              time: cueWindow.startTime,
+              kind: "visual",
+              seriousness: getVisualMarkerSeriousness(row.severity),
+              label: "Visual cue",
+              title: row.message,
+            });
+            return acc;
+          }, []);
+
+          return markers
+            .filter((marker, index, markers) => {
+              const previous = markers[index - 1];
+              return !previous || previous.title !== marker.title || Math.abs(previous.time - marker.time) > 0.08;
+            })
+            .filter((marker, index) => feedbackDifficulty !== "beginner" || index < 2);
+        });
 
     const geminiMarkers = !showMicroTimingFeedback
       ? []
@@ -2192,11 +2195,13 @@ export function FeedbackViewer(props: EbsViewerProps) {
     if (!showMicroTimingFeedback) return null;
     if (!filteredGeminiFeedback.length) return null;
 
-    return filteredGeminiFeedback.find((move) => {
-      const start = move.shared_start_sec ?? 0;
-      const end = move.shared_end_sec ?? start;
-      return state.sharedTime >= start && state.sharedTime < end;
-    });
+    return (
+      filteredGeminiFeedback.find((move) => {
+        const start = move.shared_start_sec ?? 0;
+        const end = move.shared_end_sec ?? start;
+        return state.sharedTime >= start && state.sharedTime < end;
+      }) ?? null
+    );
   }, [filteredGeminiFeedback, showMicroTimingFeedback, state.sharedTime]);
 
   const overlayGeminiCue = useMemo(
@@ -2221,7 +2226,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
       return overlayGeminiCue;
     }
 
-    const nextVerticalAlign = overlayVisualCue.verticalAlign === "above" ? "below" : "above";
+    const nextVerticalAlign: OverlayVisualCue["verticalAlign"] =
+      overlayVisualCue.verticalAlign === "above" ? "below" : "above";
     const yDelta = nextVerticalAlign === "below" ? 0.34 : -0.34;
     const shiftedY =
       nextVerticalAlign === "below"
