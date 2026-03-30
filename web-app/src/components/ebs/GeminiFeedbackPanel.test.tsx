@@ -178,7 +178,7 @@ describe("GeminiFeedbackPanel", () => {
       />,
     );
 
-    expect(screen.getByText(/Waiting for YOLO \/ Gemini/i)).toBeInTheDocument();
+    expect(screen.getByText(/Waiting for motion feedback/i)).toBeInTheDocument();
   });
 
   it("calls onSeek when a move card is clicked", async () => {

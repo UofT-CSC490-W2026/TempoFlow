@@ -41,7 +41,7 @@ const TIMING_BADGES: Record<
   late: { label: "Late", color: "text-amber-700", bg: "bg-amber-50", dot: "bg-amber-400" },
   rushed: { label: "Rushed", color: "text-orange-700", bg: "bg-orange-50", dot: "bg-orange-400" },
   dragged: { label: "Dragged", color: "text-orange-700", bg: "bg-orange-50", dot: "bg-orange-400" },
-  mixed: { label: "Mixed", color: "text-violet-700", bg: "bg-violet-50", dot: "bg-violet-400" },
+  mixed: { label: "Mixed", color: "text-sky-700", bg: "bg-sky-50", dot: "bg-sky-400" },
   uncertain: { label: "Uncertain", color: "text-slate-500", bg: "bg-slate-100", dot: "bg-slate-400" },
 };
 
@@ -527,13 +527,11 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
     filterLabel === "all"
       ? `All moves (${flatMoves.length})`
       : `${TIMING_BADGES[filterLabel]?.label ?? filterLabel} (${labelCounts[filterLabel] ?? 0})`;
-  const moveCountLabel = filtered.length > 0 ? `Move ${currentMoveIndex + 1}` : "No move";
-
   return (
-    <div className="rounded-[24px] border border-indigo-100 bg-white shadow-sm overflow-hidden">
+    <div className="overflow-hidden rounded-[24px] border border-sky-100 bg-white shadow-sm">
       {/* Progress */}
       {running && (
-        <div className="px-5 py-3 bg-indigo-50/60 border-b border-indigo-100">
+        <div className="border-b border-sky-100 bg-sky-50/70 px-4 py-2.5">
           <div className="flex items-center justify-between text-xs text-slate-600 mb-1.5">
             <span>
               {segmentsDone < segmentsTotal
@@ -542,9 +540,9 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
             </span>
             <span>{progressPercent}%</span>
           </div>
-          <div className="h-1.5 rounded-full bg-indigo-100 overflow-hidden">
+          <div className="h-1.5 overflow-hidden rounded-full bg-sky-100">
             <div
-              className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-500 transition-all duration-300"
+              className="h-full rounded-full bg-gradient-to-r from-sky-400 to-blue-600 transition-all duration-300"
               style={{ width: `${progressPercent}%` }}
             />
           </div>
@@ -561,21 +559,13 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
       {/* Results */}
       {flatMoves.length > 0 && (
         <>
-          <div className="px-5 py-3 border-b border-sky-100 bg-gradient-to-r from-sky-50/80 via-white to-cyan-50/70">
-            <div className="flex items-center justify-between gap-3">
-              <div className="min-w-0">
-                <div className="text-[11px] font-semibold uppercase tracking-[0.2em] text-sky-600/70">
-                  Feedback
-                </div>
-                <div className="text-sm font-medium text-slate-700 truncate">
-                  {moveCountLabel}
-                </div>
-              </div>
+          <div className="border-b border-sky-100 bg-gradient-to-r from-sky-50/90 via-white to-blue-50/70 px-4 py-2.5">
+            <div className="flex items-center justify-end gap-3">
               <div className="relative">
                 <button
                   type="button"
                   onClick={() => setFilterMenuOpen((open) => !open)}
-                  className="rounded-full border border-sky-100 bg-white/90 px-3 py-1.5 text-[11px] font-medium text-slate-600 shadow-sm transition-colors hover:bg-sky-50"
+                  className="rounded-full border border-sky-200 bg-white px-3 py-1.5 text-[11px] font-semibold text-slate-700 shadow-sm transition-colors hover:bg-sky-50"
                 >
                   {activeFilterBadge}
                 </button>
@@ -591,8 +581,8 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
                         }}
                         className={`flex w-full items-center justify-between rounded-xl px-3 py-2 text-left text-[11px] font-medium transition-colors ${
                           filterLabel === lbl
-                            ? "bg-slate-900 text-white"
-                            : "text-slate-600 hover:bg-slate-50"
+                            ? "bg-gradient-to-r from-sky-500 to-blue-600 text-white"
+                            : "text-slate-600 hover:bg-sky-50"
                         }`}
                       >
                         <span>{lbl === "all" ? "All moves" : (TIMING_BADGES[lbl]?.label ?? lbl)}</span>
@@ -608,7 +598,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
           </div>
 
           {/* Move list - single item view with navigation */}
-          <div className="border-t border-indigo-50">
+          <div>
             {filtered.length > 0 && (
               <>
                 {/* Single move display - clickable card */}
@@ -621,10 +611,9 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
                   return (
                     <div 
                       onClick={() => onSeek(m.shared_start_sec ?? mid)}
-                      className="px-5 py-4 cursor-pointer hover:bg-sky-50/40 transition-colors"
+                      className="cursor-pointer px-4 py-3.5 transition-colors hover:bg-sky-50/40"
                     >
-                      {/* Header row */}
-                      <div className="flex items-center gap-2 mb-2.5">
+                      <div className="mb-2 flex items-center gap-2">
                         <div className={`w-2.5 h-2.5 rounded-full ${badge.dot}`} />
                         <span className="text-sm font-semibold text-slate-800">
                           Move {m.move_index}
@@ -646,33 +635,28 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
                         </span>
                       </div>
 
-                      <p className="text-[11px] text-slate-500 mb-2">
-                        {TIMING_LABEL_FRIENDLY[m.micro_timing_label] ?? "Timing note"}
-                      </p>
-
-                      {/* Evidence */}
                       {m.micro_timing_evidence && (
-                        <p className="text-sm text-slate-700 mb-2.5 leading-relaxed">
+                        <p className="mb-2 text-sm leading-relaxed text-slate-700">
                           {m.micro_timing_evidence}
                         </p>
                       )}
 
-                      {/* Meta info row */}
-                      <div className="flex items-center gap-3 text-[11px] text-slate-400 mb-2.5">
+                      <div className="mb-2 flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                        <span>{TIMING_LABEL_FRIENDLY[m.micro_timing_label] ?? "Timing note"}</span>
                         {m.user_relative_to_reference && <span>vs ref: {m.user_relative_to_reference}</span>}
                         {m.confidence && <span>{m.confidence} confidence</span>}
                       </div>
 
                       {/* Guardrail note */}
                       {m.guardrail_note && (
-                        <p className="text-xs text-amber-800 bg-amber-50/80 rounded-lg px-3 py-2 mb-2.5">
+                        <p className="mb-2 rounded-lg bg-amber-50/80 px-3 py-2 text-xs text-amber-800">
                           {m.guardrail_note}
                         </p>
                       )}
 
                       {/* Coaching note */}
                       {m.coaching_note && (
-                        <div className="rounded-xl border border-sky-100 bg-sky-50/70 px-3 py-3">
+                        <div className="rounded-xl border border-sky-100 bg-gradient-to-r from-sky-50 to-blue-50 px-3 py-2.5">
                           <p className="text-sm text-sky-900 leading-relaxed font-medium">
                             {m.coaching_note}
                           </p>
@@ -710,8 +694,8 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
       {/* Empty state */}
       {!running && flatMoves.length === 0 && !error && (
         <div className="px-5 py-8 text-center">
-          <div className="w-14 h-14 mx-auto mb-3 rounded-2xl bg-indigo-50 flex items-center justify-center">
-            <svg className="w-7 h-7 text-indigo-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <div className="mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-sky-50">
+            <svg className="h-7 w-7 text-sky-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path
                 strokeLinecap="round"
                 strokeLinejoin="round"
@@ -720,7 +704,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
               />
             </svg>
           </div>
-          <p className="text-sm font-medium text-slate-700">Waiting for YOLO / Gemini</p>
+          <p className="text-sm font-medium text-slate-700">Waiting for motion feedback</p>
           <p className="text-xs text-slate-500 mt-1 max-w-xs mx-auto">
             Feedback starts automatically when each segment&apos;s YOLO segment data is ready. Gemini runs one segment at
             a time on the server and receives the segment videos plus YOLO pose and segmentation summaries as context.
