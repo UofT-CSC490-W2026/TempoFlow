@@ -14,12 +14,18 @@ Requirements:
 
 import argparse
 import ast
+import csv
 import numpy as np
-import pandas as pd
 import matplotlib
 import matplotlib.pyplot as plt
 import matplotlib.patches as mpatches
 from matplotlib.ticker import MultipleLocator
+from typing import Any
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    pd = None
 
 # ── Inline data (matches your CSV exactly) ───────────────────────────────────
 
@@ -59,6 +65,48 @@ MODEL_COLORS_LIGHT = [
 ]
 
 
+class _MiniSeries(list):
+    @property
+    def iloc(self) -> "_MiniSeries":
+        return self
+
+
+class _MiniTable:
+    def __init__(self, rows: list[dict[str, Any]], columns: list[str]):
+        self._rows = rows
+        self.columns = columns
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    def __getitem__(self, key: str) -> _MiniSeries:
+        return _MiniSeries(row.get(key) for row in self._rows)
+
+    def iterrows(self):
+        for idx, row in enumerate(self._rows):
+            yield idx, row
+
+
+def _inline_rows() -> list[dict[str, Any]]:
+    return [
+        {"model": model, **{metric: INLINE_DATA[metric][idx] for metric in METRICS}}
+        for idx, model in enumerate(INLINE_DATA["model"])
+    ]
+
+
+def _load_csv_without_pandas(csv_path: str) -> _MiniTable:
+    with open(csv_path, newline="", encoding="utf-8") as handle:
+        reader = csv.DictReader(handle)
+        columns = [str(col).strip() for col in (reader.fieldnames or [])]
+        rows: list[dict[str, Any]] = []
+        for raw_row in reader:
+            row = {str(key).strip(): value for key, value in raw_row.items() if key is not None}
+            if "model" in row and isinstance(row["model"], str):
+                row["model"] = row["model"].strip()
+            rows.append(row)
+    return _MiniTable(rows, columns)
+
+
 # ── Stats helpers ─────────────────────────────────────────────────────────────
 
 def parse_scores(cell: str) -> np.ndarray:
@@ -80,17 +128,20 @@ def mean_sem(arr: np.ndarray) -> tuple[float, float]:
 
 # ── Data loading ──────────────────────────────────────────────────────────────
 
-def load_data(csv_path: str | None) -> pd.DataFrame:
+def load_data(csv_path: str | None):
     if csv_path:
-        df = pd.read_csv(csv_path)
-        df.columns = [c.strip() for c in df.columns]
-        df["model"] = df["model"].str.strip()
-    else:
-        df = pd.DataFrame(INLINE_DATA)
-    return df
+        if pd is not None:
+            df = pd.read_csv(csv_path)
+            df.columns = [c.strip() for c in df.columns]
+            df["model"] = df["model"].str.strip()
+            return df
+        return _load_csv_without_pandas(csv_path)
+    if pd is not None:
+        return pd.DataFrame(INLINE_DATA)
+    return _MiniTable(_inline_rows(), ["model", *METRICS])
 
 
-def compute_stats(df: pd.DataFrame) -> dict:
+def compute_stats(df) -> dict:
     """
     Returns { model: { metric: (mean, sem) } }
     """

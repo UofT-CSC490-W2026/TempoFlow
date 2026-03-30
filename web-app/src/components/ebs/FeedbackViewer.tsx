@@ -1763,7 +1763,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
     const activeProgress = overlayDetector === "yolo" ? yoloSegmentProgress : bodyPixSegmentProgress;
     const isCurrentInFlight = activeProgress?.segmentIndex === activeVideoSegmentIndex;
-    const progress = isCurrentInFlight ? Math.max(0, Math.min(1, activeProgress?.progress ?? 0)) : null;
+    const rawProgress = isCurrentInFlight ? Math.max(0, Math.min(1, activeProgress?.progress ?? 0)) : null;
+    const progress = rawProgress != null && rawProgress > 0.02 ? rawProgress : null;
 
     return {
       progress,

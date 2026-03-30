@@ -9,6 +9,7 @@ numpy
 soundfile
 scipy
 matplotlib
+pandas
 httpx
 certifi
 tqdm
