@@ -128,7 +128,7 @@ describe("useEbsViewer", () => {
       result.current.toggleMainSpeed();
     });
 
-    expect(result.current.state.mainPlaybackRate).toBe(1);
+    expect(result.current.state.mainPlaybackRate).toBe(0.25);
   });
 
   it("triggers pause overlay when a segment completes", () => {

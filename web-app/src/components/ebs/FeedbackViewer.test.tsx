@@ -118,6 +118,7 @@ describe("FeedbackViewer", () => {
     toggleMainSpeed: vi.fn(),
     openPracticeMode: vi.fn(),
     closePracticeMode: vi.fn(),
+    replayCurrentMove: vi.fn(),
     hidePauseOverlay: vi.fn(),
   };
 
@@ -152,8 +153,8 @@ describe("FeedbackViewer", () => {
     await waitFor(() => {
       expect(screen.getByTestId("gemini-panel")).toBeInTheDocument();
     });
-    expect(screen.getByTitle(/Use BodyPix overlays/i)).toBeInTheDocument();
-    expect(screen.getByTitle(/Use YOLO hybrid overlays/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Side-by-side view/i)).toBeInTheDocument();
+    expect(screen.getByTitle(/Overlay view/i)).toBeInTheDocument();
   });
 
   it("toggles playback when the play button is clicked", () => {
@@ -165,14 +166,14 @@ describe("FeedbackViewer", () => {
 
   it("calls seekToNextSegment when the next button is clicked", () => {
     render(<FeedbackViewer mode="session" sessionId="1" referenceVideoUrl="r" userVideoUrl="u" ebsData={{} as any} />);
-    const nextBtn = screen.getByTitle(/Next segment/i);
+    const nextBtn = screen.getByTitle(/Next section/i);
     fireEvent.click(nextBtn);
     expect(mockActions.seekToNextSegment).toHaveBeenCalled();
   });
 
   it("updates the 'Pause at segment end' setting", () => {
     render(<FeedbackViewer mode="session" sessionId="1" referenceVideoUrl="r" userVideoUrl="u" ebsData={{} as any} />);
-    const checkbox = screen.getByLabelText(/Pause at segment end/i);
+    const checkbox = screen.getByLabelText(/Pause at section end/i);
     fireEvent.click(checkbox);
     expect(mockActions.setPauseAtSegmentEnd).toHaveBeenCalledWith(true);
   });
@@ -181,6 +182,29 @@ describe("FeedbackViewer", () => {
     render(<FeedbackViewer mode="session" sessionId="1" referenceVideoUrl="r" userVideoUrl="u" ebsData={{} as any} />);
     fireEvent.keyDown(window, { code: "Space" });
     expect(mockActions.togglePlay).toHaveBeenCalled();
+  });
+
+  it("replays the current move with Space during practice mode", () => {
+    (useEbsViewer as any).mockReturnValue({
+      state: {
+        ...mockState,
+        practice: {
+          ...mockState.practice,
+          enabled: true,
+          currentMoveIndex: 1,
+          moves: [
+            { idx: 0, num: 1, startSec: 0, endSec: 1, isTransition: false },
+            { idx: 1, num: 2, startSec: 1, endSec: 2, isTransition: false },
+          ],
+        },
+      },
+      ...mockActions,
+    });
+
+    render(<FeedbackViewer mode="session" sessionId="1" referenceVideoUrl="r" userVideoUrl="u" ebsData={{} as any} />);
+    fireEvent.keyDown(window, { code: "Space" });
+    expect(mockActions.replayCurrentMove).toHaveBeenCalled();
+    expect(mockActions.togglePlay).not.toHaveBeenCalled();
   });
 
   it("shows Gemini feedback panel in session mode", () => {
@@ -215,7 +239,7 @@ describe("FeedbackViewer", () => {
 
   it("switches to practice mode when requested", () => {
     render(<FeedbackViewer mode="session" sessionId="1" referenceVideoUrl="r" userVideoUrl="u" ebsData={{} as any} />);
-    const practiceBtn = screen.getByTitle(/Practice current segment/i);
+    const practiceBtn = screen.getByTitle(/Practice current section/i);
     fireEvent.click(practiceBtn);
     expect(mockActions.openPracticeMode).toHaveBeenCalledWith(0);
   });

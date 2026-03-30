@@ -108,7 +108,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [status, setStatus] = useState<{ message: string; type?: "error" | "success" } | null>(null);
   const [viewMode, setViewMode] = useState<"side" | "overlay">("side");
   const [overlayViewSource, setOverlayViewSource] = useState<"reference" | "user" | "both">("both");
-  const [overlayDetector, setOverlayDetector] = useState<"bodypix" | "yolo">("yolo");
+  const [overlayDetector] = useState<"bodypix" | "yolo">("yolo");
   const overlayVideoRef = useRef<HTMLVideoElement>(null);
   const [overlayCurrentTime, setOverlayCurrentTime] = useState(0);
   
@@ -123,12 +123,12 @@ export function FeedbackViewer(props: EbsViewerProps) {
     seekToNextSegment,
     togglePlay,
     pausePlayback,
-    playSegment,
     setPauseAtSegmentEnd,
     toggleMainSpeed,
     openPracticeMode,
     closePracticeMode,
     seekToMove,
+    replayCurrentMove,
     seekToPrevMove,
     seekToNextMove,
     setPracticeLoop,
@@ -559,6 +559,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
       if (event.code === "Space") {
         event.preventDefault();
+        if (state.practice.enabled) {
+          replayCurrentMove();
+          return;
+        }
         togglePlay();
         return;
       }
@@ -594,6 +598,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     closePracticeMode,
+    replayCurrentMove,
     seekToNextMove,
     seekToNextSegment,
     seekToPrevMove,
@@ -694,9 +699,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
   const practiceInfo =
     currentPracticeSegment && state.practice.moves.length
-      ? `${state.practice.moves.length} moves · ${(currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec).toFixed(1)}s segment · plays ${((currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec) / state.practice.playbackRate).toFixed(1)}s at ${practiceSpeedText}`
+      ? `${state.practice.moves.length} moves · ${(currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec).toFixed(1)}s section · plays ${((currentPracticeSegment.shared_end_sec - currentPracticeSegment.shared_start_sec) / state.practice.playbackRate).toFixed(1)}s at ${practiceSpeedText}`
       : "";
-  const activeSideOverlayDetector = overlayDetector === "yolo" ? "YOLO Hybrid" : "BodyPix";
   const activeReferenceArtifact = overlayDetector === "yolo" ? refYoloArtifact : refBodyPixArtifact;
   const activeUserArtifact = overlayDetector === "yolo" ? userYoloArtifact : userBodyPixArtifact;
   const overlaySegmentPlans = useMemo(
@@ -1088,114 +1092,62 @@ export function FeedbackViewer(props: EbsViewerProps) {
       {viewerVisible && (
         <div className="ebs-viewer visible">
           <div className="ebs-top-bar">
-          {hasSegments ? (
-            <div className="ebs-toggle flex items-center w-full">
-              <label htmlFor="chk-pause">Pause at segment end</label>
-              <input
-                id="chk-pause"
-                type="checkbox"
-                className="ebs-toggle-switch"
-                checked={state.pauseAtSegmentEnd}
-                onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
-              />
-              <div className="flex-1" />
-              {/* View mode toggle */}
-              <div className="flex items-center gap-2 mr-4">
-                <span className="text-xs text-slate-500">View:</span>
-                <button
-                  onClick={() => setViewMode("side")}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
-                    viewMode === "side"
-                      ? "bg-slate-800 text-white"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
-                  title="Side-by-side view"
-                >
-                  Side
-                </button>
-                <button
-                  onClick={() => setViewMode("overlay")}
-                  className={`px-3 py-1 text-xs font-medium rounded-lg transition-colors ${
-                    viewMode === "overlay"
-                      ? "bg-slate-800 text-white"
-                      : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                  }`}
-                  title={`Overlay diff view (uses ${activeSideOverlayDetector})`}
-                >
-                  Overlay
-                </button>
-                {sessionMode && (
-                  <>
-                    <span className="text-xs text-slate-400">|</span>
-                    <span className="text-xs text-slate-500">Dev:</span>
+            {hasSegments ? (
+              <div className="viewer-controls">
+                <div className="mode-group">
+                  <div className="mode-group-label">View</div>
+                  <div className="mode-switch">
                     <button
-                      onClick={() => setOverlayDetector("bodypix")}
-                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
-                        overlayDetector === "bodypix"
-                          ? "bg-slate-800 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
-                      title="Use BodyPix overlays"
+                      onClick={() => setViewMode("side")}
+                      className={`mode-pill ${viewMode === "side" ? "active side" : ""}`}
+                      title="Side-by-side view"
                     >
-                      BodyPix
+                      Split View
                     </button>
                     <button
-                      onClick={() => setOverlayDetector("yolo")}
-                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
-                        overlayDetector === "yolo"
-                          ? "bg-slate-800 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
-                      title="Use YOLO hybrid overlays"
+                      onClick={() => setViewMode("overlay")}
+                      className={`mode-pill ${viewMode === "overlay" ? "active overlay" : ""}`}
+                      title="Overlay view"
                     >
-                      YOLO
+                      Overlay
                     </button>
-                  </>
-                )}
-                {viewMode === "overlay" && (
-                  <>
-                    <span className="text-xs text-slate-400">|</span>
-                    <button
-                      onClick={() => setOverlayViewSource("reference")}
-                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
-                        overlayViewSource === "reference"
-                          ? "bg-blue-500 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
-                      title="Show reference overlay on user video"
-                    >
-                      Ref
-                    </button>
-                    <button
-                      onClick={() => setOverlayViewSource("user")}
-                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
-                        overlayViewSource === "user"
-                          ? "bg-blue-500 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
-                      title="Show user overlay on user video"
-                    >
-                      User
-                    </button>
-                    <button
-                      onClick={() => setOverlayViewSource("both")}
-                      className={`px-2 py-1 text-[10px] font-medium rounded transition-colors ${
-                        overlayViewSource === "both"
-                          ? "bg-blue-500 text-white"
-                          : "bg-slate-100 text-slate-600 hover:bg-slate-200"
-                      }`}
-                      title="Show both overlays"
-                    >
-                      Both
-                    </button>
-                  </>
+                  </div>
+                </div>
+                {viewMode === "overlay" ? (
+                  <div className="mode-group">
+                    <div className="mode-group-label">Overlay Focus</div>
+                    <div className="mode-switch mode-switch-soft">
+                      <button
+                        onClick={() => setOverlayViewSource("reference")}
+                        className={`mode-pill mode-pill-soft ${overlayViewSource === "reference" ? "active soft" : ""}`}
+                        title="Show reference overlay on practice video"
+                      >
+                        Reference
+                      </button>
+                      <button
+                        onClick={() => setOverlayViewSource("user")}
+                        className={`mode-pill mode-pill-soft ${overlayViewSource === "user" ? "active soft" : ""}`}
+                        title="Show practice overlay"
+                      >
+                        Practice
+                      </button>
+                      <button
+                        onClick={() => setOverlayViewSource("both")}
+                        className={`mode-pill mode-pill-soft ${overlayViewSource === "both" ? "active soft" : ""}`}
+                        title="Show both overlays"
+                      >
+                        Both
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="ebs-inline-note">Switch to Overlay to compare the synced silhouettes directly.</div>
                 )}
               </div>
-            </div>
-          ) : (
-            <div className="ebs-inline-note">Aligned videos loaded...</div>
-          )}
-        </div>
+            ) : (
+              <div className="ebs-inline-note">Aligned videos loaded...</div>
+            )}
+          </div>
           {(overlayStatus || overlayBusy) && sessionMode ? (
             <div className="mb-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-2 text-xs text-slate-700">
               <div>{overlayBusy ? `${overlayStatus ?? "Working…"}` : overlayStatus}</div>
@@ -1209,7 +1161,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
               <div className="video-panel">
                 <div className="video-label">
                   Reference ({sessionReferenceName || "Clip 1"})
-                  {sessionMode ? <span className="ml-2 text-[10px] text-slate-400">{activeSideOverlayDetector}</span> : null}
                   <span className="time-display">{fmtTimeFull(state.refTime)}</span>
                 </div>
                 <div className="relative">
@@ -1238,7 +1189,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
               <div className="video-panel">
                 <div className="video-label">
                   User ({sessionPracticeName || "Clip 2"})
-                  {sessionMode ? <span className="ml-2 text-[10px] text-slate-400">{activeSideOverlayDetector}</span> : null}
                   <span className="time-display">{fmtTimeFull(state.userTime)}</span>
                 </div>
                 <div className="relative">
@@ -1271,7 +1221,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
               <div className="video-panel" style={{ maxWidth: "100%", width: "100%" }}>
                 <div className="video-label">
                   <span>User ({sessionPracticeName || "Practice"})</span>
-                  <span className="ml-2 text-[10px] text-slate-400">{activeSideOverlayDetector}</span>
+                  <span className="ml-2 text-[10px] text-slate-400">Synced overlay</span>
                 </div>
                 <div className="relative" style={{ aspectRatio: "16/9", background: "#000" }}>
                   {/* Base: User video (synced with timeline) */}
@@ -1351,13 +1301,13 @@ export function FeedbackViewer(props: EbsViewerProps) {
             <>
               <div className="transport">
                 <div className="transport-row">
-                  <button className="transport-btn" onClick={seekToPrevSegment} title="Previous segment">
+                  <button className="transport-btn" onClick={seekToPrevSegment} title="Previous section">
                     ◀◀
                   </button>
                   <button className="transport-btn play-btn" onClick={togglePlay} title="Play / Pause">
                     {state.isPlaying ? "▮▮" : "▶"}
                   </button>
-                  <button className="transport-btn" onClick={seekToNextSegment} title="Next segment">
+                  <button className="transport-btn" onClick={seekToNextSegment} title="Next section">
                     ▶▶
                   </button>
                   <button className="transport-btn" onClick={toggleMainSpeed} title="Toggle playback speed">
@@ -1372,7 +1322,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                         openPracticeMode(0);
                       }
                     }}
-                    title="Practice current segment"
+                    title="Practice current section"
                   >
                     Practice
                   </button>
@@ -1380,10 +1330,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     <div className="current-segment">
                       {currentSegment ? (
                         <>
-                          Segment <span>{state.currentSegmentIndex}</span> / {state.segments.length - 1}
+                          Section <span>{state.currentSegmentIndex}</span> / {state.segments.length - 1}
                         </>
                       ) : (
-                        "Between segments"
+                        "Between sections"
                       )}
                     </div>
                     <div className="bpm-info">{bpmInfo}</div>
@@ -1393,6 +1343,19 @@ export function FeedbackViewer(props: EbsViewerProps) {
               </div>
 
               <div className="timeline" style={{ position: "relative", zIndex: 10 }}>
+                <div className="timeline-header">
+                  <div className="move-tl-label">Section Timeline</div>
+                  <label className="timeline-inline-toggle" htmlFor="chk-pause">
+                    <span>Pause at section end</span>
+                    <input
+                      id="chk-pause"
+                      type="checkbox"
+                      className="ebs-toggle-switch"
+                      checked={state.pauseAtSegmentEnd}
+                      onChange={(e) => setPauseAtSegmentEnd(e.target.checked)}
+                    />
+                  </label>
+                </div>
                 <div className="relative">
                   <div className="timeline-track relative" ref={timelineTrackRef} onClick={handleTimelineClick}>
                       {/* 1. SEGMENTS LAYER */}
@@ -1516,7 +1479,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                             activeMoveReadiness.segmentReadyByIndex[index] ? "text-emerald-600" : "text-slate-400"
                           }`}
                         >
-                          {activeMoveReadiness.segmentReadyByIndex[index] ? "Segment ready" : "Segment processing"}
+                          {activeMoveReadiness.segmentReadyByIndex[index] ? "Section ready" : "Section processing"}
                         </div>
                       ) : (
                         <div
@@ -1554,11 +1517,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   className="dl-btn"
                   onClick={() => {
                     if (state.currentSegmentIndex >= 0) {
-                      playSegment(state.currentSegmentIndex);
+                      openPracticeMode(state.currentSegmentIndex);
                     }
                   }}
                 >
-                  Replay Current Segment
+                  Loop Current Section
                 </button>
                 {sessionMode ? sessionFooterSlot : null}
               </div>
@@ -1595,10 +1558,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
               <div className="practice-header">
                 <div>
                   <span className="practice-title">
-                    Practice: Segment <span className="pnum">{state.practice.segmentIndex}</span>
+                    Practice: Section <span className="pnum">{state.practice.segmentIndex}</span>
                     <span className="speed-badge">{practiceSpeedText}</span>
                   </span>
-                  <div className="practice-note">Last move = transition to next segment</div>
+                  <div className="practice-note">Last move = transition to the next section</div>
                 </div>
                 <div className="practice-header-actions">
                   <div className="ebs-toggle">
@@ -1635,7 +1598,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     className={`transport-btn${state.practice.loopSegment ? " practice-active" : ""}`}
                     onClick={() => setPracticeLoop(!state.practice.loopSegment)}
                   >
-                    Loop
+                    Loop Section
+                  </button>
+                  <button className="transport-btn transport-btn-wide" onClick={replayCurrentMove}>
+                    Loop Move
                   </button>
                   <div className="transport-info">
                     <div className="current-segment">
@@ -1657,6 +1623,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   </div>
                   <div className="time-code">{fmtTime(state.sharedTime)}</div>
                 </div>
+                <div className="practice-shortcut-note">Space replays the current move from its start.</div>
               </div>
 
               <div className="move-timeline">

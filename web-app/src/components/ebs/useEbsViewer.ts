@@ -76,6 +76,7 @@ export type EbsViewerApi = {
   openPracticeMode: (segmentIndex: number) => void;
   closePracticeMode: () => void;
   seekToMove: (idx: number) => void;
+  replayCurrentMove: () => void;
   seekToPrevMove: () => void;
   seekToNextMove: () => void;
   setPracticeLoop: (value: boolean) => void;
@@ -413,6 +414,18 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     [practice.moves, seekToShared],
   );
 
+  const replayCurrentMove = useCallback(() => {
+    if (!practice.enabled || practice.moves.length === 0) return;
+    const targetIndex =
+      practice.currentMoveIndex >= 0 && practice.currentMoveIndex < practice.moves.length
+        ? practice.currentMoveIndex
+        : 0;
+    const move = practice.moves[targetIndex];
+    setPractice((prev) => ({ ...prev, currentMoveIndex: targetIndex }));
+    seekToShared(move.startSec);
+    startPlayback();
+  }, [practice.currentMoveIndex, practice.enabled, practice.moves, seekToShared, startPlayback]);
+
   const seekToPrevMove = useCallback(() => {
     const idx = practice.currentMoveIndex > 0 ? practice.currentMoveIndex - 1 : 0;
     seekToMove(idx);
@@ -615,6 +628,7 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     openPracticeMode,
     closePracticeMode,
     seekToMove,
+    replayCurrentMove,
     seekToPrevMove,
     seekToNextMove,
     setPracticeLoop,
@@ -622,4 +636,3 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     togglePracticeSpeed,
   };
 }
-
