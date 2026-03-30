@@ -131,7 +131,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
     replayCurrentMove,
     seekToPrevMove,
     seekToNextMove,
-    setPracticeLoop,
+    setPracticeRepeatMode,
     setPauseAtMoveEnd,
     togglePracticeSpeed,
   } = useEbsViewer({ refVideo, userVideo, overlayVideo: viewMode === "overlay" ? overlayVideoRef : undefined });
@@ -559,10 +559,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
       if (event.code === "Space") {
         event.preventDefault();
-        if (state.practice.enabled) {
-          replayCurrentMove();
-          return;
-        }
         togglePlay();
         return;
       }
@@ -598,7 +594,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
     return () => window.removeEventListener("keydown", onKeyDown);
   }, [
     closePracticeMode,
-    replayCurrentMove,
     seekToNextMove,
     seekToNextSegment,
     seekToPrevMove,
@@ -662,6 +657,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const currentSegment = state.currentSegmentIndex >= 0 ? state.segments[state.currentSegmentIndex] : null;
   const currentPracticeSegment =
     state.practice.segmentIndex >= 0 ? state.segments[state.practice.segmentIndex] : null;
+  const practiceRepeatMode = state.practice.loopMove ? "move" : state.practice.loopSegment ? "section" : "off";
   const practiceSpeedText = `${state.practice.playbackRate.toFixed(2).replace(/\.00$/, "")}x`;
   const segmentDoneSet = new Set(state.doneSegmentIndexes);
   const moveDoneSet = new Set(state.practice.doneMoveIndexes);
@@ -1521,7 +1517,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     }
                   }}
                 >
-                  Loop Current Section
+                  Practice Current Section
                 </button>
                 {sessionMode ? sessionFooterSlot : null}
               </div>
@@ -1561,7 +1557,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     Practice: Section <span className="pnum">{state.practice.segmentIndex}</span>
                     <span className="speed-badge">{practiceSpeedText}</span>
                   </span>
-                  <div className="practice-note">Last move = transition to the next section</div>
+                  <div className="practice-note">Repeat Move stays on the current move. Repeat Section loops the full section.</div>
                 </div>
                 <div className="practice-header-actions">
                   <div className="ebs-toggle">
@@ -1572,7 +1568,34 @@ export function FeedbackViewer(props: EbsViewerProps) {
                       className="ebs-toggle-switch"
                       checked={state.practice.pauseAtMoveEnd}
                       onChange={(event) => setPauseAtMoveEnd(event.target.checked)}
+                      disabled={practiceRepeatMode !== "off"}
                     />
+                  </div>
+                  <div className="mode-group">
+                    <div className="mode-group-label">Repeat</div>
+                    <div className="mode-switch mode-switch-soft">
+                      <button
+                        type="button"
+                        onClick={() => setPracticeRepeatMode("off")}
+                        className={`mode-pill mode-pill-soft ${practiceRepeatMode === "off" ? "active soft" : ""}`}
+                      >
+                        Off
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPracticeRepeatMode("move")}
+                        className={`mode-pill mode-pill-soft ${practiceRepeatMode === "move" ? "active soft" : ""}`}
+                      >
+                        Move
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPracticeRepeatMode("section")}
+                        className={`mode-pill mode-pill-soft ${practiceRepeatMode === "section" ? "active soft" : ""}`}
+                      >
+                        Section
+                      </button>
+                    </div>
                   </div>
                   <button className="ebs-back-btn" onClick={closePracticeMode}>
                     ← Back to Overview
@@ -1594,14 +1617,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <button className="transport-btn practice-active" onClick={togglePracticeSpeed}>
                     {practiceSpeedText}
                   </button>
-                  <button
-                    className={`transport-btn${state.practice.loopSegment ? " practice-active" : ""}`}
-                    onClick={() => setPracticeLoop(!state.practice.loopSegment)}
-                  >
-                    Loop Section
-                  </button>
                   <button className="transport-btn transport-btn-wide" onClick={replayCurrentMove}>
-                    Loop Move
+                    Restart Move
                   </button>
                   <div className="transport-info">
                     <div className="current-segment">
@@ -1623,7 +1640,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   </div>
                   <div className="time-code">{fmtTime(state.sharedTime)}</div>
                 </div>
-                <div className="practice-shortcut-note">Space replays the current move from its start.</div>
+                <div className="practice-shortcut-note">Space plays or pauses. Use Restart Move to jump back to the current move.</div>
               </div>
 
               <div className="move-timeline">

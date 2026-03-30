@@ -192,6 +192,22 @@ def test_overlay_pose_cancel_marks_job_cancelled(overlay_client):
         oa.POSE_JOBS.pop(jid, None)
 
 
+def test_overlay_hybrid_status_404(overlay_client):
+    assert overlay_client.get("/api/overlay/yolo-hybrid/status?job_id=x").status_code == 404
+
+
+def test_overlay_hybrid_cancel_marks_job_cancelled(overlay_client):
+    jid = "hybrid-cancel"
+    oa.HYBRID_JOBS[jid] = {"status": "processing", "cancel_requested": False}
+    try:
+        r = overlay_client.post("/api/overlay/yolo-hybrid/cancel", data={"job_id": jid})
+        assert r.status_code == 200
+        assert oa.HYBRID_JOBS[jid]["status"] == "cancelled"
+        assert oa.HYBRID_JOBS[jid]["cancel_requested"] is True
+    finally:
+        oa.HYBRID_JOBS.pop(jid, None)
+
+
 def test_overlay_pose_result_invalid_layer(overlay_client):
     jid = "pj"
     oa.POSE_JOBS[jid] = {
@@ -206,6 +222,23 @@ def test_overlay_pose_result_invalid_layer(overlay_client):
         assert r.status_code == 400
     finally:
         oa.POSE_JOBS.pop(jid, None)
+
+
+def test_overlay_hybrid_result_invalid_layer(overlay_client):
+    jid = "hj"
+    oa.HYBRID_JOBS[jid] = {
+        "status": "done",
+        "seg_out": "/seg.webm",
+        "arms_out": "/a.webm",
+        "legs_out": "/l.webm",
+        "tmp_in": "/in.mp4",
+        "served_layers": set(),
+    }
+    try:
+        r = overlay_client.get(f"/api/overlay/yolo-hybrid/result?job_id={jid}&layer=torso")
+        assert r.status_code == 400
+    finally:
+        oa.HYBRID_JOBS.pop(jid, None)
 
 
 def test_overlay_bodypix_status_404(overlay_client):
@@ -346,6 +379,33 @@ def test_overlay_yolo_pose_start_returns_job_id(mock_save, overlay_client):
         oa.POSE_JOBS.pop(jid, None)
 
 
+@patch("src.overlay_api.save_upload", return_value="/tmp/hybrid_in.mp4")
+def test_overlay_yolo_hybrid_start_returns_job_id(mock_save, overlay_client):
+    vid = ("v.mp4", io.BytesIO(b"mock"), "video/mp4")
+    r = overlay_client.post(
+        "/api/overlay/yolo-hybrid/start",
+        data={
+            "color": "#00aaff",
+            "arms_color": "#ff0000",
+            "legs_color": "#00ff00",
+            "fps": 12,
+            "session_id": "sess",
+            "side": "ref",
+            "start_sec": "0.25",
+            "end_sec": "1.5",
+        },
+        files={"video": vid},
+    )
+    assert r.status_code == 200
+    assert "job_id" in r.json()
+    jid = r.json()["job_id"]
+    try:
+        assert oa.HYBRID_JOBS[jid]["start_sec"] == 0.25
+        assert oa.HYBRID_JOBS[jid]["end_sec"] == 1.5
+    finally:
+        oa.HYBRID_JOBS.pop(jid, None)
+
+
 def test_overlay_yolo_pose_status_200(overlay_client):
     jid = "pose-status-ok"
     oa.POSE_JOBS[jid] = {
@@ -448,6 +508,62 @@ def test_overlay_yolo_pose_result_missing_job_and_not_ready_and_missing_output(o
         assert overlay_client.get(f"/api/overlay/yolo-pose/result?job_id={jid}&layer=arms").status_code == 409
     finally:
         oa.POSE_JOBS.pop(jid, None)
+
+
+def test_overlay_yolo_hybrid_result_missing_job_and_not_ready_and_missing_output(overlay_client):
+    assert overlay_client.get("/api/overlay/yolo-hybrid/result?job_id=none&layer=seg").status_code == 404
+
+    jid = "hybrid-not-ready"
+    oa.HYBRID_JOBS[jid] = {"status": "processing", "served_layers": set()}
+    try:
+        assert overlay_client.get(f"/api/overlay/yolo-hybrid/result?job_id={jid}&layer=seg").status_code == 409
+    finally:
+        oa.HYBRID_JOBS.pop(jid, None)
+
+
+def test_overlay_yolo_hybrid_result_seg_keeps_job_until_all_layers_served(overlay_client, tmp_path):
+    seg = tmp_path / "seg.webm"
+    arms = tmp_path / "arms.webm"
+    legs = tmp_path / "legs.webm"
+    seg.write_bytes(b"seg-data")
+    arms.write_bytes(b"arms-data")
+    legs.write_bytes(b"legs-data")
+    inp = tmp_path / "in.mp4"
+    inp.write_bytes(b"x")
+    jid = "hybrid-result-seg"
+    oa.HYBRID_JOBS[jid] = {
+        "status": "done",
+        "seg_out": str(seg),
+        "arms_out": str(arms),
+        "legs_out": str(legs),
+        "tmp_in": str(inp),
+        "served_layers": set(),
+        "overlay_summary": {"person_count": 1},
+        "pose_summary": {"person_count": 1, "persons": []},
+    }
+    try:
+        r = overlay_client.get(f"/api/overlay/yolo-hybrid/result?job_id={jid}&layer=seg")
+        assert r.status_code == 200
+        assert r.content == b"seg-data"
+        assert r.headers.get("x-tempoflow-overlay-summary")
+        assert r.headers.get("x-tempoflow-pose-summary")
+        assert jid in oa.HYBRID_JOBS
+        assert "seg" in oa.HYBRID_JOBS[jid]["served_layers"]
+    finally:
+        oa.HYBRID_JOBS.pop(jid, None)
+
+    jid = "hybrid-missing-output"
+    oa.HYBRID_JOBS[jid] = {
+        "status": "done",
+        "seg_out": None,
+        "arms_out": None,
+        "legs_out": None,
+        "served_layers": set(),
+    }
+    try:
+        assert overlay_client.get(f"/api/overlay/yolo-hybrid/result?job_id={jid}&layer=seg").status_code == 500
+    finally:
+        oa.HYBRID_JOBS.pop(jid, None)
 
     jid = "pose-missing-output"
     oa.POSE_JOBS[jid] = {"status": "done", "arms_out": None, "legs_out": None, "served_layers": set()}
@@ -726,6 +842,35 @@ def test_run_pose_overlay_job_renders_all_detected_people(monkeypatch, tmp_path)
     assert oa.POSE_JOBS[jid]["status"] == "done"
     assert len(calls) == 2
     oa.POSE_JOBS.pop(jid, None)
+
+
+def test_run_hybrid_overlay_job_success(monkeypatch, tmp_path):
+    _, writer = _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose")
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    pose_weights = tmp_path / "yolo26n-pose.pt"
+    pose_weights.write_bytes(b"w")
+    seg_weights = tmp_path / "yolo26n-seg.pt"
+    seg_weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda name: pose_weights if "pose" in name else seg_weights)
+    jid = "hybrid-success"
+    oa.HYBRID_JOBS[jid] = {"status": "queued"}
+    oa._run_hybrid_overlay_job(
+        jid,
+        "/tmp/in.mp4",
+        "/tmp/seg.webm",
+        "/tmp/arms.webm",
+        "/tmp/legs.webm",
+        "#38bdf8",
+        "#f00",
+        "#0f0",
+        1,
+    )
+    assert oa.HYBRID_JOBS[jid]["status"] == "done"
+    assert oa.HYBRID_JOBS[jid]["frames_written"] == 1
+    assert len(writer.frames) >= 1
+    assert "overlay_summary" in oa.HYBRID_JOBS[jid]
+    assert oa.HYBRID_JOBS[jid]["pose_summary"] is not None
+    oa.HYBRID_JOBS.pop(jid, None)
 
 
 def test_run_bodypx_job_success(monkeypatch, tmp_path):

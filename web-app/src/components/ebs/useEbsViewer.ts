@@ -35,6 +35,7 @@ export type PracticeState = {
   currentMoveIndex: number;
   doneMoveIndexes: number[];
   loopSegment: boolean;
+  loopMove: boolean;
   pauseAtMoveEnd: boolean;
   playbackRate: number;
 };
@@ -79,6 +80,7 @@ export type EbsViewerApi = {
   replayCurrentMove: () => void;
   seekToPrevMove: () => void;
   seekToNextMove: () => void;
+  setPracticeRepeatMode: (mode: "off" | "move" | "section") => void;
   setPracticeLoop: (value: boolean) => void;
   setPauseAtMoveEnd: (value: boolean) => void;
   togglePracticeSpeed: () => void;
@@ -109,7 +111,8 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     moves: [],
     currentMoveIndex: -1,
     doneMoveIndexes: [],
-    loopSegment: true,
+    loopSegment: false,
+    loopMove: false,
     pauseAtMoveEnd: true,
     playbackRate: 0.5,
   });
@@ -328,7 +331,8 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
       moves: [],
       currentMoveIndex: -1,
       doneMoveIndexes: [],
-      loopSegment: true,
+      loopSegment: false,
+      loopMove: false,
       pauseAtMoveEnd: true,
       playbackRate: 0.5,
     });
@@ -353,10 +357,11 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
       ...prev,
       enabled: false,
       segmentIndex: -1,
-      moves: [],
-      currentMoveIndex: -1,
-      doneMoveIndexes: [],
-    }));
+        moves: [],
+        currentMoveIndex: -1,
+        doneMoveIndexes: [],
+        loopMove: false,
+      }));
     setSharedTime(0);
   }, [hidePauseOverlay, pausePlayback]);
 
@@ -374,7 +379,8 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
         moves,
         currentMoveIndex: -1,
         doneMoveIndexes: [],
-        loopSegment: true,
+        loopSegment: false,
+        loopMove: false,
         pauseAtMoveEnd: true,
         playbackRate: 0.5,
       });
@@ -397,6 +403,7 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
       moves: [],
       currentMoveIndex: -1,
       doneMoveIndexes: [],
+      loopMove: false,
     }));
     const refElement = refVideo.current;
     const userElement = userVideo.current;
@@ -441,7 +448,15 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
   }, [practice.currentMoveIndex, practice.moves.length, seekToMove]);
 
   const setPracticeLoop = useCallback((value: boolean) => {
-    setPractice((prev) => ({ ...prev, loopSegment: value }));
+    setPractice((prev) => ({ ...prev, loopSegment: value, loopMove: false }));
+  }, []);
+
+  const setPracticeRepeatMode = useCallback((mode: "off" | "move" | "section") => {
+    setPractice((prev) => ({
+      ...prev,
+      loopMove: mode === "move",
+      loopSegment: mode === "section",
+    }));
   }, []);
 
   const setPauseAtMoveEnd = useCallback((value: boolean) => {
@@ -477,11 +492,20 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     if (practice.enabled) {
       const segment = segments[practice.segmentIndex];
       if (!segment) return;
+      const isRepeating = practice.loopMove || practice.loopSegment;
 
       const newMoveIndex = findActiveMoveIndex(sharedTime, practice.moves);
 
       if (newMoveIndex !== practice.currentMoveIndex) {
-        if (practice.pauseAtMoveEnd && playingRef.current && practice.currentMoveIndex >= 0) {
+        if (practice.loopMove && playingRef.current && practice.currentMoveIndex >= 0) {
+          const repeatedMove = practice.moves[practice.currentMoveIndex];
+          if (repeatedMove) {
+            seekToSharedInternal(repeatedMove.startSec, true);
+            return;
+          }
+        }
+
+        if (practice.pauseAtMoveEnd && !isRepeating && playingRef.current && practice.currentMoveIndex >= 0) {
           const completedMove = practice.moves[practice.currentMoveIndex];
           setPractice((prev) => ({
             ...prev,
@@ -505,7 +529,13 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
       }
 
       if (playingRef.current && shouldLoopPracticeSegment(sharedTime, segment)) {
-        if (practice.loopSegment) {
+        if (practice.loopMove && practice.currentMoveIndex >= 0) {
+          const repeatedMove = practice.moves[practice.currentMoveIndex];
+          if (repeatedMove) {
+            seekToSharedInternal(repeatedMove.startSec, true);
+            return;
+          }
+        } else if (practice.loopSegment) {
           seekToSharedInternal(segment.shared_start_sec, true);
           setPractice((prev) => ({ ...prev, currentMoveIndex: -1 }));
         } else {
@@ -549,6 +579,7 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     pausePlayback,
     practice.currentMoveIndex,
     practice.enabled,
+    practice.loopMove,
     practice.loopSegment,
     practice.moves,
     practice.pauseAtMoveEnd,
@@ -631,6 +662,7 @@ export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRef
     replayCurrentMove,
     seekToPrevMove,
     seekToNextMove,
+    setPracticeRepeatMode,
     setPracticeLoop,
     setPauseAtMoveEnd,
     togglePracticeSpeed,

@@ -43,7 +43,7 @@ describe("ensureBrowserYoloOverlays", () => {
     ).rejects.toThrow("Missing session videos for YOLO overlay generation.");
   });
 
-  it("starts segmented reference and user seg/pose jobs in parallel", async () => {
+  it("starts one hybrid job per side for segmented overlays", async () => {
     vi.mocked(getSessionVideo).mockImplementation(async (_sessionId, side) => {
       return new File([`${side}-video`], `${side}.mp4`, { type: "video/mp4" });
     });
@@ -66,22 +66,13 @@ describe("ensureBrowserYoloOverlays", () => {
         const url = String(input);
         fetchCalls.push(url);
 
-        if (url.endsWith("/api/overlay/yolo/start")) {
-          return jsonResponse({ job_id: `seg-${fetchCalls.length}` });
+        if (url.endsWith("/api/overlay/yolo-hybrid/start")) {
+          return jsonResponse({ job_id: `hybrid-${fetchCalls.length}` });
         }
-        if (url.endsWith("/api/overlay/yolo-pose/start")) {
-          return jsonResponse({ job_id: `pose-${fetchCalls.length}` });
-        }
-        if (url.includes("/api/overlay/yolo/status")) {
+        if (url.includes("/api/overlay/yolo-hybrid/status")) {
           return jsonResponse({ status: "done", progress: 1 });
         }
-        if (url.includes("/api/overlay/yolo-pose/status")) {
-          return jsonResponse({ status: "done", progress: 1 });
-        }
-        if (url.includes("/api/overlay/yolo/result")) {
-          return videoResponse();
-        }
-        if (url.includes("/api/overlay/yolo-pose/result")) {
+        if (url.includes("/api/overlay/yolo-hybrid/result")) {
           return videoResponse();
         }
 
@@ -125,8 +116,7 @@ describe("ensureBrowserYoloOverlays", () => {
       onSegmentComplete: vi.fn(),
     });
 
-    expect(fetchCalls.slice(0, 4).every((url) => url.includes("/start"))).toBe(true);
-    expect(fetchCalls.slice(0, 4).filter((url) => url.endsWith("/api/overlay/yolo/start"))).toHaveLength(2);
-    expect(fetchCalls.slice(0, 4).filter((url) => url.endsWith("/api/overlay/yolo-pose/start"))).toHaveLength(2);
+    expect(fetchCalls.slice(0, 2).every((url) => url.endsWith("/api/overlay/yolo-hybrid/start"))).toBe(true);
+    expect(fetchCalls.filter((url) => url.endsWith("/api/overlay/yolo-hybrid/start"))).toHaveLength(2);
   });
 });

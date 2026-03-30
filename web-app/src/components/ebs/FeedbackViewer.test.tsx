@@ -119,6 +119,7 @@ describe("FeedbackViewer", () => {
     openPracticeMode: vi.fn(),
     closePracticeMode: vi.fn(),
     replayCurrentMove: vi.fn(),
+    setPracticeRepeatMode: vi.fn(),
     hidePauseOverlay: vi.fn(),
   };
 
@@ -184,7 +185,7 @@ describe("FeedbackViewer", () => {
     expect(mockActions.togglePlay).toHaveBeenCalled();
   });
 
-  it("replays the current move with Space during practice mode", () => {
+  it("keeps Space mapped to play and pause during practice mode", () => {
     (useEbsViewer as any).mockReturnValue({
       state: {
         ...mockState,
@@ -203,8 +204,8 @@ describe("FeedbackViewer", () => {
 
     render(<FeedbackViewer mode="session" sessionId="1" referenceVideoUrl="r" userVideoUrl="u" ebsData={{} as any} />);
     fireEvent.keyDown(window, { code: "Space" });
-    expect(mockActions.replayCurrentMove).toHaveBeenCalled();
-    expect(mockActions.togglePlay).not.toHaveBeenCalled();
+    expect(mockActions.togglePlay).toHaveBeenCalled();
+    expect(mockActions.replayCurrentMove).not.toHaveBeenCalled();
   });
 
   it("shows Gemini feedback panel in session mode", () => {

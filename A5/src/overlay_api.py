@@ -18,6 +18,7 @@ router = APIRouter()
 
 OVERLAY_JOBS: dict[str, dict[str, Any]] = {}
 POSE_JOBS: dict[str, dict[str, Any]] = {}
+HYBRID_JOBS: dict[str, dict[str, Any]] = {}
 BODYPX_JOBS: dict[str, dict[str, Any]] = {}
 
 
@@ -610,8 +611,23 @@ def _predict_segmentation_mask(frame: Any, model: Any, w: int, h: int) -> Any | 
     import numpy as np  # type: ignore
 
     result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+    alpha_u8, summaries = _extract_segmentation_mask_data(result, w, h, blur_sigma=1.2)
+    return alpha_u8 if summaries else None
+
+
+def _extract_segmentation_mask_data(
+    result: Any,
+    w: int,
+    h: int,
+    *,
+    blur_sigma: float,
+) -> tuple[Any, list[dict[str, float]]]:
+    import cv2  # type: ignore
+    import numpy as np  # type: ignore
+
+    alpha_u8 = np.zeros((h, w), dtype=np.uint8)
     if not result or result[0].masks is None:
-        return None
+        return alpha_u8, []
 
     mask_tensor = result[0].masks.data
     mask_np = mask_tensor.detach().cpu().numpy()  # type: ignore[attr-defined]
@@ -619,8 +635,27 @@ def _predict_segmentation_mask(frame: Any, model: Any, w: int, h: int) -> Any | 
     alpha = np.clip(alpha, 0.0, 1.0)
     if alpha.shape[0] != h or alpha.shape[1] != w:
         alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_CUBIC)
-    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=1.2, sigmaY=1.2)
-    return (alpha * 255.0).astype(np.uint8)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=blur_sigma, sigmaY=blur_sigma)
+
+    if mask_np.shape[1] != h or mask_np.shape[2] != w:
+        resized_masks = [
+            cv2.resize(mask.astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
+            for mask in mask_np
+        ]
+        mask_np = np.stack(resized_masks, axis=0)
+
+    return (alpha * 255.0).astype(np.uint8), _summarize_mask_instances(mask_np, w, h)
+
+
+def _build_segmentation_overlay(alpha_u8: Any, color: str) -> Any:
+    import numpy as np  # type: ignore
+
+    r0, g0, b0 = _hex_to_rgb(color)
+    overlay = np.zeros((*alpha_u8.shape, 3), dtype=np.uint8)
+    overlay[..., 0] = (alpha_u8.astype(np.uint16) * b0 // 255).astype(np.uint8)
+    overlay[..., 1] = (alpha_u8.astype(np.uint16) * g0 // 255).astype(np.uint8)
+    overlay[..., 2] = (alpha_u8.astype(np.uint16) * r0 // 255).astype(np.uint8)
+    return overlay
 
 
 def _clip_overlay_to_mask(overlay: Any, mask_u8: Any | None) -> Any:
@@ -691,7 +726,6 @@ def _run_yolo_overlay_job(job_id: str, tmp_in: str, tmp_out: str, color: str, fp
         return
 
     model = YOLO(str(weights))
-    r0, g0, b0 = _hex_to_rgb(color)
     out_dt = 1.0 / float(out_fps)
     next_out_time = 0.0
     written = 0
@@ -715,31 +749,9 @@ def _run_yolo_overlay_job(job_id: str, tmp_in: str, tmp_out: str, color: str, fp
             continue
 
         result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
-
-        alpha_u8 = np.zeros((h, w), dtype=np.uint8)
-        if result and result[0].masks is not None:
-            m = result[0].masks.data
-            mm = m.detach().cpu().numpy()  # type: ignore[attr-defined]
-            alpha = np.max(mm, axis=0).astype(np.float32)
-            alpha = np.clip(alpha, 0.0, 1.0)
-            if alpha.shape[0] != h or alpha.shape[1] != w:
-                alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_CUBIC)
-            alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=0.9, sigmaY=0.9)
-            alpha_u8 = (alpha * 255.0).astype(np.uint8)
-            if mm.shape[1] != h or mm.shape[2] != w:
-                resized_masks = [
-                    cv2.resize(mask.astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
-                    for mask in mm
-                ]
-                mm = np.stack(resized_masks, axis=0)
-            overlay_summary_frames.append(_summarize_mask_instances(mm, w, h))
-        else:
-            overlay_summary_frames.append([])
-
-        overlay = np.zeros((h, w, 3), dtype=np.uint8)
-        overlay[..., 0] = (alpha_u8.astype(np.uint16) * b0 // 255).astype(np.uint8)
-        overlay[..., 1] = (alpha_u8.astype(np.uint16) * g0 // 255).astype(np.uint8)
-        overlay[..., 2] = (alpha_u8.astype(np.uint16) * r0 // 255).astype(np.uint8)
+        alpha_u8, summaries = _extract_segmentation_mask_data(result, w, h, blur_sigma=0.9)
+        overlay_summary_frames.append(summaries)
+        overlay = _build_segmentation_overlay(alpha_u8, color)
         last_overlay = overlay
         writer.write(overlay)
         written += 1
@@ -905,6 +917,165 @@ def _run_pose_overlay_job(
         return
     POSE_JOBS[job_id]["pose_summary"] = _aggregate_pose_summaries(pose_summary_frames)
     POSE_JOBS[job_id]["status"] = "done"
+
+
+def _run_hybrid_overlay_job(
+    job_id: str,
+    tmp_in: str,
+    seg_out: str,
+    arms_out: str,
+    legs_out: str,
+    color: str,
+    arms_color: str,
+    legs_color: str,
+    fps: int,
+    start_sec: float | None = None,
+    end_sec: float | None = None,
+) -> None:
+    if _job_cancel_requested(HYBRID_JOBS, job_id):
+        _finalize_cancelled_job(HYBRID_JOBS, job_id, "tmp_in", "seg_out", "arms_out", "legs_out")
+        return
+    try:
+        import cv2  # type: ignore
+        import numpy as np  # type: ignore
+        from ultralytics import YOLO  # type: ignore
+    except Exception as exc:
+        HYBRID_JOBS[job_id]["status"] = "error"
+        HYBRID_JOBS[job_id]["error"] = f"Missing hybrid deps: {exc}"
+        return
+
+    pose_weights = _weights_path("yolo26n-pose.pt")
+    if not pose_weights.exists():
+        HYBRID_JOBS[job_id]["status"] = "error"
+        HYBRID_JOBS[job_id]["error"] = f"YOLO pose weights not found at {pose_weights}"
+        return
+
+    seg_weights = _weights_path("yolo26n-seg.pt")
+    if not seg_weights.exists():
+        HYBRID_JOBS[job_id]["status"] = "error"
+        HYBRID_JOBS[job_id]["error"] = f"YOLO seg weights not found at {seg_weights}"
+        return
+
+    cap = cv2.VideoCapture(tmp_in)
+    if not cap.isOpened():
+        HYBRID_JOBS[job_id]["status"] = "error"
+        HYBRID_JOBS[job_id]["error"] = "Failed to open video."
+        return
+
+    out_fps = max(1, int(fps))
+    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 640)
+    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 480)
+    duration_sec = float((probe_video_metadata(tmp_in).get("duration_sec") or 0.0))
+    seg_start, seg_end = _resolve_segment_window(duration_sec, start_sec, end_sec)
+    seg_duration = seg_end - seg_start
+    if seg_duration <= 0:
+        HYBRID_JOBS[job_id]["status"] = "error"
+        HYBRID_JOBS[job_id]["error"] = "Hybrid overlay segment duration must be greater than 0."
+        cap.release()
+        return
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, seg_start * 1000.0)
+    expected = _expected_frames(seg_duration, out_fps)
+    HYBRID_JOBS[job_id]["frames_expected"] = expected
+    HYBRID_JOBS[job_id]["frames_written"] = 0
+    HYBRID_JOBS[job_id]["progress"] = 0.0
+    HYBRID_JOBS[job_id]["status"] = "processing"
+
+    seg_writer = cv2.VideoWriter(seg_out, cv2.VideoWriter_fourcc(*"VP90"), out_fps, (w, h))
+    arms_writer = cv2.VideoWriter(arms_out, cv2.VideoWriter_fourcc(*"VP90"), out_fps, (w, h))
+    legs_writer = cv2.VideoWriter(legs_out, cv2.VideoWriter_fourcc(*"VP90"), out_fps, (w, h))
+    if not seg_writer.isOpened() or not arms_writer.isOpened() or not legs_writer.isOpened():
+        HYBRID_JOBS[job_id]["status"] = "error"
+        HYBRID_JOBS[job_id]["error"] = "Failed to open VideoWriter."
+        cap.release()
+        return
+
+    seg_model = YOLO(str(seg_weights))
+    pose_model = YOLO(str(pose_weights))
+    written = 0
+    out_dt = 1.0 / float(out_fps)
+    next_out_time = 0.0
+    last_seg = np.zeros((h, w, 3), dtype=np.uint8)
+    last_arms = np.zeros((h, w, 3), dtype=np.uint8)
+    last_legs = np.zeros((h, w, 3), dtype=np.uint8)
+    overlay_summary_frames: list[list[dict[str, float]]] = []
+    pose_summary_frames: list[list[dict[str, float]]] = []
+
+    while written < expected:
+        if _job_cancel_requested(HYBRID_JOBS, job_id):
+            cap.release()
+            seg_writer.release()
+            arms_writer.release()
+            legs_writer.release()
+            _finalize_cancelled_job(HYBRID_JOBS, job_id, "tmp_in", "seg_out", "arms_out", "legs_out")
+            return
+        ok, frame = cap.read()
+        if not ok:
+            break
+        abs_t = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0) / 1000.0
+        rel_t = max(0.0, abs_t - seg_start)
+        if rel_t > seg_duration + (out_dt * 0.25):
+            break
+        if rel_t + (out_dt * 0.25) < next_out_time:
+            continue
+
+        seg_result = seg_model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+        alpha_u8, seg_summaries = _extract_segmentation_mask_data(seg_result, w, h, blur_sigma=0.9)
+        seg_overlay = _build_segmentation_overlay(alpha_u8, color)
+        overlay_summary_frames.append(seg_summaries)
+
+        arms_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        legs_overlay = np.zeros((h, w, 3), dtype=np.uint8)
+        pose_result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        if pose_result and getattr(pose_result[0], "keypoints", None) is not None and len(pose_result[0].keypoints.xy) > 0:
+            kp = pose_result[0].keypoints
+            instances = _iter_pose_instances(kp)
+            pose_summary_frames.append(_summarize_pose_instances(instances, w, h))
+            for xy, conf in instances:
+                pose_arms_overlay, pose_legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
+                arms_overlay = np.maximum(arms_overlay, pose_arms_overlay)
+                legs_overlay = np.maximum(legs_overlay, pose_legs_overlay)
+            arms_overlay = _clip_overlay_to_mask(arms_overlay, alpha_u8)
+            legs_overlay = _clip_overlay_to_mask(legs_overlay, alpha_u8)
+        else:
+            pose_summary_frames.append([])
+
+        last_seg = seg_overlay
+        last_arms = arms_overlay
+        last_legs = legs_overlay
+        seg_writer.write(seg_overlay)
+        arms_writer.write(arms_overlay)
+        legs_writer.write(legs_overlay)
+        written += 1
+        next_out_time += out_dt
+        HYBRID_JOBS[job_id]["frames_written"] = written
+        HYBRID_JOBS[job_id]["progress"] = min(1.0, written / float(expected))
+
+    while written < expected:
+        if _job_cancel_requested(HYBRID_JOBS, job_id):
+            cap.release()
+            seg_writer.release()
+            arms_writer.release()
+            legs_writer.release()
+            _finalize_cancelled_job(HYBRID_JOBS, job_id, "tmp_in", "seg_out", "arms_out", "legs_out")
+            return
+        seg_writer.write(last_seg)
+        arms_writer.write(last_arms)
+        legs_writer.write(last_legs)
+        written += 1
+        HYBRID_JOBS[job_id]["frames_written"] = written
+        HYBRID_JOBS[job_id]["progress"] = min(1.0, written / float(expected))
+
+    cap.release()
+    seg_writer.release()
+    arms_writer.release()
+    legs_writer.release()
+    if _job_cancel_requested(HYBRID_JOBS, job_id):
+        _finalize_cancelled_job(HYBRID_JOBS, job_id, "tmp_in", "seg_out", "arms_out", "legs_out")
+        return
+    HYBRID_JOBS[job_id]["overlay_summary"] = _aggregate_mask_instance_summaries(overlay_summary_frames)
+    HYBRID_JOBS[job_id]["pose_summary"] = _aggregate_pose_summaries(pose_summary_frames)
+    HYBRID_JOBS[job_id]["status"] = "done"
 
 
 def _run_bodypx_job(job_id: str, tmp_in: str, out_path: str, arms_color: str, legs_color: str, torso_color: str, head_color: str, fps: int, start_sec: float | None, end_sec: float | None) -> None:
@@ -1200,6 +1371,109 @@ async def overlay_yolo_pose_result(job_id: str, layer: str, background_tasks: Ba
     encoded_summary = _encode_summary_header(job.get("pose_summary"))
     if encoded_summary:
         headers["x-tempoflow-pose-summary"] = encoded_summary
+    return FileResponse(
+        path=out_path,
+        media_type="video/webm",
+        filename=f"{job_id}_{layer}_overlay.webm",
+        headers=headers,
+    )
+
+
+@router.post("/api/overlay/yolo-hybrid/start")
+async def overlay_yolo_hybrid_start(
+    video: UploadFile = File(...),
+    color: str = Form(default="#38bdf8"),
+    arms_color: str = Form(default="#38bdf8"),
+    legs_color: str = Form(default="#6366f1"),
+    fps: int = Form(default=12),
+    session_id: str | None = Form(default=None),
+    side: str | None = Form(default=None),
+    start_sec: float | None = Form(default=None),
+    end_sec: float | None = Form(default=None),
+):
+    job_id = str(uuid.uuid4())
+    tmp_in = save_upload(video, f"hybrid_{(side or 'unknown')}_{job_id}")
+    seg_out = tempfile.NamedTemporaryFile(prefix=f"hybrid_seg_{job_id}_", suffix=".webm", delete=False).name
+    arms_out = tempfile.NamedTemporaryFile(prefix=f"hybrid_arms_{job_id}_", suffix=".webm", delete=False).name
+    legs_out = tempfile.NamedTemporaryFile(prefix=f"hybrid_legs_{job_id}_", suffix=".webm", delete=False).name
+    HYBRID_JOBS[job_id] = {
+        "status": "queued",
+        "progress": 0.0,
+        "frames_written": 0,
+        "frames_expected": None,
+        "tmp_in": tmp_in,
+        "seg_out": seg_out,
+        "arms_out": arms_out,
+        "legs_out": legs_out,
+        "session_id": (session_id or "default"),
+        "side": (side or "unknown"),
+        "start_sec": start_sec,
+        "end_sec": end_sec,
+        "error": None,
+        "served_layers": set(),
+    }
+    threading.Thread(
+        target=_run_hybrid_overlay_job,
+        args=(job_id, tmp_in, seg_out, arms_out, legs_out, color, arms_color, legs_color, fps, start_sec, end_sec),
+        daemon=True,
+    ).start()
+    return JSONResponse({"job_id": job_id}, status_code=200)
+
+
+@router.get("/api/overlay/yolo-hybrid/status")
+async def overlay_yolo_hybrid_status(job_id: str):
+    job = HYBRID_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job_id"}, status_code=404)
+    return {
+        "job_id": job_id,
+        "status": job.get("status", "unknown"),
+        "progress": float(job.get("progress", 0.0) or 0.0),
+        "frames_written": job.get("frames_written"),
+        "frames_expected": job.get("frames_expected"),
+        "error": job.get("error"),
+    }
+
+
+@router.post("/api/overlay/yolo-hybrid/cancel")
+async def overlay_yolo_hybrid_cancel(job_id: str = Form(...)):
+    return _request_job_cancel(HYBRID_JOBS, job_id)
+
+
+@router.get("/api/overlay/yolo-hybrid/result")
+async def overlay_yolo_hybrid_result(job_id: str, layer: str, background_tasks: BackgroundTasks):
+    job = HYBRID_JOBS.get(job_id)
+    if not job:
+        return JSONResponse({"error": "Unknown job_id"}, status_code=404)
+    if job.get("status") != "done":
+        return JSONResponse({"error": "Job not ready"}, status_code=409)
+    if layer not in {"seg", "arms", "legs"}:
+        return JSONResponse({"error": "Invalid layer"}, status_code=400)
+
+    key = {"seg": "seg_out", "arms": "arms_out", "legs": "legs_out"}[layer]
+    out_path = job.get(key)
+    if not out_path:
+        return JSONResponse({"error": "Missing output"}, status_code=500)
+
+    served_layers = job.get("served_layers")
+    if not isinstance(served_layers, set):
+        served_layers = set()
+        job["served_layers"] = served_layers
+    served_layers.add(layer)
+
+    background_tasks.add_task(lambda: Path(out_path).unlink(missing_ok=True))
+    if served_layers == {"seg", "arms", "legs"}:
+        if job.get("tmp_in"):
+            background_tasks.add_task(lambda: Path(job["tmp_in"]).unlink(missing_ok=True))
+        HYBRID_JOBS.pop(job_id, None)
+
+    headers = {}
+    encoded_overlay_summary = _encode_summary_header(job.get("overlay_summary"))
+    if encoded_overlay_summary:
+        headers["x-tempoflow-overlay-summary"] = encoded_overlay_summary
+    encoded_pose_summary = _encode_summary_header(job.get("pose_summary"))
+    if encoded_pose_summary:
+        headers["x-tempoflow-pose-summary"] = encoded_pose_summary
     return FileResponse(
         path=out_path,
         media_type="video/webm",

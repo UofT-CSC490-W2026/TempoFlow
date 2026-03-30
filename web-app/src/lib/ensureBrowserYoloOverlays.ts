@@ -68,6 +68,14 @@ type PoseResult = {
   summary: PoseSummary | null;
 };
 
+type HybridResult = {
+  seg: VideoResult;
+  arms: VideoResult;
+  legs: VideoResult;
+  segSummary: OverlaySummary | null;
+  poseSummary: PoseSummary | null;
+};
+
 type SegmentedYoloArtifacts = {
   referenceSeg: OverlayArtifact;
   practiceSeg: OverlayArtifact;
@@ -99,7 +107,7 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
-type PythonJobKind = "yolo" | "yolo-pose";
+type PythonJobKind = "yolo" | "yolo-pose" | "yolo-hybrid";
 
 type PythonJobRegistration = {
   kind: PythonJobKind;
@@ -138,7 +146,7 @@ async function sleepWithSignal(ms: number, signal?: AbortSignal) {
 }
 
 async function cancelPythonJob(job: PythonJobRegistration) {
-  const endpoint = job.kind === "yolo" ? "yolo" : "yolo-pose";
+  const endpoint = job.kind;
   const form = new FormData();
   form.append("job_id", job.jobId);
   try {
@@ -550,6 +558,84 @@ async function waitForPythonYoloPoseJob(
   }
 }
 
+async function startPythonYoloHybridJob(form: FormData) {
+  const res = await fetch(`${getOverlayBaseUrl()}/api/overlay/yolo-hybrid/start`, {
+    method: "POST",
+    body: form,
+  });
+  if (!res.ok) {
+    const txt = await res.text().catch(() => "");
+    throw new Error(`YOLO hybrid start error (${res.status}): ${txt || res.statusText}`);
+  }
+  const json = (await res.json()) as { job_id?: string };
+  if (!json.job_id) {
+    throw new Error("Missing job_id from YOLO hybrid start");
+  }
+  return json.job_id;
+}
+
+async function waitForPythonYoloHybridJob(
+  jobId: string,
+  reportProgress: (progress: number) => void,
+  signal?: AbortSignal,
+) {
+  while (true) {
+    throwIfAborted(signal);
+    const stRes = await fetch(
+      `${getOverlayBaseUrl()}/api/overlay/yolo-hybrid/status?job_id=${encodeURIComponent(jobId)}`,
+      { signal },
+    );
+    if (!stRes.ok) {
+      const txt = await stRes.text().catch(() => "");
+      throw new Error(`YOLO hybrid status error (${stRes.status}): ${txt || stRes.statusText}`);
+    }
+
+    const st = (await stRes.json()) as {
+      status: string;
+      progress?: number;
+      error?: string;
+    };
+    reportProgress(typeof st.progress === "number" ? st.progress : 0);
+
+    if (st.status === "done") {
+      const loadLayer = async (layer: "seg" | PoseLayer) => {
+        const outRes = await fetch(
+          `${getOverlayBaseUrl()}/api/overlay/yolo-hybrid/result?job_id=${encodeURIComponent(jobId)}&layer=${layer}`,
+          { signal },
+        );
+        if (!outRes.ok) {
+          const txt = await outRes.text().catch(() => "");
+          throw new Error(`YOLO hybrid result error (${outRes.status}): ${txt || outRes.statusText}`);
+        }
+        return {
+          blob: await outRes.blob(),
+          mime: outRes.headers.get("content-type") || "video/webm",
+          segSummary: decodeOverlayBoundsSummaryHeader(outRes.headers.get("x-tempoflow-overlay-summary")),
+          poseSummary: decodePoseSummaryHeader(outRes.headers.get("x-tempoflow-pose-summary")),
+        };
+      };
+
+      const [seg, arms, legs] = await Promise.all([loadLayer("seg"), loadLayer("arms"), loadLayer("legs")]);
+      return {
+        seg: { blob: seg.blob, mime: seg.mime, summary: seg.segSummary },
+        arms: { blob: arms.blob, mime: arms.mime },
+        legs: { blob: legs.blob, mime: legs.mime },
+        segSummary: seg.segSummary ?? null,
+        poseSummary: arms.poseSummary ?? legs.poseSummary ?? seg.poseSummary ?? null,
+      } satisfies HybridResult;
+    }
+
+    if (st.status === "error") {
+      throw new Error(st.error || "YOLO hybrid job failed");
+    }
+    if (st.status === "cancelled") {
+      throw createAbortError();
+    }
+
+    await sleepWithSignal(400, signal);
+  }
+}
+
 function buildSegmentVideoResult(params: {
   plan: OverlaySegmentPlan["reference"] | OverlaySegmentPlan["practice"];
   index: number;
@@ -842,6 +928,47 @@ async function runSegmentedBrowserYoloPipeline(params: {
         const file = await getVideoFile(side);
         const segExists = side === "reference" ? Boolean(refSeg) : Boolean(practiceSeg);
         const poseExists = side === "reference" ? Boolean(refArms && refLegs) : Boolean(practiceArms && practiceLegs);
+
+        if (!segExists && !poseExists) {
+          throwIfAborted(signal);
+          const hybridForm = new FormData();
+          hybridForm.append("video", file, file.name);
+          hybridForm.append("color", YOLO_SEG_COLORS[side]);
+          hybridForm.append("arms_color", YOLO_POSE_COLORS[side].arms);
+          hybridForm.append("legs_color", YOLO_POSE_COLORS[side].legs);
+          hybridForm.append("fps", String(BROWSER_YOLO_OVERLAY_FPS));
+          hybridForm.append("session_id", sessionId);
+          hybridForm.append("side", side);
+          hybridForm.append("start_sec", String(clipRange.startSec));
+          hybridForm.append("end_sec", String(clipRange.endSec));
+          const hybridJobId = await startPythonYoloHybridJob(hybridForm);
+          await rememberJob({ kind: "yolo-hybrid", jobId: hybridJobId });
+          const hybridResult = await waitForPythonYoloHybridJob(
+            hybridJobId,
+            (progress) => {
+              if (side === "reference") {
+                refSegProgress = progress;
+                refPoseProgress = progress;
+              } else {
+                practiceSegProgress = progress;
+                practicePoseProgress = progress;
+              }
+              updateStatus();
+            },
+            signal,
+          );
+          return {
+            side,
+            clipRange,
+            size,
+            segResult: hybridResult.seg,
+            poseResult: {
+              arms: hybridResult.arms,
+              legs: hybridResult.legs,
+              summary: hybridResult.poseSummary,
+            } satisfies PoseResult,
+          };
+        }
 
         const segPromise = segExists
           ? Promise.resolve<VideoResult | null>(null)
@@ -1201,48 +1328,27 @@ export async function ensureBrowserYoloOverlays(params: {
     }
 
     const runFullVideoSide = async (side: VideoSide, file: File) => {
-      const segForm = new FormData();
-      segForm.append("video", file, file.name);
-      segForm.append("color", YOLO_SEG_COLORS[side]);
-      segForm.append("fps", String(BROWSER_YOLO_OVERLAY_FPS));
-      segForm.append("session_id", sessionId);
-      segForm.append("side", side);
-
-      const poseForm = new FormData();
-      poseForm.append("video", file, file.name);
-      poseForm.append("arms_color", YOLO_POSE_COLORS[side].arms);
-      poseForm.append("legs_color", YOLO_POSE_COLORS[side].legs);
-      poseForm.append("fps", String(BROWSER_YOLO_OVERLAY_FPS));
-      poseForm.append("session_id", sessionId);
-      poseForm.append("side", side);
+      const hybridForm = new FormData();
+      hybridForm.append("video", file, file.name);
+      hybridForm.append("color", YOLO_SEG_COLORS[side]);
+      hybridForm.append("arms_color", YOLO_POSE_COLORS[side].arms);
+      hybridForm.append("legs_color", YOLO_POSE_COLORS[side].legs);
+      hybridForm.append("fps", String(BROWSER_YOLO_OVERLAY_FPS));
+      hybridForm.append("session_id", sessionId);
+      hybridForm.append("side", side);
 
       const label = side === "reference" ? "reference" : "user";
-      const segPromise = (async () => {
-        throwIfAborted(signal);
-        const segJobId = await startPythonYoloJob(segForm);
-        await rememberJob({ kind: "yolo", jobId: segJobId });
-        return waitForPythonYoloJob(
-          segJobId,
-          (progress) => onStatus(`YOLO hybrid (${label} segmentation) ${Math.round(progress * 100)}%`),
-          signal,
-        );
-      })();
-      const posePromise = (async () => {
-        throwIfAborted(signal);
-        const poseJobId = await startPythonYoloPoseJob(poseForm);
-        await rememberJob({ kind: "yolo-pose", jobId: poseJobId });
-        return waitForPythonYoloPoseJob(
-          poseJobId,
-          (progress) => onStatus(`YOLO hybrid (${label} pose) ${Math.round(progress * 100)}%`),
-          signal,
-        );
-      })();
-
-      const [seg, pose] = await Promise.all([segPromise, posePromise]);
-      return { seg, pose };
+      throwIfAborted(signal);
+      const hybridJobId = await startPythonYoloHybridJob(hybridForm);
+      await rememberJob({ kind: "yolo-hybrid", jobId: hybridJobId });
+      return waitForPythonYoloHybridJob(
+        hybridJobId,
+        (progress) => onStatus(`YOLO hybrid (${label}) ${Math.round(progress * 100)}%`),
+        signal,
+      );
     };
 
-    const [{ seg: referenceSeg, pose: referencePose }, { seg: practiceSeg, pose: practicePose }] = await Promise.all([
+    const [referenceHybrid, practiceHybrid] = await Promise.all([
       runFullVideoSide("reference", referenceFile),
       runFullVideoSide("practice", practiceFile),
     ]);
@@ -1251,42 +1357,42 @@ export async function ensureBrowserYoloOverlays(params: {
       type: "yolo",
       side: "reference",
       size: getVideoSize("reference"),
-      video: referenceSeg,
+      video: referenceHybrid.seg,
       meta: { layer: "seg" },
     });
     const userArtifact = buildFullVideoArtifact({
       type: "yolo",
       side: "practice",
       size: getVideoSize("practice"),
-      video: practiceSeg,
+      video: practiceHybrid.seg,
       meta: { layer: "seg" },
     });
     const refArmsArtifact = buildFullVideoArtifact({
       type: "yolo-pose-arms",
       side: "reference",
       size: getVideoSize("reference"),
-      video: referencePose.arms,
+      video: referenceHybrid.arms,
       meta: { layer: "arms" },
     });
     const refLegsArtifact = buildFullVideoArtifact({
       type: "yolo-pose-legs",
       side: "reference",
       size: getVideoSize("reference"),
-      video: referencePose.legs,
+      video: referenceHybrid.legs,
       meta: { layer: "legs" },
     });
     const userArmsArtifact = buildFullVideoArtifact({
       type: "yolo-pose-arms",
       side: "practice",
       size: getVideoSize("practice"),
-      video: practicePose.arms,
+      video: practiceHybrid.arms,
       meta: { layer: "arms" },
     });
     const userLegsArtifact = buildFullVideoArtifact({
       type: "yolo-pose-legs",
       side: "practice",
       size: getVideoSize("practice"),
-      video: practicePose.legs,
+      video: practiceHybrid.legs,
       meta: { layer: "legs" },
     });
 
