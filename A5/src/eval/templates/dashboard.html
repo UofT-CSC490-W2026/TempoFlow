@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+{% block title %}Dashboard — TempoFlow Eval{% endblock %}
+{% block extra_css %}
+<style>
+  .filter-bar { display:flex; align-items:center; gap:12px; margin-bottom:20px; flex-wrap:wrap; }
+  .filter-bar select {
+    padding:6px 10px; border:1px solid var(--border); border-radius:var(--radius);
+    font-size:14px; background:var(--surface);
+  }
+  .agg-table th { white-space:nowrap; }
+  .agg-table td { text-align:center; }
+  .agg-table td:first-child { text-align:left; font-weight:600; }
+  .heatmap-cell {
+    display:inline-block; width:44px; height:28px; line-height:28px;
+    text-align:center; border-radius:4px; font-size:12px; font-weight:600; color:#fff;
+  }
+  .accordion { margin-bottom:12px; }
+  .acc-header {
+    display:flex; align-items:center; gap:10px; padding:10px 14px;
+    background:var(--surface); border:1px solid var(--border);
+    border-radius:var(--radius); cursor:pointer; font-weight:600; font-size:14px;
+  }
+  .acc-header:hover { border-color:var(--accent); }
+  .acc-body {
+    display:none; padding:14px; border:1px solid var(--border);
+    border-top:none; border-radius:0 0 var(--radius) var(--radius);
+    background:var(--surface); overflow-x:auto;
+  }
+  .acc-body.open { display:block; }
+</style>
+{% endblock %}
+{% block content %}
+<h1>Evaluation Dashboard</h1>
+
+<div class="filter-bar">
+  <label style="font-size:14px;font-weight:500">Prompt Version:</label>
+  <select id="versionFilter" onchange="filterVersion(this.value)">
+    <option value="">All</option>
+    {% for v in versions %}
+    <option value="{{ v }}" {% if v == current_version %}selected{% endif %}>{{ v }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+{% if model_stats %}
+<div class="card" style="padding:0;overflow:auto">
+<table class="agg-table">
+<thead>
+<tr>
+  <th>Model</th><th>Segments</th>
+  {% for ms in metric_short %}<th>{{ ms }}</th>{% endfor %}
+  <th>Overall</th><th>Win %</th><th>Latency</th>
+</tr>
+</thead>
+<tbody>
+{% for row in model_stats %}
+<tr>
+  <td>{{ row.model_id }}</td>
+  <td>{{ row.segments_rated }}</td>
+  {% for mk in metrics %}
+  <td>{{ '%.2f' | format(row[mk] or 0) }}</td>
+  {% endfor %}
+  <td style="font-weight:700">{{ '%.2f' | format(row.overall_avg or 0) }}</td>
+  <td>{{ '%.1f' | format(row.win_rate or 0) }}%</td>
+  <td style="color:var(--text2)">{{ '%d' | format(row.avg_latency or 0) }}ms</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% else %}
+<div class="card empty-state">
+  <p style="font-size:18px;font-weight:600;margin-bottom:8px">No rated data yet</p>
+  <p>Submit expert ratings in the <a href="/review">Review</a> tab to populate the dashboard.</p>
+</div>
+{% endif %}
+
+{% if per_video %}
+<h2 style="margin-top:28px">Per-Video Breakdown</h2>
+{% for vid, segs in per_video.items() %}
+<div class="accordion">
+  <div class="acc-header" onclick="this.nextElementSibling.classList.toggle('open')">
+    <span>&#9654;</span>
+    <span>{{ vid }}</span>
+    <span style="font-weight:400;color:var(--text2);font-size:13px">({{ segs|length }} segments)</span>
+  </div>
+  <div class="acc-body">
+    <table style="font-size:13px">
+    <thead>
+    <tr>
+      <th>Segment</th><th>Model</th>
+      {% for ms in metric_short %}<th>{{ ms }}</th>{% endfor %}
+    </tr>
+    </thead>
+    <tbody>
+    {% for seg_id, models in segs|dictsort %}
+      {% for mid, scores in models|dictsort %}
+      <tr>
+        {% if loop.first %}<td rowspan="{{ models|length }}" style="font-weight:600;vertical-align:top">{{ seg_id }}</td>{% endif %}
+        <td>{{ mid }}</td>
+        {% for mk in metrics %}
+          {% set val = scores[mk] or 0 %}
+          <td><span class="heatmap-cell" style="background:{{ 'hsl(%d,70%%,45%%)' | format(((val - 1) / 4 * 120)|int) }}">{{ '%.1f' | format(val) }}</span></td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    {% endfor %}
+    </tbody>
+    </table>
+  </div>
+</div>
+{% endfor %}
+{% endif %}
+
+{% endblock %}
+
+{% block extra_js %}
+<script>
+function filterVersion(v){
+  const url=new URL(location.href);
+  if(v) url.searchParams.set('prompt_version',v);
+  else url.searchParams.delete('prompt_version');
+  location.href=url.toString();
+}
+</script>
+{% endblock %}
