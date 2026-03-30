@@ -42,6 +42,11 @@ import {
   hashEbsData,
 } from "../../lib/feedbackStorage";
 import { compareWithBodyPix, type DanceFeedback } from "../../lib/bodyPix";
+import {
+  FEEDBACK_DIFFICULTY_OPTIONS,
+  isFeedbackDifficulty,
+  type FeedbackDifficulty,
+} from "./feedbackDifficulty";
 import { buildOverlayVisualCue, pickActiveSegmentFeedback } from "./overlayFeedbackCue";
 
 type ManualViewerProps = {
@@ -62,6 +67,8 @@ type SessionViewerProps = {
 };
 
 type EbsViewerProps = ManualViewerProps | SessionViewerProps;
+
+const FEEDBACK_DIFFICULTY_STORAGE_KEY = "tempoflow-feedback-difficulty";
 
 function YoloHybridOverlayStack(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -112,6 +119,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const [viewMode, setViewMode] = useState<"side" | "overlay">("side");
   const [overlayViewSource, setOverlayViewSource] = useState<"reference" | "user" | "both">("both");
   const [overlayDetector] = useState<"bodypix" | "yolo">("yolo");
+  const [feedbackDifficulty, setFeedbackDifficulty] = useState<FeedbackDifficulty>("standard");
   const overlayVideoRef = useRef<HTMLVideoElement>(null);
   const [overlayCurrentTime, setOverlayCurrentTime] = useState(0);
   
@@ -172,6 +180,19 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const geminiFeedbackRef = useRef<GeminiFeedbackPanelHandle>(null);
   const autoGeminiQueuedRef = useRef<Set<number>>(new Set());
   const ebsFingerprint = useMemo(() => (sessionEbsData ? hashEbsData(sessionEbsData) : ""), [sessionEbsData]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const saved = window.localStorage.getItem(FEEDBACK_DIFFICULTY_STORAGE_KEY);
+    if (saved && isFeedbackDifficulty(saved)) {
+      setFeedbackDifficulty(saved);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    window.localStorage.setItem(FEEDBACK_DIFFICULTY_STORAGE_KEY, feedbackDifficulty);
+  }, [feedbackDifficulty]);
 
   const loadCachedOverlays = useCallback(async () => {
     if (!sessionId) return;
@@ -1194,8 +1215,9 @@ export function FeedbackViewer(props: EbsViewerProps) {
       segment,
       segmentIndex: activeVideoSegmentIndex,
       sharedTime: state.sharedTime,
+      difficulty: feedbackDifficulty,
     });
-  }, [activeVideoSegmentIndex, state.segments, state.sharedTime, visualFeedbackRows]);
+  }, [activeVideoSegmentIndex, feedbackDifficulty, state.segments, state.sharedTime, visualFeedbackRows]);
 
   const overlayVisualCue = useMemo(
     () =>
@@ -1261,6 +1283,28 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 ) : (
                   <div className="ebs-inline-note">Overlay lines both dancers up on one video.</div>
                 )}
+                {showFeedback ? (
+                  <div className="mode-group mode-group-compact">
+                    <div className="mode-group-label">Difficulty</div>
+                    <div className="mode-switch mode-switch-soft">
+                      {FEEDBACK_DIFFICULTY_OPTIONS.map((option) => (
+                        <button
+                          key={option.value}
+                          type="button"
+                          onClick={() => setFeedbackDifficulty(option.value)}
+                          className={[
+                            "mode-pill mode-pill-soft mode-pill-compact",
+                            feedbackDifficulty === option.value ? "active soft" : "",
+                          ].join(" ")}
+                          title={option.hint}
+                          aria-label={`Difficulty: ${option.label}`}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <div className="ebs-inline-note">Aligned videos loaded...</div>
@@ -1409,6 +1453,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 ebsData={sessionEbsData}
                 segments={state.segments}
                 sharedTime={state.sharedTime}
+                feedbackDifficulty={feedbackDifficulty}
                 onSeek={seekToShared}
                 onFeedbackReady={setGeminiFeedback}
                 referenceVideoUrl={activeReferenceVideoUrl}

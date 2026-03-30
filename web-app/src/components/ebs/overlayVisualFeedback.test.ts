@@ -93,4 +93,26 @@ describe("overlayVisualFeedback", () => {
     expect(cue?.yPct).toBeCloseTo(0.3584, 3);
     expect(cue?.title).toBe("Position diff");
   });
+
+  it("suppresses smaller visual cues on beginner difficulty", () => {
+    const active = pickActiveSegmentFeedback({
+      feedback: [
+        {
+          timestamp: 2.5,
+          segmentIndex: 0,
+          bodyRegion: "torso" as const,
+          severity: "minor" as const,
+          message: "Timing differs from the guide phrase.",
+          deviation: 0.19,
+          featureFamily: "micro_timing" as const,
+        },
+      ],
+      segment: { shared_start_sec: 0, shared_end_sec: 5 },
+      segmentIndex: 0,
+      sharedTime: 0.8,
+      difficulty: "beginner",
+    });
+
+    expect(active).toBeNull();
+  });
 });

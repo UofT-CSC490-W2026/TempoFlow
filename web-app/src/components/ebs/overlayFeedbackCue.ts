@@ -1,6 +1,7 @@
 import type { DanceFeedback, FeedbackFeatureFamily, FeedbackSeverity } from "../../lib/bodyPix";
 import type { OverlayArtifact, OverlaySegmentArtifact } from "../../lib/overlayStorage";
 import { getOverlaySegmentByIndex } from "../../lib/overlaySegments";
+import { passesVisualFeedbackDifficulty, type FeedbackDifficulty } from "./feedbackDifficulty";
 import type { EbsSegment } from "./types";
 
 type OverlayPersonSummary = {
@@ -209,12 +210,16 @@ export function pickActiveSegmentFeedback(params: {
   segment: EbsSegment | null;
   segmentIndex: number;
   sharedTime: number;
+  difficulty?: FeedbackDifficulty;
 }) {
-  const { feedback, segment, segmentIndex, sharedTime } = params;
+  const { feedback, segment, segmentIndex, sharedTime, difficulty = "standard" } = params;
   if (!segment || segmentIndex < 0) return null;
 
   const relevant = feedback.filter(
-    (row) => row.segmentIndex === segmentIndex && (SEVERITY_WEIGHTS[row.severity] ?? 0) > 0,
+    (row) =>
+      row.segmentIndex === segmentIndex &&
+      (SEVERITY_WEIGHTS[row.severity] ?? 0) > 0 &&
+      passesVisualFeedbackDifficulty(row, difficulty),
   );
   if (!relevant.length) return null;
 

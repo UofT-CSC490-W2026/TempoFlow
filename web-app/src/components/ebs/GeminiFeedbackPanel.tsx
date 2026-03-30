@@ -15,6 +15,7 @@ import {
 } from "../../lib/feedbackStorage";
 import type { OverlayArtifact } from "../../lib/overlayStorage";
 import type { GeminiFlatMove, GeminiSegmentResult } from "../../lib/geminiFeedbackTypes";
+import { filterGeminiFeedbackByDifficulty, type FeedbackDifficulty } from "./feedbackDifficulty";
 
 export type { GeminiFlatMove, GeminiMoveResult, GeminiSegmentResult } from "../../lib/geminiFeedbackTypes";
 
@@ -69,6 +70,7 @@ type GeminiFeedbackPanelProps = {
   ebsData: EbsData;
   segments: EbsSegment[];
   sharedTime: number;
+  feedbackDifficulty?: FeedbackDifficulty;
   onSeek: (time: number) => void;
   onFeedbackReady?: (moves: GeminiFlatMove[]) => void;
   /** When set, pose-based timing priors are computed client-side and sent with each segment request. */
@@ -129,6 +131,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
     ebsData,
     segments,
     sharedTime,
+    feedbackDifficulty = "standard",
     onSeek,
     onFeedbackReady,
     referenceVideoUrl,
@@ -231,10 +234,15 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
     [results],
   );
 
+  const difficultyFilteredMoves = useMemo(
+    () => filterGeminiFeedbackByDifficulty(flatMoves, feedbackDifficulty),
+    [flatMoves, feedbackDifficulty],
+  );
+
   const filtered = useMemo(() => {
-    if (filterLabel === "all") return flatMoves;
-    return flatMoves.filter((m) => m.micro_timing_label === filterLabel);
-  }, [flatMoves, filterLabel]);
+    if (filterLabel === "all") return difficultyFilteredMoves;
+    return difficultyFilteredMoves.filter((m) => m.micro_timing_label === filterLabel);
+  }, [difficultyFilteredMoves, filterLabel]);
 
   // Reset current index when filter changes
   useEffect(() => {
@@ -260,7 +268,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
 
   useEffect(() => {
     const container = listRef.current;
-    if (!container || flatMoves.length === 0 || userHovering.current) return;
+    if (!container || difficultyFilteredMoves.length === 0 || userHovering.current) return;
 
     const closest = filtered.reduce<GeminiFlatMove | null>((best, m) => {
       const mid = ((m.shared_start_sec ?? 0) + (m.shared_end_sec ?? 0)) / 2;
@@ -280,7 +288,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
     if (elTop < cTop || elTop + elH > cTop + cH) {
       container.scrollTo({ top: elTop - cH / 2 + elH / 2, behavior: "smooth" });
     }
-  }, [sharedTime, filtered, flatMoves]);
+  }, [sharedTime, filtered, difficultyFilteredMoves]);
 
   const fetchSegmentWithRetries = useCallback(
     async (segIndex: number): Promise<GeminiSegmentResult> => {
@@ -505,27 +513,24 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
   useImperativeHandle(ref, () => ({ enqueueSegmentForFeedback }), [enqueueSegmentForFeedback]);
 
   useEffect(() => {
-    const flat: GeminiFlatMove[] = results.flatMap((r) =>
-      (r.moves ?? []).map((m) => ({ ...m, segmentIndex: r.segment_index })),
-    );
-    onFeedbackReady?.(flat);
-  }, [results, onFeedbackReady]);
+    onFeedbackReady?.(difficultyFilteredMoves);
+  }, [difficultyFilteredMoves, onFeedbackReady]);
 
   const progressPercent =
     segmentsTotal > 0 ? Math.round((segmentsDone / segmentsTotal) * 100) : 0;
 
   const labelCounts = useMemo(() => {
     const counts: Record<string, number> = {};
-    for (const m of flatMoves) {
+    for (const m of difficultyFilteredMoves) {
       const l = m.micro_timing_label || "uncertain";
       counts[l] = (counts[l] || 0) + 1;
     }
     return counts;
-  }, [flatMoves]);
+  }, [difficultyFilteredMoves]);
 
   const activeFilterBadge =
     filterLabel === "all"
-      ? `All moves (${flatMoves.length})`
+      ? `All moves (${difficultyFilteredMoves.length})`
       : `${TIMING_BADGES[filterLabel]?.label ?? filterLabel} (${labelCounts[filterLabel] ?? 0})`;
   return (
     <div className="overflow-hidden rounded-[24px] border border-sky-100 bg-white shadow-sm">
@@ -557,7 +562,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
       )}
 
       {/* Results */}
-      {flatMoves.length > 0 && (
+      {difficultyFilteredMoves.length > 0 && (
         <>
           <div className="border-b border-sky-100 bg-gradient-to-r from-sky-50/90 via-white to-blue-50/70 px-4 py-2.5">
             <div className="flex items-center justify-end gap-3">
@@ -587,7 +592,7 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
                       >
                         <span>{lbl === "all" ? "All moves" : (TIMING_BADGES[lbl]?.label ?? lbl)}</span>
                         <span className={filterLabel === lbl ? "text-slate-200" : "text-slate-400"}>
-                          {lbl === "all" ? flatMoves.length : (labelCounts[lbl] ?? 0)}
+                          {lbl === "all" ? difficultyFilteredMoves.length : (labelCounts[lbl] ?? 0)}
                         </span>
                       </button>
                     ))}
@@ -713,6 +718,12 @@ export const GeminiFeedbackPanel = forwardRef<GeminiFeedbackPanelHandle, GeminiF
           <p className="text-[10px] text-slate-400 mt-3">
             Requires GEMINI_API_KEY on the Python backend
           </p>
+        </div>
+      )}
+
+      {!running && flatMoves.length > 0 && difficultyFilteredMoves.length === 0 && !error && (
+        <div className="px-5 py-8 text-center text-sm text-slate-500">
+          No Gemini moves are severe enough for the current difficulty setting.
         </div>
       )}
     </div>

@@ -40,21 +40,26 @@ vi.mock("./OverlayMaskLayer", () => ({
 vi.mock("./GeminiFeedbackPanel", () => {
   const React = require("react");
   return {
-    GeminiFeedbackPanel: React.forwardRef((props: { onFeedbackReady?: (moves: unknown[]) => void }, ref: unknown) => {
+    GeminiFeedbackPanel: React.forwardRef((props: {
+      onFeedbackReady?: (moves: unknown[]) => void;
+      feedbackDifficulty?: "beginner" | "standard" | "advanced";
+    }, ref: unknown) => {
       React.useImperativeHandle(ref, () => ({
         enqueueSegmentForFeedback: vi.fn(),
       }));
       React.useEffect(() => {
-        props.onFeedbackReady?.([
+        const moves = [
           {
             segmentIndex: 0,
             move_index: 2,
             shared_start_sec: 4,
             shared_end_sec: 6,
             micro_timing_label: "early",
+            confidence: "high",
           },
-        ]);
-      }, [props.onFeedbackReady]);
+        ];
+        props.onFeedbackReady?.(props.feedbackDifficulty === "beginner" ? [] : moves);
+      }, [props.feedbackDifficulty, props.onFeedbackReady]);
       return <div data-testid="gemini-panel" />;
     }),
     TIMING_LABEL_COLORS: {},
@@ -146,6 +151,7 @@ describe("FeedbackViewer", () => {
 
   beforeEach(() => {
     vi.clearAllMocks();
+    window.localStorage.clear();
     compareWithBodyPixMock.mockResolvedValue({
       feedback: [
         {
@@ -296,6 +302,26 @@ describe("FeedbackViewer", () => {
 
     expect(await screen.findByText("Position diff")).toBeInTheDocument();
     expect(await screen.findByText(/Upper-body shape differs from the guide phrase/i)).toBeInTheDocument();
+  });
+
+  it("filters lighter Gemini timing notes when difficulty is set to Beginner", async () => {
+    render(
+      <FeedbackViewer
+        mode="session"
+        sessionId="test-session"
+        referenceVideoUrl="ref.mp4"
+        userVideoUrl="user.mp4"
+        ebsData={{ segments: [{ shared_start_sec: 0, shared_end_sec: 10 }], alignment: {} } as any}
+      />,
+    );
+
+    expect(await screen.findByTitle("Move 2: early")).toBeInTheDocument();
+
+    fireEvent.click(screen.getByLabelText("Difficulty: Beginner"));
+
+    await waitFor(() => {
+      expect(screen.queryByTitle("Move 2: early")).not.toBeInTheDocument();
+    });
   });
 
   it("revokes object URLs on unmount in manual mode", () => {
