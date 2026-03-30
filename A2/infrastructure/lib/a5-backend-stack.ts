@@ -152,12 +152,12 @@ export class A5BackendStack extends cdk.Stack {
         {
           namespace: 'aws:autoscaling:asg',
           optionName: 'MinSize',
-          value: '2',
+          value: '1',
         },
         {
           namespace: 'aws:autoscaling:asg',
           optionName: 'MaxSize',
-          value: '4',
+          value: '1',
         },
         {
           namespace: 'aws:autoscaling:trigger',
