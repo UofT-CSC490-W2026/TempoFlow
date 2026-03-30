@@ -309,6 +309,24 @@ describe("FeedbackViewer", () => {
   });
 
   it("shows Gemini feedback as an on-video caption", async () => {
+    const { container } = render(
+      <FeedbackViewer
+        mode="session"
+        sessionId="test-session"
+        referenceVideoUrl="ref.mp4"
+        userVideoUrl="user.mp4"
+        ebsData={{ segments: [{ shared_start_sec: 0, shared_end_sec: 10 }], alignment: {} } as any}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(
+        container.querySelector(".overlay-feedback-card-gemini .overlay-feedback-copy")?.textContent,
+      ).toContain("Delay the right step slightly to match the guide.");
+    });
+  });
+
+  it("shows clickable visual and Gemini markers on the section timeline", async () => {
     render(
       <FeedbackViewer
         mode="session"
@@ -319,7 +337,23 @@ describe("FeedbackViewer", () => {
       />,
     );
 
-    expect(await screen.findByText(/Delay the right step slightly to match the guide/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Visual cue at/i)).toBeInTheDocument();
+    expect(await screen.findByLabelText(/Gemini cue at/i)).toBeInTheDocument();
+  });
+
+  it("seeks when a timeline feedback marker is clicked", async () => {
+    render(
+      <FeedbackViewer
+        mode="session"
+        sessionId="test-session"
+        referenceVideoUrl="ref.mp4"
+        userVideoUrl="user.mp4"
+        ebsData={{ segments: [{ shared_start_sec: 0, shared_end_sec: 10 }], alignment: {} } as any}
+      />,
+    );
+
+    fireEvent.click(await screen.findByLabelText(/Gemini cue at/i));
+    expect(mockActions.seekToShared).toHaveBeenCalledWith(5);
   });
 
   it("switches to practice mode when requested", () => {
@@ -362,7 +396,7 @@ describe("FeedbackViewer", () => {
   });
 
   it("filters lighter Gemini timing notes when difficulty is set to Beginner", async () => {
-    render(
+    const { container } = render(
       <FeedbackViewer
         mode="session"
         sessionId="test-session"
@@ -372,12 +406,18 @@ describe("FeedbackViewer", () => {
       />,
     );
 
-    expect(await screen.findByText(/Delay the right step slightly to match the guide/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(
+        container.querySelector(".overlay-feedback-card-gemini .overlay-feedback-copy")?.textContent,
+      ).toContain("Delay the right step slightly to match the guide.");
+    });
 
     fireEvent.click(screen.getByLabelText("Difficulty: Beginner"));
 
     await waitFor(() => {
-      expect(screen.queryByText(/Delay the right step slightly to match the guide/i)).not.toBeInTheDocument();
+      expect(
+        container.querySelector(".overlay-feedback-card-gemini .overlay-feedback-copy"),
+      ).toBeNull();
     });
   });
 
