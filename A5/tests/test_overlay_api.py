@@ -637,6 +637,27 @@ def test_overlay_bodypix_status_200(overlay_client):
         oa.BODYPX_JOBS.pop(jid, None)
 
 
+def test_extract_segmentation_mask_data_primary_only_keeps_raw_mask_index(monkeypatch):
+    cv2 = types.SimpleNamespace(
+        INTER_CUBIC=2,
+        resize=lambda arr, size, interpolation=None: arr,
+        GaussianBlur=lambda arr, ksize, sigmaX=0.0, sigmaY=0.0: arr,
+    )
+    monkeypatch.setitem(sys.modules, "cv2", cv2)
+
+    masks = np.zeros((2, 8, 8), dtype=np.float32)
+    masks[0, 1:4, 5:7] = 255.0  # smaller mask on the right
+    masks[1, 1:7, 0:3] = 255.0  # larger mask on the left
+    result = [types.SimpleNamespace(masks=types.SimpleNamespace(data=_MockTensor(masks)))]
+
+    alpha, summaries = oa._extract_segmentation_mask_data(result, 8, 8, blur_sigma=0.0, primary_only=True)
+
+    assert len(summaries) == 1
+    assert summaries[0]["anchor_x"] < 0.5
+    assert np.count_nonzero(alpha[:, 0:3]) > 0
+    assert np.count_nonzero(alpha[:, 5:7]) == 0
+
+
 class _MockTensor:
     def __init__(self, arr):
         self._arr = np.asarray(arr)
@@ -840,7 +861,7 @@ def test_run_pose_overlay_job_success(monkeypatch, tmp_path):
     oa.POSE_JOBS.pop(jid, None)
 
 
-def test_run_pose_overlay_job_renders_all_detected_people(monkeypatch, tmp_path):
+def test_run_pose_overlay_job_renders_only_primary_person(monkeypatch, tmp_path):
     _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose", pose_people=2)
     monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
     pose_weights = tmp_path / "yolo26n-pose.pt"
@@ -856,13 +877,17 @@ def test_run_pose_overlay_job_renders_all_detected_people(monkeypatch, tmp_path)
         return np.zeros((h, w, 3), dtype=np.uint8), np.zeros((h, w, 3), dtype=np.uint8)
 
     monkeypatch.setattr(oa, "_render_pose_layers", fake_render_pose_layers)
-    monkeypatch.setattr(oa, "_predict_segmentation_mask", lambda frame, model, w, h: np.ones((h, w), dtype=np.uint8) * 255)
+    monkeypatch.setattr(
+        oa,
+        "_predict_segmentation_mask",
+        lambda frame, model, w, h, **kwargs: np.ones((h, w), dtype=np.uint8) * 255,
+    )
 
     jid = "pose-multi-person"
     oa.POSE_JOBS[jid] = {"status": "queued"}
     oa._run_pose_overlay_job(jid, "/tmp/in.mp4", "/tmp/arms.webm", "/tmp/legs.webm", "#f00", "#0f0", 1)
     assert oa.POSE_JOBS[jid]["status"] == "done"
-    assert len(calls) == 2
+    assert len(calls) == 1
     oa.POSE_JOBS.pop(jid, None)
 
 
@@ -892,6 +917,61 @@ def test_run_hybrid_overlay_job_success(monkeypatch, tmp_path):
     assert len(writer.frames) >= 1
     assert "overlay_summary" in oa.HYBRID_JOBS[jid]
     assert oa.HYBRID_JOBS[jid]["pose_summary"] is not None
+    oa.HYBRID_JOBS.pop(jid, None)
+
+
+def test_run_hybrid_overlay_job_matches_segmentation_to_pose_anchor(monkeypatch, tmp_path):
+    _install_mock_cv2_and_ultralytics(monkeypatch, mode="pose")
+    monkeypatch.setattr(oa, "probe_video_metadata", lambda _: {"duration_sec": 1.0})
+    pose_weights = tmp_path / "yolo26n-pose.pt"
+    pose_weights.write_bytes(b"w")
+    seg_weights = tmp_path / "yolo26n-seg.pt"
+    seg_weights.write_bytes(b"w")
+    monkeypatch.setattr(oa, "_weights_path", lambda name: pose_weights if "pose" in name else seg_weights)
+
+    calls: list[dict[str, object]] = []
+
+    def fake_extract(result, w, h, *, blur_sigma, primary_only=False, match_anchor=None):
+        calls.append({
+            "blur_sigma": blur_sigma,
+            "primary_only": primary_only,
+            "match_anchor": match_anchor,
+        })
+        return np.ones((h, w), dtype=np.uint8) * 255, [
+            {
+                "anchor_x": 0.5,
+                "anchor_y": 0.75,
+                "center_x": 0.5,
+                "center_y": 0.5,
+                "width": 0.2,
+                "height": 0.4,
+                "min_x": 0.4,
+                "max_x": 0.6,
+                "min_y": 0.2,
+                "max_y": 0.8,
+            }
+        ]
+
+    monkeypatch.setattr(oa, "_extract_segmentation_mask_data", fake_extract)
+
+    jid = "hybrid-anchor-match"
+    oa.HYBRID_JOBS[jid] = {"status": "queued"}
+    oa._run_hybrid_overlay_job(
+        jid,
+        "/tmp/in.mp4",
+        "/tmp/seg.webm",
+        "/tmp/arms.webm",
+        "/tmp/legs.webm",
+        "#38bdf8",
+        "#f00",
+        "#0f0",
+        1,
+    )
+
+    assert oa.HYBRID_JOBS[jid]["status"] == "done"
+    assert calls
+    assert calls[0]["primary_only"] is False
+    assert calls[0]["match_anchor"] is not None
     oa.HYBRID_JOBS.pop(jid, None)
 
 

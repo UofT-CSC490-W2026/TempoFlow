@@ -439,7 +439,7 @@ def _aggregate_bounds_summaries(summary_frames: list[dict[str, float] | None]) -
     }
 
 
-def _summarize_mask_instances(mask_data: Any, w: int, h: int) -> list[dict[str, float]]:
+def _summarize_mask_instances_in_order(mask_data: Any, w: int, h: int) -> list[dict[str, float]]:
     import numpy as np  # type: ignore
 
     try:
@@ -459,7 +459,52 @@ def _summarize_mask_instances(mask_data: Any, w: int, h: int) -> list[dict[str, 
         if summary is not None:
             summaries.append(summary)
 
-    return sorted(summaries, key=lambda person: person["anchor_x"])
+    return summaries
+
+
+def _summarize_mask_instances(mask_data: Any, w: int, h: int) -> list[dict[str, float]]:
+    return sorted(_summarize_mask_instances_in_order(mask_data, w, h), key=lambda person: person["anchor_x"])
+
+
+def _select_primary_mask_index(summaries: list[dict[str, float]]) -> int | None:
+    if not summaries:
+        return None
+
+    def _score(summary: dict[str, float]) -> tuple[float, float]:
+        return (
+            float(summary.get("width", 0.0)) * float(summary.get("height", 0.0)),
+            float(summary.get("anchor_y", 0.0)),
+        )
+
+    best_idx = 0
+    best_score = _score(summaries[0])
+    for idx in range(1, len(summaries)):
+        score = _score(summaries[idx])
+        if score > best_score:
+            best_idx = idx
+            best_score = score
+    return best_idx
+
+
+def _select_mask_index_for_anchor(
+    summaries: list[dict[str, float]],
+    anchor_x: float,
+    anchor_y: float,
+) -> int | None:
+    if not summaries:
+        return None
+
+    best_idx = 0
+    best_distance = float("inf")
+    for idx, summary in enumerate(summaries):
+        distance = (
+            abs(float(summary.get("anchor_x", 0.5)) - anchor_x)
+            + abs(float(summary.get("anchor_y", 0.5)) - anchor_y) * 0.45
+        )
+        if distance < best_distance:
+            best_idx = idx
+            best_distance = distance
+    return best_idx
 
 
 def _aggregate_mask_instance_summaries(summary_frames: list[list[dict[str, float]]]) -> dict[str, Any] | None:
@@ -740,12 +785,26 @@ def _render_pose_layers(
     return arms_overlay, legs_overlay
 
 
-def _predict_segmentation_mask(frame: Any, model: Any, w: int, h: int) -> Any | None:
+def _predict_segmentation_mask(
+    frame: Any,
+    model: Any,
+    w: int,
+    h: int,
+    *,
+    match_anchor: tuple[float, float] | None = None,
+) -> Any | None:
     import cv2  # type: ignore
     import numpy as np  # type: ignore
 
     result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
-    alpha_u8, summaries = _extract_segmentation_mask_data(result, w, h, blur_sigma=1.2)
+    alpha_u8, summaries = _extract_segmentation_mask_data(
+        result,
+        w,
+        h,
+        blur_sigma=1.2,
+        primary_only=match_anchor is None,
+        match_anchor=match_anchor,
+    )
     return alpha_u8 if summaries else None
 
 
@@ -755,6 +814,8 @@ def _extract_segmentation_mask_data(
     h: int,
     *,
     blur_sigma: float,
+    primary_only: bool = False,
+    match_anchor: tuple[float, float] | None = None,
 ) -> tuple[Any, list[dict[str, float]]]:
     import cv2  # type: ignore
     import numpy as np  # type: ignore
@@ -765,12 +826,6 @@ def _extract_segmentation_mask_data(
 
     mask_tensor = result[0].masks.data
     mask_np = mask_tensor.detach().cpu().numpy()  # type: ignore[attr-defined]
-    alpha = np.max(mask_np, axis=0).astype(np.float32)
-    alpha = np.clip(alpha, 0.0, 1.0)
-    if alpha.shape[0] != h or alpha.shape[1] != w:
-        alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_CUBIC)
-    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=blur_sigma, sigmaY=blur_sigma)
-
     if mask_np.shape[1] != h or mask_np.shape[2] != w:
         resized_masks = [
             cv2.resize(mask.astype(np.float32), (w, h), interpolation=cv2.INTER_CUBIC)
@@ -778,7 +833,31 @@ def _extract_segmentation_mask_data(
         ]
         mask_np = np.stack(resized_masks, axis=0)
 
-    return (alpha * 255.0).astype(np.uint8), _summarize_mask_instances(mask_np, w, h)
+    summaries_in_order = _summarize_mask_instances_in_order(mask_np, w, h)
+    if match_anchor is not None:
+        matched_idx = _select_mask_index_for_anchor(summaries_in_order, match_anchor[0], match_anchor[1])
+        if matched_idx is not None:
+            mask_np = mask_np[matched_idx : matched_idx + 1]
+            summaries = [summaries_in_order[matched_idx]]
+        else:
+            summaries = []
+    elif primary_only:
+        primary_idx = _select_primary_mask_index(summaries_in_order)
+        if primary_idx is not None:
+            mask_np = mask_np[primary_idx : primary_idx + 1]
+            summaries = [summaries_in_order[primary_idx]]
+        else:
+            summaries = []
+    else:
+        summaries = sorted(summaries_in_order, key=lambda person: person["anchor_x"])
+
+    alpha = np.max(mask_np, axis=0).astype(np.float32)
+    alpha = np.clip(alpha, 0.0, 1.0)
+    if alpha.shape[0] != h or alpha.shape[1] != w:
+        alpha = cv2.resize(alpha, (w, h), interpolation=cv2.INTER_CUBIC)
+    alpha = cv2.GaussianBlur(alpha, (0, 0), sigmaX=blur_sigma, sigmaY=blur_sigma)
+
+    return (alpha * 255.0).astype(np.uint8), summaries
 
 
 def _build_segmentation_overlay(alpha_u8: Any, color: str) -> Any:
@@ -883,7 +962,7 @@ def _run_yolo_overlay_job(job_id: str, tmp_in: str, tmp_out: str, color: str, fp
             continue
 
         result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
-        alpha_u8, summaries = _extract_segmentation_mask_data(result, w, h, blur_sigma=0.9)
+        alpha_u8, summaries = _extract_segmentation_mask_data(result, w, h, blur_sigma=0.9, primary_only=True)
         overlay_summary_frames.append(summaries)
         overlay = _build_segmentation_overlay(alpha_u8, color)
         last_overlay = overlay
@@ -1010,15 +1089,24 @@ def _run_pose_overlay_job(
         arms_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         legs_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        pose_anchor: tuple[float, float] | None = None
         if result and getattr(result[0], "keypoints", None) is not None and len(result[0].keypoints.xy) > 0:
             kp = result[0].keypoints
             instances = _iter_pose_instances(kp)
-            pose_summary_frames.append(_summarize_pose_instances(instances, w, h))
-            for xy, conf in instances:
+            primary_instance = _select_primary_pose_instance(instances)
+            selected_instances = [primary_instance] if primary_instance is not None else []
+            pose_summaries = _summarize_pose_instances(selected_instances, w, h)
+            pose_summary_frames.append(pose_summaries)
+            if pose_summaries:
+                pose_anchor = (
+                    float(pose_summaries[0].get("anchor_x", 0.5)),
+                    float(pose_summaries[0].get("anchor_y", 0.5)),
+                )
+            for xy, conf in selected_instances:
                 pose_arms_overlay, pose_legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
                 arms_overlay = np.maximum(arms_overlay, pose_arms_overlay)
                 legs_overlay = np.maximum(legs_overlay, pose_legs_overlay)
-            seg_mask = _predict_segmentation_mask(frame, seg_model, w, h)
+            seg_mask = _predict_segmentation_mask(frame, seg_model, w, h, match_anchor=pose_anchor)
             arms_overlay = _clip_overlay_to_mask(arms_overlay, seg_mask)
             legs_overlay = _clip_overlay_to_mask(legs_overlay, seg_mask)
 
@@ -1155,28 +1243,44 @@ def _run_hybrid_overlay_job(
         if rel_t + (out_dt * 0.25) < next_out_time:
             continue
 
-        seg_result = seg_model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
-        alpha_u8, seg_summaries = _extract_segmentation_mask_data(seg_result, w, h, blur_sigma=0.9)
-        seg_overlay = _build_segmentation_overlay(alpha_u8, color)
-        overlay_summary_frames.append(seg_summaries)
-
         arms_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         legs_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         pose_result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        pose_anchor: tuple[float, float] | None = None
         if pose_result and getattr(pose_result[0], "keypoints", None) is not None and len(pose_result[0].keypoints.xy) > 0:
             kp = pose_result[0].keypoints
             instances = _iter_pose_instances(kp)
-            pose_summary_frames.append(_summarize_pose_instances(instances, w, h))
-            pose_frame = _serialize_primary_pose_frame(instances)
-            for xy, conf in instances:
+            primary_instance = _select_primary_pose_instance(instances)
+            selected_instances = [primary_instance] if primary_instance is not None else []
+            pose_summaries = _summarize_pose_instances(selected_instances, w, h)
+            pose_summary_frames.append(pose_summaries)
+            if pose_summaries:
+                pose_anchor = (
+                    float(pose_summaries[0].get("anchor_x", 0.5)),
+                    float(pose_summaries[0].get("anchor_y", 0.5)),
+                )
+            pose_frame = _serialize_primary_pose_frame(selected_instances)
+            for xy, conf in selected_instances:
                 pose_arms_overlay, pose_legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
                 arms_overlay = np.maximum(arms_overlay, pose_arms_overlay)
                 legs_overlay = np.maximum(legs_overlay, pose_legs_overlay)
-            arms_overlay = _clip_overlay_to_mask(arms_overlay, alpha_u8)
-            legs_overlay = _clip_overlay_to_mask(legs_overlay, alpha_u8)
         else:
             pose_summary_frames.append([])
             pose_frame = None
+
+        seg_result = seg_model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+        alpha_u8, seg_summaries = _extract_segmentation_mask_data(
+            seg_result,
+            w,
+            h,
+            blur_sigma=0.9,
+            primary_only=pose_anchor is None,
+            match_anchor=pose_anchor,
+        )
+        seg_overlay = _build_segmentation_overlay(alpha_u8, color)
+        overlay_summary_frames.append(seg_summaries)
+        arms_overlay = _clip_overlay_to_mask(arms_overlay, alpha_u8)
+        legs_overlay = _clip_overlay_to_mask(legs_overlay, alpha_u8)
 
         last_seg = seg_overlay
         last_arms = arms_overlay

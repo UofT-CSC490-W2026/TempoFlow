@@ -40,7 +40,8 @@ import {
   getFeedbackSegment,
   hashEbsData,
 } from "../../lib/feedbackStorage";
-import type { DanceFeedback, SampledPoseFrame } from "../../lib/bodyPix";
+import { jointAnglesDegFromKeypoints, type DanceFeedback, type PoseKeypoint, type SampledPoseFrame } from "../../lib/bodyPix";
+import { normalizeKeypoints } from "../../lib/bodyPix/geometry";
 import { buildVisualFeedbackKey, getVisualFeedbackRun, storeVisualFeedbackRun } from "../../lib/visualFeedbackStorage";
 import {
   buildVisualFeedbackFromYoloArtifacts,
@@ -112,6 +113,243 @@ function getGeminiMarkerSeriousness(label: string | null | undefined): TimelineF
 }
 
 const FEEDBACK_DIFFICULTY_STORAGE_KEY = "tempoflow-feedback-difficulty";
+const OVERLAY_SCORE_CONFIDENCE = 0.35;
+
+type OverlayNormalization = {
+  scaleX: number;
+  scaleY: number;
+  translateX: number;
+  translateY: number;
+  pivotX: number;
+  pivotY: number;
+};
+
+type PoseBounds = {
+  minX: number;
+  maxX: number;
+  minY: number;
+  maxY: number;
+  area: number;
+  anchorX: number;
+  anchorY: number;
+};
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value);
+}
+
+function clamp01(value: number) {
+  return Math.max(0, Math.min(1, value));
+}
+
+function readOverlayNormalization(segment: OverlaySegmentArtifact | null) {
+  const normalization = segment?.meta?.normalization as
+    | {
+        scaleX?: number;
+        scaleY?: number;
+        translateX?: number;
+        translateY?: number;
+        pivotX?: number;
+        pivotY?: number;
+      }
+    | undefined;
+  if (!normalization) return null;
+
+  const scaleX = Number(normalization.scaleX);
+  const scaleY = Number(normalization.scaleY);
+  const translateX = Number(normalization.translateX);
+  const translateY = Number(normalization.translateY);
+  const pivotX = Number(normalization.pivotX);
+  const pivotY = Number(normalization.pivotY);
+
+  if (
+    !Number.isFinite(scaleX) ||
+    !Number.isFinite(scaleY) ||
+    !Number.isFinite(translateX) ||
+    !Number.isFinite(translateY) ||
+    !Number.isFinite(pivotX) ||
+    !Number.isFinite(pivotY)
+  ) {
+    return null;
+  }
+
+  return {
+    scaleX,
+    scaleY,
+    translateX,
+    translateY,
+    pivotX,
+    pivotY,
+  } satisfies OverlayNormalization;
+}
+
+function toOverlaySpaceKeypoints(
+  sample: SampledPoseFrame,
+  normalization: OverlayNormalization | null,
+): PoseKeypoint[] {
+  const width = Math.max(1, sample.frameWidth || 1);
+  const height = Math.max(1, sample.frameHeight || 1);
+
+  return sample.keypoints.map((keypoint) => {
+    let x = keypoint.x / width;
+    let y = keypoint.y / height;
+    if (normalization) {
+      x = normalization.pivotX + (x - normalization.pivotX) * normalization.scaleX + normalization.translateX;
+      y = normalization.pivotY + (y - normalization.pivotY) * normalization.scaleY + normalization.translateY;
+    }
+    return { ...keypoint, x, y };
+  });
+}
+
+function getNearestSegmentSample(
+  samples: SampledPoseFrame[],
+  segmentIndex: number,
+  sharedTime: number,
+) {
+  let best: SampledPoseFrame | null = null;
+  let bestDistance = Number.POSITIVE_INFINITY;
+  for (const sample of samples) {
+    if (sample.segmentIndex !== segmentIndex) continue;
+    const distance = Math.abs(sample.timestamp - sharedTime);
+    if (distance < bestDistance) {
+      best = sample;
+      bestDistance = distance;
+    }
+  }
+  return best;
+}
+
+function computePoseBounds(keypoints: PoseKeypoint[]) {
+  const visible = keypoints.filter((keypoint) => (keypoint.score ?? 0) >= OVERLAY_SCORE_CONFIDENCE);
+  if (visible.length < 4) return null;
+
+  const minX = Math.min(...visible.map((point) => point.x));
+  const maxX = Math.max(...visible.map((point) => point.x));
+  const minY = Math.min(...visible.map((point) => point.y));
+  const maxY = Math.max(...visible.map((point) => point.y));
+  const anklePoints = [keypoints[15], keypoints[16]].filter(
+    (point): point is PoseKeypoint => (point?.score ?? 0) >= OVERLAY_SCORE_CONFIDENCE,
+  );
+  const anchorX = anklePoints.length
+    ? anklePoints.reduce((sum, point) => sum + point.x, 0) / anklePoints.length
+    : (minX + maxX) / 2;
+  const anchorY = anklePoints.length
+    ? anklePoints.reduce((sum, point) => sum + point.y, 0) / anklePoints.length
+    : maxY;
+
+  return {
+    minX,
+    maxX,
+    minY,
+    maxY,
+    area: Math.max(1e-6, maxX - minX) * Math.max(1e-6, maxY - minY),
+    anchorX,
+    anchorY,
+  } satisfies PoseBounds;
+}
+
+function computeBoundsDifference(referenceBounds: PoseBounds | null, practiceBounds: PoseBounds | null) {
+  if (!referenceBounds || !practiceBounds) return 0.5;
+
+  const interWidth = Math.max(
+    0,
+    Math.min(referenceBounds.maxX, practiceBounds.maxX) - Math.max(referenceBounds.minX, practiceBounds.minX),
+  );
+  const interHeight = Math.max(
+    0,
+    Math.min(referenceBounds.maxY, practiceBounds.maxY) - Math.max(referenceBounds.minY, practiceBounds.minY),
+  );
+  const intersectionArea = interWidth * interHeight;
+  const unionArea = referenceBounds.area + practiceBounds.area - intersectionArea;
+  const iouGap = unionArea > 1e-6 ? 1 - intersectionArea / unionArea : 1;
+  const areaGap = Math.abs(referenceBounds.area - practiceBounds.area) / Math.max(referenceBounds.area, practiceBounds.area, 1e-6);
+  return clamp01(iouGap * 0.75 + areaGap * 0.25);
+}
+
+function computeAngleDifferenceScore(referenceKeypoints: PoseKeypoint[], practiceKeypoints: PoseKeypoint[]) {
+  const referenceAngles = jointAnglesDegFromKeypoints(referenceKeypoints);
+  const practiceAngles = jointAnglesDegFromKeypoints(practiceKeypoints);
+  let total = 0;
+  let count = 0;
+
+  for (const key of Object.keys(referenceAngles)) {
+    const referenceAngle = referenceAngles[key];
+    const practiceAngle = practiceAngles[key];
+    if (!isFiniteNumber(referenceAngle) || !isFiniteNumber(practiceAngle)) continue;
+    total += Math.abs(referenceAngle - practiceAngle);
+    count += 1;
+  }
+
+  if (count <= 0) return 0;
+  return clamp01((total / count) / 70);
+}
+
+function computeOverlayDifferenceScore(params: {
+  referenceSample: SampledPoseFrame;
+  practiceSample: SampledPoseFrame;
+  referenceSegment: OverlaySegmentArtifact | null;
+}) {
+  const { referenceSample, practiceSample, referenceSegment } = params;
+  const normalization = readOverlayNormalization(referenceSegment);
+  const referencePoints = toOverlaySpaceKeypoints(referenceSample, normalization);
+  const practicePoints = toOverlaySpaceKeypoints(practiceSample, null);
+
+  let positionTotal = 0;
+  let positionCount = 0;
+  for (let index = 0; index < Math.min(referencePoints.length, practicePoints.length); index += 1) {
+    const referencePoint = referencePoints[index];
+    const practicePoint = practicePoints[index];
+    if ((referencePoint?.score ?? 0) < OVERLAY_SCORE_CONFIDENCE || (practicePoint?.score ?? 0) < OVERLAY_SCORE_CONFIDENCE) {
+      continue;
+    }
+    positionTotal += Math.hypot(referencePoint.x - practicePoint.x, referencePoint.y - practicePoint.y);
+    positionCount += 1;
+  }
+  if (positionCount < 4) return null;
+
+  const normalizedReferencePoints = normalizeKeypoints(referencePoints);
+  const normalizedPracticePoints = normalizeKeypoints(practicePoints);
+  let shapeTotal = 0;
+  let shapeCount = 0;
+  for (let index = 0; index < Math.min(normalizedReferencePoints.length, normalizedPracticePoints.length); index += 1) {
+    const referencePoint = normalizedReferencePoints[index];
+    const practicePoint = normalizedPracticePoints[index];
+    if ((referencePoint?.score ?? 0) < OVERLAY_SCORE_CONFIDENCE || (practicePoint?.score ?? 0) < OVERLAY_SCORE_CONFIDENCE) {
+      continue;
+    }
+    shapeTotal += Math.hypot(referencePoint.x - practicePoint.x, referencePoint.y - practicePoint.y);
+    shapeCount += 1;
+  }
+
+  const referenceBounds = computePoseBounds(referencePoints);
+  const practiceBounds = computePoseBounds(practicePoints);
+  const boundsComponent = computeBoundsDifference(referenceBounds, practiceBounds);
+  const anchorComponent =
+    referenceBounds && practiceBounds
+      ? clamp01(
+          Math.hypot(referenceBounds.anchorX - practiceBounds.anchorX, referenceBounds.anchorY - practiceBounds.anchorY) /
+            0.12,
+        )
+      : 0.5;
+  const positionComponent = clamp01((positionTotal / Math.max(1, positionCount)) / 0.18);
+  const shapeComponent = clamp01((shapeTotal / Math.max(1, shapeCount)) / 0.24);
+  const angleComponent = computeAngleDifferenceScore(normalizedReferencePoints, normalizedPracticePoints);
+
+  return Math.max(
+    0,
+    Math.min(
+      100,
+      Math.round(
+        (boundsComponent * 0.42 +
+          positionComponent * 0.28 +
+          shapeComponent * 0.18 +
+          angleComponent * 0.07 +
+          anchorComponent * 0.05) *
+          100,
+      ),
+    ),
+  );
+}
 
 function YoloHybridOverlayStack(props: {
   videoRef: RefObject<HTMLVideoElement | null>;
@@ -876,29 +1114,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
   );
   const getNormalizedReferenceOverlayStyle = useCallback(
     (segment: OverlaySegmentArtifact | null) => {
-      const normalization = segment?.meta?.normalization as
-        | { scaleX?: number; scaleY?: number; translateX?: number; translateY?: number; pivotX?: number; pivotY?: number }
-        | undefined;
+      const normalization = readOverlayNormalization(segment);
       if (!normalization) return undefined;
-      const scaleX = Number(normalization.scaleX);
-      const scaleY = Number(normalization.scaleY);
-      const translateX = Number(normalization.translateX);
-      const translateY = Number(normalization.translateY);
-      const pivotX = Number(normalization.pivotX);
-      const pivotY = Number(normalization.pivotY);
-      if (
-        !Number.isFinite(scaleX) ||
-        !Number.isFinite(scaleY) ||
-        !Number.isFinite(translateX) ||
-        !Number.isFinite(translateY) ||
-        !Number.isFinite(pivotX) ||
-        !Number.isFinite(pivotY)
-      ) {
-        return undefined;
-      }
       return {
-        transformOrigin: `${(pivotX * 100).toFixed(3)}% ${(pivotY * 100).toFixed(3)}%`,
-        transform: `translate(${(translateX * 100).toFixed(3)}%, ${(translateY * 100).toFixed(3)}%) scale(${scaleX.toFixed(4)}, ${scaleY.toFixed(4)})`,
+        transformOrigin: `${(normalization.pivotX * 100).toFixed(3)}% ${(normalization.pivotY * 100).toFixed(3)}%`,
+        transform: `translate(${(normalization.translateX * 100).toFixed(3)}%, ${(normalization.translateY * 100).toFixed(3)}%) scale(${normalization.scaleX.toFixed(4)}, ${normalization.scaleY.toFixed(4)})`,
       };
     },
     [],
@@ -1400,6 +1620,30 @@ export function FeedbackViewer(props: EbsViewerProps) {
     ],
   );
 
+  const overlayDifferenceScore = useMemo(() => {
+    if (!sessionMode || overlayDetector !== "yolo" || activeVideoSegmentIndex < 0) return null;
+    const referenceSample = getNearestSegmentSample(visualReferenceSamples, activeVideoSegmentIndex, state.sharedTime);
+    const practiceSample = getNearestSegmentSample(visualUserSamples, activeVideoSegmentIndex, state.sharedTime);
+    if (!referenceSample || !practiceSample) return null;
+    const referenceSegment = getRenderableSegment(overlayCueReferenceArtifact, activeVideoSegmentIndex);
+    return computeOverlayDifferenceScore({
+      referenceSample,
+      practiceSample,
+      referenceSegment,
+    });
+  }, [
+    activeVideoSegmentIndex,
+    getRenderableSegment,
+    overlayCueReferenceArtifact,
+    overlayDetector,
+    sessionMode,
+    state.sharedTime,
+    visualReferenceSamples,
+    visualUserSamples,
+  ]);
+  const overlayDifferenceTone =
+    overlayDifferenceScore == null ? null : overlayDifferenceScore >= 67 ? "high" : overlayDifferenceScore >= 34 ? "medium" : "low";
+
   const activeGeminiMove = useMemo(() => {
     if (!geminiFeedback.length) return null;
 
@@ -1784,7 +2028,18 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
               <div className="timeline" style={{ position: "relative", zIndex: 10 }}>
                 <div className="timeline-header">
-                  <div className="move-tl-label">Section Timeline</div>
+                  <div className="timeline-header-main">
+                    <div className="move-tl-label">Section Timeline</div>
+                    {overlayDifferenceScore != null ? (
+                      <div className={`timeline-score-chip ${overlayDifferenceTone ?? "medium"}`} aria-live="polite">
+                        <span className="timeline-score-label">Overlay diff</span>
+                        <span className="timeline-score-value">
+                          {overlayDifferenceScore}
+                          <span>/100</span>
+                        </span>
+                      </div>
+                    ) : null}
+                  </div>
                   <div className="timeline-inline-toggle-group">
                     <label className="timeline-inline-toggle" htmlFor="chk-pause-feedback">
                       <span>Pause at feedback</span>

@@ -426,6 +426,49 @@ describe("FeedbackViewer", () => {
     expect(container.querySelector(".timeline-feedback-marker.gemini.minor")).not.toBeNull();
   });
 
+  it("shows an overlay difference score above the section timeline when yolo samples are available", async () => {
+    const makeSample = (segmentIndex: number, timestamp: number, xOffset: number) => ({
+      timestamp,
+      segmentIndex,
+      frameWidth: 64,
+      frameHeight: 48,
+      keypoints: Array.from({ length: 17 }, (_, index) => ({
+        name: `kp-${index}`,
+        x: 18 + index * 0.6 + xOffset,
+        y: 10 + index * 0.7,
+        score: 0.95,
+      })),
+      partCoverage: {
+        head: 1,
+        arms: 1,
+        torso: 1,
+        legs: 1,
+        full_body: 1,
+      },
+    });
+
+    buildVisualFeedbackFromYoloArtifactsMock.mockReturnValue({
+      feedback: [],
+      refSamples: [makeSample(0, 4.5, 0)],
+      userSamples: [makeSample(0, 4.5, 2)],
+    });
+
+    const { container } = render(
+      <FeedbackViewer
+        mode="session"
+        sessionId="test-session"
+        referenceVideoUrl="ref.mp4"
+        userVideoUrl="user.mp4"
+        ebsData={{ segments: [{ shared_start_sec: 0, shared_end_sec: 10 }], alignment: {} } as any}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByText("Overlay diff")).toBeInTheDocument();
+      expect(container.querySelector(".timeline-score-chip")).not.toBeNull();
+    });
+  });
+
   it("seeks when a timeline feedback marker is clicked", async () => {
     render(
       <FeedbackViewer

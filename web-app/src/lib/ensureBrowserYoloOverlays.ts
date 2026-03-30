@@ -14,7 +14,7 @@ import {
 } from "./overlaySegments";
 
 export const BROWSER_YOLO_OVERLAY_FPS = 12;
-export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v15";
+export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v18";
 
 type VideoSide = "reference" | "practice";
 type PoseLayer = "arms" | "legs";
@@ -215,6 +215,18 @@ type MatchedPosePair = {
   practicePerson: PosePersonSummary;
 };
 
+type OverlayBodyMeasurement = {
+  headY: number;
+  footY: number;
+  height: number;
+  width: number;
+  anchorX: number;
+  anchorY: number;
+  centerX: number;
+  centerY: number;
+  source: "segmentation" | "pose";
+};
+
 function buildBoundsFromPoseSummary(summary: PoseSummary | null): NormalizationBounds | null {
   const people = summary?.persons ?? [];
   if (!people.length) return null;
@@ -358,20 +370,29 @@ function buildNormalizationMeta(
     toNormalizationBounds(practiceSegSummary?.union) ?? buildBoundsFromPoseSummary(practicePoseSummary);
   if (!referenceBounds || !practiceBounds) return null;
 
-  const referenceScaleWidth = referenceScalePerson?.width ?? referenceBounds.width;
-  const referenceScaleHeight = referenceScalePerson?.height ?? referenceBounds.height;
-  const practiceScaleWidth = practiceScalePerson?.width ?? practiceBounds.width;
-  const practiceScaleHeight = practiceScalePerson?.height ?? practiceBounds.height;
+  const referenceMeasurement = buildBodyMeasurement({
+    segPerson: referenceScalePerson,
+    segBounds: referenceBounds,
+    posePerson: anchorPair?.referencePerson ?? null,
+    poseBounds: buildBoundsFromPoseSummary(referencePoseSummary),
+  });
+  const practiceMeasurement = buildBodyMeasurement({
+    segPerson: practiceScalePerson,
+    segBounds: practiceBounds,
+    posePerson: anchorPair?.practicePerson ?? null,
+    poseBounds: buildBoundsFromPoseSummary(practicePoseSummary),
+  });
 
-  // In overlay diff we want the blue reference stack to match the size and position
-  // of a concrete practice dancer, not just the formation envelope.
-  const scaleX = Math.max(0.08, Math.min(4.0, practiceScaleWidth / Math.max(0.01, referenceScaleWidth)));
-  const scaleY = Math.max(0.08, Math.min(4.0, practiceScaleHeight / Math.max(0.01, referenceScaleHeight)));
+  // Normalize the reference overlay to the user's body size:
+  // height = head-to-feet span, width = visible body width.
+  const scaleX = Math.max(0.08, Math.min(4.0, practiceMeasurement.width / Math.max(0.01, referenceMeasurement.width)));
+  const scaleY = Math.max(0.08, Math.min(4.0, practiceMeasurement.height / Math.max(0.01, referenceMeasurement.height)));
 
-  const pivotX = referenceScalePerson?.anchor_x ?? referenceBounds.center_x;
-  const targetX = practiceScalePerson?.anchor_x ?? practiceBounds.center_x;
-  const pivotY = referenceScalePerson?.anchor_y ?? referenceBounds.max_y;
-  const targetY = practiceScalePerson?.anchor_y ?? practiceBounds.max_y;
+  // Anchor the normalized reference overlay at the user's foot anchor.
+  const pivotX = referenceMeasurement.anchorX;
+  const targetX = practiceMeasurement.anchorX;
+  const pivotY = referenceMeasurement.anchorY;
+  const targetY = practiceMeasurement.anchorY;
 
   return {
     scaleX,
@@ -382,9 +403,11 @@ function buildNormalizationMeta(
     pivotY,
     referenceBounds,
     practiceBounds,
+    referenceBody: referenceMeasurement,
+    practiceBody: practiceMeasurement,
     normalizationSource: {
-      reference: referenceScalePerson && "min_x" in referenceScalePerson && referenceSegSummary?.persons?.length ? "segmentation" : referenceBounds.source,
-      practice: practiceScalePerson && "min_x" in practiceScalePerson && practiceSegSummary?.persons?.length ? "segmentation" : practiceBounds.source,
+      reference: referenceMeasurement.source,
+      practice: practiceMeasurement.source,
     },
     matchedPersonCount: matchedPairs.length,
     anchorPair: anchorPair
@@ -412,6 +435,41 @@ function referencePersonSummaryToDebug(person: PosePersonSummary) {
     width: person.width,
     height: person.height,
   };
+}
+
+function clampNormalized(value: number, fallback: number) {
+  return Number.isFinite(value) ? Math.max(0, Math.min(1, value)) : fallback;
+}
+
+function buildBodyMeasurement(params: {
+  segPerson?: OverlayPersonSummary | null;
+  segBounds?: NormalizationBounds | null;
+  posePerson?: PosePersonSummary | null;
+  poseBounds?: NormalizationBounds | null;
+}) {
+  const { segPerson = null, segBounds = null, posePerson = null, poseBounds = null } = params;
+  const poseLike = posePerson ?? poseBounds;
+  const segLike = segPerson ?? segBounds;
+  const headY = clampNormalized(
+    poseLike?.min_y ?? segLike?.min_y ?? 0.1,
+    0.1,
+  );
+  const footY = clampNormalized(
+    poseLike?.anchor_y ?? segLike?.anchor_y ?? segLike?.max_y ?? 0.88,
+    0.88,
+  );
+  const width = Math.max(0.05, segPerson?.width ?? segBounds?.width ?? poseLike?.width ?? 0.28);
+  return {
+    headY,
+    footY,
+    height: Math.max(0.08, footY - headY),
+    width,
+    anchorX: clampNormalized(poseLike?.anchor_x ?? segLike?.anchor_x ?? 0.5, 0.5),
+    anchorY: footY,
+    centerX: clampNormalized(poseLike?.center_x ?? segLike?.center_x ?? 0.5, 0.5),
+    centerY: clampNormalized(poseLike?.center_y ?? segLike?.center_y ?? (headY + footY) / 2, (headY + footY) / 2),
+    source: posePerson || poseBounds ? "pose" : "segmentation",
+  } satisfies OverlayBodyMeasurement;
 }
 
 function getSideVariantKey(params: {
