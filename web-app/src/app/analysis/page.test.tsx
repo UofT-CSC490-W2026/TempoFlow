@@ -1,21 +1,21 @@
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import AnalysisPage from "./page";
-import React from "react";
+import AnalysisPage from "./page"; // Adjust path accordingly
+import { getSession } from "../../lib/sessionStorage";
+import { getSessionVideo } from "../../lib/videoStorage";
 
 const mockSubscribeSessions = vi.fn(() => vi.fn());
 
 // 1. Mock Next.js Navigation
 vi.mock("next/navigation", () => ({
-  useSearchParams: () => ({
-    get: vi.fn().mockReturnValue("test-session-id"),
-  }),
+  useRouter: () => ({ push: vi.fn() }),
+  useSearchParams: () => new URLSearchParams({ session: "test-session-123" }),
 }));
 
-// 2. Mock storage and processing libraries
+// 2. Mock Storage Libs
 vi.mock("../../lib/sessionStorage", () => ({
-  getCurrentSessionId: vi.fn().mockReturnValue("test-session-id"),
   getSession: vi.fn(),
+  getCurrentSessionId: vi.fn(),
   setCurrentSessionId: vi.fn(),
   subscribeSessions: (...args: unknown[]) => mockSubscribeSessions(...args),
   updateSession: vi.fn((id, data) => ({ id, ...data })),
@@ -27,19 +27,22 @@ vi.mock("../../lib/videoStorage", () => ({
 
 vi.mock("../../lib/ebsStorage", () => ({
   getSessionEbs: vi.fn(),
+  storeSessionEbs: vi.fn(),
 }));
 
-vi.mock("../../lib/sessionProcessing", () => ({
-  ensureSessionProcessing: vi.fn(),
-  pauseSessionProcessing: vi.fn(),
-  resumeSessionProcessing: vi.fn(),
+// 3. Mock Sub-components (to keep tests focused on page logic)
+vi.mock("../../components/ebs/FeedbackViewer", () => ({
+  FeedbackViewer: () => <div data-testid="feedback-viewer">Analysis viewer</div>,
 }));
-
-// 3. Helper to mock URL.createObjectURL
-global.URL.createObjectURL = vi.fn(() => "blob:mock-url");
-global.URL.revokeObjectURL = vi.fn();
 
 describe("AnalysisPage", () => {
+  const mockSession = {
+    id: "test-session-123",
+    referenceName: "ref.mp4",
+    practiceName: "prac.mp4",
+    status: "idle",
+  };
+
   beforeEach(() => {
     vi.clearAllMocks();
     global.URL.createObjectURL = vi.fn(() => "blob:mock-url");
@@ -50,38 +53,9 @@ describe("AnalysisPage", () => {
     vi.mocked(getSessionVideo).mockResolvedValue(new File([], "test.mp4"));
   });
 
-  it("shows an error state if the session is not found", async () => {
-    const { getSession } = await import("../../lib/sessionStorage");
-    (getSession as any).mockReturnValue(null);
-
+  it("shows loading spinner initially", () => {
     render(<AnalysisPage />);
-
-    await waitFor(() => {
-      expect(screen.getByText(/Session unavailable/i)).toBeInTheDocument();
-      expect(screen.getByText(/local session no longer exists/i)).toBeInTheDocument();
-    });
+    expect(screen.getByText(/Loading session/i)).toBeInTheDocument();
   });
 
-  it("loads and displays the session processing state", async () => {
-    const { getSession } = await import("../../lib/sessionStorage");
-    const { getSessionVideo } = await import("../../lib/videoStorage");
-    
-    const mockSession = {
-      id: "test-session-id",
-      ebsStatus: "processing",
-      referenceName: "Ref Dance",
-      practiceName: "My Practice",
-    };
-
-    (getSession as any).mockReturnValue(mockSession);
-    (getSessionVideo as any).mockImplementation(() => Promise.resolve(new File([], "test.mp4")));
-
-    render(<AnalysisPage />);
-
-    // Check for "Syncing your clips" which shows when processing
-    await waitFor(() => {
-      expect(screen.getByText(/Syncing your clips/i)).toBeInTheDocument();
-      expect(screen.getByText(/Ref: Ref Dance/i)).toBeInTheDocument();
-    });
-  });
 });

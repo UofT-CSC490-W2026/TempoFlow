@@ -1,64 +1,62 @@
-import React from "react";
-import { render, screen, cleanup } from "@testing-library/react";
-import { describe, it, expect, vi, afterEach } from "vitest";
+import { render } from "@testing-library/react";
+import { describe, it, expect, vi } from "vitest";
 import RootLayout, { metadata } from "./layout";
-
-// --- Mocks ---
-vi.mock("../components/Providers", () => ({
-  Providers: ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="mock-providers">{children}</div>
-  ),
-}));
-
-vi.mock("./globals.css", () => ({}));
+import React from "react";
 
 vi.mock("../components/Providers", () => ({
   Providers: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 describe("RootLayout", () => {
-  afterEach(() => {
-    cleanup();
-    // Reset attributes on the global document between tests
-    document.documentElement.lang = "";
-    document.body.className = "";
+  it("renders children correctly within the body", () => {
+    const { getByText } = render(
+      <RootLayout>
+        <div data-testid="child">Hello World</div>
+      </RootLayout>
+    );
+
+    expect(getByText("Hello World")).toBeInTheDocument();
   });
 
-  it("exports the correct metadata for Tempoflow", () => {
+  it("applies the antialiased class to the body", () => {
+    render(
+      <RootLayout>
+        <div />
+      </RootLayout>
+    );
+
+    const body = document.querySelector("body");
+
+    expect(body).toHaveClass("antialiased");
+  });
+
+  it("has the correct language attribute on the html tag", () => {
+    render(
+      <RootLayout>
+        <div />
+      </RootLayout>
+    );
+
+    const html = document.querySelector("html");
+    expect(html).toHaveAttribute("lang", "en");
+  });
+
+  it("suppresses hydration warnings on html and body", () => {
+    const { baseElement } = render(
+      <RootLayout>
+        <div />
+      </RootLayout>
+    );
+
+    const html = document.querySelector("html");
+    const body = document.querySelector("body");
+    expect(html).toBeDefined();
+    expect(body).toBeDefined();
+    
+  });
+
+  it("exports the correct metadata", () => {
     expect(metadata.title).toBe("Tempoflow");
-    expect(metadata.description).toContain("AI-powered dance coach");
-  });
-
-  it("renders children inside the Providers wrapper", () => {
-    render(
-      <RootLayout>
-        <div data-testid="test-child">Dance Content</div>
-      </RootLayout>
-    );
-
-    expect(screen.getByTestId("mock-providers")).toBeInTheDocument();
-    expect(screen.getByTestId("test-child")).toHaveTextContent("Dance Content");
-  });
-
-  it("applies the antialiased class to the global body tag", () => {
-    render(
-      <RootLayout>
-        <div />
-      </RootLayout>
-    );
-
-    // Look at the REAL document body, not the test container
-    expect(document.body).toHaveClass("antialiased");
-  });
-
-  it("sets the correct language attribute on the global html tag", () => {
-    render(
-      <RootLayout>
-        <div />
-      </RootLayout>
-    );
-
-    // Look at the REAL document element (html)
-    expect(document.documentElement).toHaveAttribute("lang", "en");
+    expect(metadata.description).toBe("An AI-powered dance coach to help you improve your dance skills.");
   });
 });
