@@ -468,11 +468,46 @@ export function pickActiveSegmentFeedback(params: {
   );
   if (!relevant.length) return null;
 
+  if (difficulty === "advanced") {
+    const activeRows = relevant.filter((row) => {
+      const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
+      const halfWindowSec = Math.min(0.28, Math.max(0.12, duration * 0.04));
+      const startTime = Math.max(segment.shared_start_sec, row.timestamp - halfWindowSec);
+      const endTime = Math.min(segment.shared_end_sec, row.timestamp + halfWindowSec);
+      return sharedTime >= startTime && sharedTime <= endTime;
+    });
+    if (!activeRows.length) return null;
+
+    return [...activeRows].sort((a, b) => {
+      if ((b.angleDeltaPct ?? 0) !== (a.angleDeltaPct ?? 0)) {
+        return (b.angleDeltaPct ?? 0) - (a.angleDeltaPct ?? 0);
+      }
+      if (b.deviation !== a.deviation) return b.deviation - a.deviation;
+      const aDistance = Math.abs(a.timestamp - sharedTime);
+      const bDistance = Math.abs(b.timestamp - sharedTime);
+      if (aDistance !== bDistance) return aDistance - bDistance;
+      return a.timestamp - b.timestamp;
+    })[0] ?? null;
+  }
+
+  const curatedRelevant =
+    difficulty === "beginner"
+      ? [...relevant]
+          .sort((a, b) => {
+            if ((b.angleDeltaPct ?? 0) !== (a.angleDeltaPct ?? 0)) {
+              return (b.angleDeltaPct ?? 0) - (a.angleDeltaPct ?? 0);
+            }
+            if (b.deviation !== a.deviation) return b.deviation - a.deviation;
+            return a.timestamp - b.timestamp;
+          })
+          .slice(0, 2)
+      : relevant;
+
   const duration = Math.max(0.001, segment.shared_end_sec - segment.shared_start_sec);
   const phase = clamp((sharedTime - segment.shared_start_sec) / duration, 0, 1);
   const byFamily = new Map<FeedbackFeatureFamily, DanceFeedback>();
 
-  relevant.forEach((row) => {
+  curatedRelevant.forEach((row) => {
     if (!row.featureFamily) return;
     const current = byFamily.get(row.featureFamily);
     if (!current || row.deviation > current.deviation) {
@@ -481,9 +516,9 @@ export function pickActiveSegmentFeedback(params: {
   });
 
   const micro = byFamily.get("micro_timing") ?? null;
-  const position = choosePositionFeedback(relevant);
+  const position = choosePositionFeedback(curatedRelevant);
   const transition = byFamily.get("attack_transition") ?? null;
-  const strongest = chooseStrongest(relevant);
+  const strongest = chooseStrongest(curatedRelevant);
 
   const candidate =
     phase < 0.28
