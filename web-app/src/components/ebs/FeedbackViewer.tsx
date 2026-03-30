@@ -128,7 +128,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
     openPracticeMode,
     closePracticeMode,
     seekToMove,
-    replayCurrentMove,
     seekToPrevMove,
     seekToNextMove,
     setPracticeRepeatMode,
@@ -1560,43 +1559,6 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <div className="practice-note">Repeat Move stays on the current move. Repeat Section loops the full section.</div>
                 </div>
                 <div className="practice-header-actions">
-                  <div className="ebs-toggle">
-                    <label htmlFor="chk-pause-move">Pause at move end</label>
-                    <input
-                      id="chk-pause-move"
-                      type="checkbox"
-                      className="ebs-toggle-switch"
-                      checked={state.practice.pauseAtMoveEnd}
-                      onChange={(event) => setPauseAtMoveEnd(event.target.checked)}
-                      disabled={practiceRepeatMode !== "off"}
-                    />
-                  </div>
-                  <div className="mode-group">
-                    <div className="mode-group-label">Repeat</div>
-                    <div className="mode-switch mode-switch-soft">
-                      <button
-                        type="button"
-                        onClick={() => setPracticeRepeatMode("off")}
-                        className={`mode-pill mode-pill-soft ${practiceRepeatMode === "off" ? "active soft" : ""}`}
-                      >
-                        Off
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPracticeRepeatMode("move")}
-                        className={`mode-pill mode-pill-soft ${practiceRepeatMode === "move" ? "active soft" : ""}`}
-                      >
-                        Move
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setPracticeRepeatMode("section")}
-                        className={`mode-pill mode-pill-soft ${practiceRepeatMode === "section" ? "active soft" : ""}`}
-                      >
-                        Section
-                      </button>
-                    </div>
-                  </div>
                   <button className="ebs-back-btn" onClick={closePracticeMode}>
                     ← Back to Overview
                   </button>
@@ -1617,9 +1579,43 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <button className="transport-btn practice-active" onClick={togglePracticeSpeed}>
                     {practiceSpeedText}
                   </button>
-                  <button className="transport-btn transport-btn-wide" onClick={replayCurrentMove}>
-                    Restart Move
-                  </button>
+                  <label className="timeline-inline-toggle" htmlFor="chk-pause-move">
+                    <span>Pause at move end</span>
+                    <input
+                      id="chk-pause-move"
+                      type="checkbox"
+                      className="ebs-toggle-switch"
+                      checked={state.practice.pauseAtMoveEnd}
+                      onChange={(event) => setPauseAtMoveEnd(event.target.checked)}
+                      disabled={practiceRepeatMode !== "off"}
+                    />
+                  </label>
+                  <div className="repeat-inline-control">
+                    <span className="repeat-inline-label">Repeat</span>
+                    <div className="mode-switch">
+                      <button
+                        type="button"
+                        onClick={() => setPracticeRepeatMode("off")}
+                        className={`mode-pill mode-pill-compact ${practiceRepeatMode === "off" ? "active side" : ""}`}
+                      >
+                        Off
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPracticeRepeatMode("move")}
+                        className={`mode-pill mode-pill-compact ${practiceRepeatMode === "move" ? "active side" : ""}`}
+                      >
+                        Move
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setPracticeRepeatMode("section")}
+                        className={`mode-pill mode-pill-compact ${practiceRepeatMode === "section" ? "active side" : ""}`}
+                      >
+                        Section
+                      </button>
+                    </div>
+                  </div>
                   <div className="transport-info">
                     <div className="current-segment">
                       {state.practice.currentMoveIndex >= 0 ? (
@@ -1640,7 +1636,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   </div>
                   <div className="time-code">{fmtTime(state.sharedTime)}</div>
                 </div>
-                <div className="practice-shortcut-note">Space plays or pauses. Use Restart Move to jump back to the current move.</div>
+                <div className="practice-shortcut-note">Space plays or pauses. Repeat controls stay active until you switch them off.</div>
               </div>
 
               <div className="move-timeline">
