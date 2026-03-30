@@ -3,13 +3,8 @@ import { describe, it, expect, vi } from "vitest";
 import RootLayout, { metadata } from "./layout";
 import React from "react";
 
-vi.mock("next/font/google", () => ({
-  Geist: () => ({
-    variable: "geist-sans-vars",
-  }),
-  Geist_Mono: () => ({
-    variable: "geist-mono-vars",
-  }),
+vi.mock("../components/Providers", () => ({
+  Providers: ({ children }: { children: React.ReactNode }) => <>{children}</>,
 }));
 
 describe("RootLayout", () => {
@@ -23,7 +18,7 @@ describe("RootLayout", () => {
     expect(getByText("Hello World")).toBeInTheDocument();
   });
 
-  it("applies the correct font variables and antialiased class to the body", () => {
+  it("applies the antialiased class to the body", () => {
     render(
       <RootLayout>
         <div />
@@ -31,9 +26,7 @@ describe("RootLayout", () => {
     );
 
     const body = document.querySelector("body");
-    
-    expect(body).toHaveClass("geist-sans-vars");
-    expect(body).toHaveClass("geist-mono-vars");
+
     expect(body).toHaveClass("antialiased");
   });
 

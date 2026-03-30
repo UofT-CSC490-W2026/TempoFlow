@@ -995,8 +995,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
 
       const updateStatus = () => {
         const avg = (refSegProgress + refPoseProgress + practiceSegProgress + practicePoseProgress) / 4;
-        const pct = Math.max(0, Math.min(100, Math.round(avg * 100)));
-        onSegmentProgress?.(plan.index, avg);
+        const hasPendingWork = avg < 1;
+        const visibleProgress = hasPendingWork && avg <= 0 ? 0.08 : avg;
+        const pct = Math.max(0, Math.min(100, Math.round(visibleProgress * 100)));
+        onSegmentProgress?.(plan.index, visibleProgress);
         onStatus(
           `YOLO hybrid segment ${ordinal}/${total} processing… ${pct}% (segment ${plan.index + 1})`,
         );
@@ -1137,7 +1139,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
                 normalization: normalizationMeta,
                 segSummary: referenceResult.segResult.summary ?? null,
                 poseSummary: referenceResult.poseResult?.summary ?? null,
-                poseFrames: referenceResult.poseResult?.poseFrames ?? [],
+                poseFrames:
+                  referenceResult.poseResult && "poseFrames" in referenceResult.poseResult
+                    ? referenceResult.poseResult.poseFrames ?? []
+                    : [],
               },
             }),
           ),
@@ -1199,7 +1204,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
                 layer: "seg",
                 segSummary: practiceResult.segResult.summary ?? null,
                 poseSummary: practiceResult.poseResult?.summary ?? null,
-                poseFrames: practiceResult.poseResult?.poseFrames ?? [],
+                poseFrames:
+                  practiceResult.poseResult && "poseFrames" in practiceResult.poseResult
+                    ? practiceResult.poseResult.poseFrames ?? []
+                    : [],
               },
             }),
           ),

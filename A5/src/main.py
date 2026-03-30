@@ -2,7 +2,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from dotenv import load_dotenv
+try:
+    from dotenv import load_dotenv
+except ModuleNotFoundError:
+    def load_dotenv(*_args, **_kwargs):
+        return False
 
 # Load A5/.env before any code that reads os.environ (e.g. eval config, Gemini).
 load_dotenv(Path(__file__).resolve().parent.parent / ".env")

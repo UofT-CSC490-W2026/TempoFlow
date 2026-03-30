@@ -78,7 +78,9 @@ function summarizeJointAngleDiffs(referenceFrames: SampledPoseFrame[], userFrame
       const referenceAngle = referenceAngles[joint.name];
       const userAngle = userAngles[joint.name];
       if (!Number.isFinite(referenceAngle) || !Number.isFinite(userAngle)) continue;
-      deltas.push(smallestAngleDifferenceDegrees(referenceAngle, userAngle));
+      const safeReferenceAngle = referenceAngle as number;
+      const safeUserAngle = userAngle as number;
+      deltas.push(smallestAngleDifferenceDegrees(safeReferenceAngle, safeUserAngle));
     }
 
     if (deltas.length === 0) return null;
