@@ -422,21 +422,38 @@ function toneToSkeletonColor(tone: SkeletonStrokeTone) {
   }
 }
 
+function toneToSkeletonFill(tone: SkeletonStrokeTone) {
+  switch (tone) {
+    case "low":
+      return "rgba(16, 185, 129, 0.12)";
+    case "medium":
+      return "rgba(245, 158, 11, 0.14)";
+    case "high":
+      return "rgba(239, 68, 68, 0.14)";
+    case "unknown":
+    default:
+      return "rgba(148, 163, 184, 0.12)";
+  }
+}
+
 function AngleDiffSkeleton(props: { joints: JointAngleDiffBar[] }) {
   const tones = jointBarsToSkeletonTones(props.joints);
   const strokeFor = (tone: SkeletonStrokeTone) => toneToSkeletonColor(tone);
+  const fillFor = (tone: SkeletonStrokeTone) => toneToSkeletonFill(tone);
 
   return (
     <div className="timeline-angle-skeleton" aria-label="Angle score skeleton">
       <svg viewBox="0 0 120 160" role="img" aria-hidden="true">
-        <circle cx="60" cy="22" r="14" className="timeline-angle-skeleton-node" style={{ stroke: strokeFor(tones.head) }} />
-        <path d="M60 36 L60 88" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.torso) }} />
-        <path d="M42 46 L78 46" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.torso) }} />
-        <path d="M42 48 L30 80 L24 110" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.leftArm) }} />
-        <path d="M78 48 L90 80 L96 110" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.rightArm) }} />
-        <path d="M48 92 L40 120 L34 146" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.leftLeg) }} />
-        <path d="M72 92 L80 120 L86 146" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.rightLeg) }} />
-        <path d="M48 90 L72 90" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.torso) }} />
+        <circle cx="60" cy="22" r="15" className="timeline-angle-skeleton-node" style={{ stroke: strokeFor(tones.head) }} />
+        <path
+          d="M47 44 Q60 36 73 44 L69 92 Q60 100 51 92 Z"
+          className="timeline-angle-skeleton-body"
+          style={{ stroke: strokeFor(tones.torso), fill: fillFor(tones.torso) }}
+        />
+        <path d="M47 50 L37 84 L31 112" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.leftArm) }} />
+        <path d="M73 50 L83 84 L89 112" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.rightArm) }} />
+        <path d="M54 96 L46 124 L40 146" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.leftLeg) }} />
+        <path d="M66 96 L74 124 L80 146" className="timeline-angle-skeleton-line" style={{ stroke: strokeFor(tones.rightLeg) }} />
       </svg>
     </div>
   );

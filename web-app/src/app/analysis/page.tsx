@@ -6,6 +6,7 @@ import Image from "next/image";
 import { useSearchParams } from "next/navigation";
 import "../../components/ebs/ebs-viewer.css";
 
+import { AppHeader } from "../../components/AppHeader";
 import { FeedbackViewer } from "../../components/ebs/FeedbackViewer";
 import type { EbsData } from "../../components/ebs/types";
 import { getSessionEbs, storeSessionEbs } from "../../lib/ebsStorage";
@@ -434,40 +435,12 @@ function AnalysisPageContent() {
   };
 
   const header = (
-    <header className="sticky top-0 left-0 right-0 bg-white/85 backdrop-blur-md border-b border-sky-100 z-50">
-      <div className="flex items-center px-6 py-3">
-        
-        {/* 1. Left Section: Logo */}
-        <div className="flex-1">
-          <Link href="/" className="flex items-center">
-            <Image 
-              src="/logo.png" 
-              alt="TempoFlow" 
-              width={140} 
-              height={40}
-              className="rounded"
-              priority
-            />
-          </Link>
-        </div>
-
-        {/* 2. Right Section: Actions */}
-        <div className="flex-1 flex justify-end items-center gap-3">
-          <Link 
-            href="/dashboard" 
-            className="px-4 py-2 text-slate-600 hover:text-slate-900 text-sm font-medium transition-colors"
-          >
-            Dashboard
-          </Link>
-          <Link 
-            href="/upload" 
-            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-400 text-white rounded-full text-sm font-medium hover:from-blue-600 hover:to-cyan-500 transition-all"
-          >
-            New Session
-          </Link>
-        </div>
-      </div>
-    </header>
+    <AppHeader
+      primaryHref="/upload"
+      primaryLabel="New Session"
+      secondaryHref="/dashboard"
+      secondaryLabel="Dashboard"
+    />
   );
 
   const elapsedLabel = useMemo(() => {

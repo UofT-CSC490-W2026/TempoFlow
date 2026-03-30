@@ -1096,7 +1096,7 @@
   width: 54px;
   min-width: 54px;
   height: 66px;
-  padding: 4px;
+  padding: 5px;
   border-radius: 18px;
   background: radial-gradient(circle at top, rgba(255, 255, 255, 0.99), rgba(241, 245, 249, 0.96) 74%);
   border: 1px solid rgba(191, 219, 254, 0.95);
@@ -1112,10 +1112,17 @@
 .timeline-angle-skeleton-line,
 .timeline-angle-skeleton-node {
   fill: none;
-  stroke-width: 6;
+  stroke-width: 10;
   stroke-linecap: round;
   stroke-linejoin: round;
   transition: stroke 180ms ease, transform 180ms ease;
+}
+
+.timeline-angle-skeleton-body {
+  stroke-width: 7.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: stroke 180ms ease, fill 180ms ease;
 }
 
 .timeline-angle-skeleton-node {

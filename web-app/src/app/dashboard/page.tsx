@@ -2,8 +2,8 @@
 
 import { useEffect, useState } from 'react';
 import Link from 'next/link';
-import Image from 'next/image';
 
+import { AppHeader } from '../../components/AppHeader';
 import { deleteSessionMetadata, getSessions, TempoFlowSession } from '../../lib/sessionStorage';
 import { deleteSessionEbs } from '../../lib/ebsStorage';
 import { deleteSessionVideos, getSessionVideo } from '../../lib/videoStorage';
@@ -72,26 +72,7 @@ export default function DashboardPage() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,#ffffff_0%,#eef6ff_44%,#f8fbff_100%)]">
-      <div className="sticky top-0 left-0 right-0 z-10 border-b border-slate-100 bg-white/80 backdrop-blur-md">
-        <div className="flex items-center justify-between px-6 py-4">
-          <Link href="/" className="flex items-center">
-            <Image
-              src="/logo.png"
-              alt="TempoFlow"
-              width={156}
-              height={40}
-              className="h-10 w-auto"
-              priority
-            />
-          </Link>
-          <Link
-            href="/upload"
-            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-400 text-white rounded-full text-sm font-medium hover:from-blue-600 hover:to-cyan-500 transition-all active:scale-95"
-          >
-            New Session
-          </Link>
-        </div>
-      </div>
+      <AppHeader primaryHref="/upload" primaryLabel="New Session" />
 
       <div className="px-6 py-10">
         <div className="mb-8 flex flex-wrap items-center justify-between gap-3">

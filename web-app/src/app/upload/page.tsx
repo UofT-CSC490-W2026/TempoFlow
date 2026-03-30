@@ -5,6 +5,7 @@ import Link from 'next/link';
 import Image from 'next/image';
 import { useRouter } from 'next/navigation';
 
+import { AppHeader } from '../../components/AppHeader';
 import {
   createSession,
   getAnalysisMode,
@@ -487,26 +488,7 @@ export default function UploadPage() {
 
   return (
     <div className="min-h-screen bg-[linear-gradient(180deg,#f7fbff_0%,#edf7ff_34%,#f7fbff_100%)]">
-      <div className="sticky top-0 left-0 right-0 z-10 border-b border-sky-100/80 bg-white/88 backdrop-blur-md">
-        <div className="flex items-center justify-between px-6 py-4">
-          <Link href="/" className="flex items-center">
-            <Image 
-              src="/logo.png" 
-              alt="TempoFlow" 
-              width={140} 
-              height={40}
-              className="rounded"
-              priority
-            />
-          </Link>
-          <Link
-            href="/dashboard"
-            className="px-4 py-2 bg-gradient-to-r from-blue-500 to-cyan-400 text-white rounded-full text-sm font-medium hover:from-blue-600 hover:to-cyan-500 transition-all"
-          >
-            Dashboard
-          </Link>
-        </div>
-      </div>
+      <AppHeader primaryHref="/dashboard" primaryLabel="Dashboard" />
 
       <div className="px-6 py-14 md:py-20">
         <div className="mx-auto w-full max-w-5xl">
