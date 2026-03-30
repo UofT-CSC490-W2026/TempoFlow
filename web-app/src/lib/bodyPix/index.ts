@@ -20,7 +20,7 @@ export {
   extractMicroTimingFeatures,
   wrapAngleDiffRad,
 } from "./motionFeatures";
-export { meanOfSamples, stdDeviation } from "./stats";
+export { meanOfSamples, medianOfSamples, stdDeviation } from "./stats";
 export { generateDenseTimestampsForSegments, generateSampleTimestamps } from "./timestamps";
 export {
   DEFAULT_POSE_FPS,

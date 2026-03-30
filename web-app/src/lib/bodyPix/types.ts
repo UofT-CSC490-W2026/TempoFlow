@@ -34,6 +34,8 @@ export type DanceFeedback = {
   featureFamily?: FeedbackFeatureFamily;
   /** 1 = highest deviation / most important within the full run (after sorting). */
   importanceRank?: number;
+  /** Optional side hint for positioning the overlay cue on the most-off limb. */
+  focusSide?: "left" | "right" | "center";
   /** Heuristic: motion emphasis misaligned vs reference at this sample. */
   microTimingOff?: boolean;
   /** Coaching: onset, stops, release (no joint degrees). */

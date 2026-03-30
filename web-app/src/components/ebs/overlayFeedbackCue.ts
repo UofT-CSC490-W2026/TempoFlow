@@ -306,10 +306,19 @@ function getSampleCueAnchor(
 
   switch (feedback.bodyRegion) {
     case "arms":
+      if (feedback.focusSide === "left" || feedback.focusSide === "right") {
+        return getNormalizedScreenAnchor(practiceSample, ARM_KEYPOINTS[feedback.focusSide]);
+      }
       return chooseMirroredSideAnchor(practiceSample, referenceSample, ARM_KEYPOINTS);
     case "legs":
+      if (feedback.focusSide === "left" || feedback.focusSide === "right") {
+        return getNormalizedScreenAnchor(practiceSample, LEG_KEYPOINTS[feedback.focusSide]);
+      }
       return chooseMirroredSideAnchor(practiceSample, referenceSample, LEG_KEYPOINTS);
     case "torso":
+      if (feedback.focusSide === "left" || feedback.focusSide === "right") {
+        return getNormalizedScreenAnchor(practiceSample, TORSO_KEYPOINTS[feedback.focusSide]);
+      }
       return chooseMirroredSideAnchor(practiceSample, referenceSample, TORSO_KEYPOINTS);
     case "head":
       return getNormalizedScreenAnchor(practiceSample, [0, 1, 2]);

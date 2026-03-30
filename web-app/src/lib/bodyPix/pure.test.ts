@@ -10,11 +10,13 @@ import {
   generateSampleTimestamps,
   JOINT_ANGLES,
   jointAnglesDegFromKeypoints,
+  medianOfSamples,
   meanOfSamples,
   stdDeviation,
   wrapAngleDiffRad,
 } from "./index";
 import { describe, expect, it } from "vitest";
+import { normalizeKeypoints } from "./geometry";
 
 function kp(x: number, y: number, score = 1) {
   return { x, y, score };
@@ -102,6 +104,50 @@ describe("meanOfSamples", () => {
 
   it("averages non-empty arrays", () => {
     expect(meanOfSamples([2, 4, 6])).toBe(4);
+  });
+});
+
+describe("medianOfSamples", () => {
+  it("returns 0 for an empty array", () => {
+    expect(medianOfSamples([])).toBe(0);
+  });
+
+  it("returns the middle value for odd-length arrays", () => {
+    expect(medianOfSamples([9, 2, 5])).toBe(5);
+  });
+
+  it("returns the midpoint of the two middle values for even-length arrays", () => {
+    expect(medianOfSamples([8, 1, 3, 5])).toBe(4);
+  });
+});
+
+describe("normalizeKeypoints", () => {
+  it("reduces translation and torso-rotation differences between equivalent poses", () => {
+    const base = Array.from({ length: 17 }, () => kp(0, 0, 1));
+    base[5] = kp(-1, 0, 1);
+    base[6] = kp(1, 0, 1);
+    base[11] = kp(-0.8, 2, 1);
+    base[12] = kp(0.8, 2, 1);
+    base[9] = kp(-2.2, 0.3, 1);
+    base[10] = kp(2.2, 0.3, 1);
+
+    const rotated = Array.from({ length: 17 }, (_, index) => {
+      const point = base[index]!;
+      const angle = Math.PI / 6;
+      const cos = Math.cos(angle);
+      const sin = Math.sin(angle);
+      return kp(
+        point.x * cos - point.y * sin + 10,
+        point.x * sin + point.y * cos - 4,
+        point.score,
+      );
+    });
+
+    const normalizedBase = normalizeKeypoints(base);
+    const normalizedRotated = normalizeKeypoints(rotated);
+    expect(normalizedBase[9]!.x).toBeCloseTo(normalizedRotated[9]!.x, 3);
+    expect(normalizedBase[9]!.y).toBeCloseTo(normalizedRotated[9]!.y, 3);
+    expect(normalizedBase[12]!.x).toBeCloseTo(normalizedRotated[12]!.x, 3);
   });
 });
 

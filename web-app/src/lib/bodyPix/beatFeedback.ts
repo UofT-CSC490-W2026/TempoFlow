@@ -11,7 +11,7 @@ import {
   extractMicroTimingFeatures,
   wrapAngleDiffRad,
 } from "./motionFeatures";
-import { meanOfSamples } from "./stats";
+import { meanOfSamples, medianOfSamples } from "./stats";
 import type {
   AttackFeat,
   BodyRegion,
@@ -23,6 +23,14 @@ import type {
 type FrameSample = SampledPoseFrame;
 const BODY_CONFIDENCE_MIN = 0.3;
 const MIN_FEATURE_FRAME_RATIO = 0.45;
+const ARM_SIDE_KEYPOINTS = {
+  left: [5, 7, 9],
+  right: [6, 8, 10],
+} as const;
+const LEG_SIDE_KEYPOINTS = {
+  left: [11, 13, 15],
+  right: [12, 14, 16],
+} as const;
 
 function hasConfidence(keypoints: Keypoint[], indices: number[]) {
   return indices.every((index) => (keypoints[index]?.score ?? 0) >= BODY_CONFIDENCE_MIN);
@@ -33,7 +41,48 @@ function minFeatureSamples(frameCount: number) {
 }
 
 function meanIfEnough(samples: number[], minSamples: number) {
-  return samples.length >= minSamples ? meanOfSamples(samples) : null;
+  return samples.length >= minSamples ? medianOfSamples(samples) : null;
+}
+
+function averageNormalizedSideDelta(
+  referenceFrames: FrameSample[],
+  practiceFrames: FrameSample[],
+  indices: readonly number[],
+) {
+  const deltas: number[] = [];
+  for (let index = 0; index < Math.min(referenceFrames.length, practiceFrames.length); index += 1) {
+    const referencePoints = normalizeKeypoints(referenceFrames[index].keypoints);
+    const practicePoints = normalizeKeypoints(practiceFrames[index].keypoints);
+    const perFrame = indices
+      .map((keypointIndex) => {
+        const referencePoint = referencePoints[keypointIndex];
+        const practicePoint = practicePoints[keypointIndex];
+        if (!referencePoint || !practicePoint) return null;
+        if (referencePoint.score < BODY_CONFIDENCE_MIN || practicePoint.score < BODY_CONFIDENCE_MIN) return null;
+        return Math.hypot(referencePoint.x - practicePoint.x, referencePoint.y - practicePoint.y);
+      })
+      .filter((value): value is number => value != null);
+    if (!perFrame.length) continue;
+    deltas.push(meanOfSamples(perFrame));
+  }
+  return deltas.length ? meanOfSamples(deltas) : null;
+}
+
+function dominantSideForFrames(
+  referenceFrames: FrameSample[],
+  practiceFrames: FrameSample[],
+  keypoints: { left: readonly number[]; right: readonly number[] },
+): DanceFeedback["focusSide"] {
+  const leftDelta = averageNormalizedSideDelta(referenceFrames, practiceFrames, keypoints.left);
+  const rightDelta = averageNormalizedSideDelta(referenceFrames, practiceFrames, keypoints.right);
+  if (leftDelta == null && rightDelta == null) return "center";
+  if (leftDelta == null) return "right";
+  if (rightDelta == null) return "left";
+  const strongest = Math.max(leftDelta, rightDelta);
+  if (strongest < 0.06 || Math.abs(leftDelta - rightDelta) < strongest * 0.12) {
+    return "center";
+  }
+  return leftDelta > rightDelta ? "left" : "right";
 }
 
 function jointMotionBetweenFrames(prev: Keypoint[], curr: Keypoint[]): number {
@@ -329,6 +378,12 @@ export function buildFamilyFeedbackForSegment(
     deviation: dev,
     frameIndex,
     featureFamily: family,
+    focusSide:
+      family === "upper_body"
+        ? dominantSideForFrames(refSeg, userSeg, ARM_SIDE_KEYPOINTS)
+        : family === "lower_body"
+          ? dominantSideForFrames(refSeg, userSeg, LEG_SIDE_KEYPOINTS)
+          : "center",
     microTimingOff: family === "micro_timing" && dev >= 0.12,
   }));
 }

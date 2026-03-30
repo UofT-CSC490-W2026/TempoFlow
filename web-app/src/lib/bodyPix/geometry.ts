@@ -40,16 +40,63 @@ export function normalizeKeypoints(keypoints: Keypoint[]): Keypoint[] {
   const valid = keypoints.filter((kp) => kp.score > 0.3);
   if (valid.length < 2) return keypoints;
 
-  const cx = valid.reduce((s, kp) => s + kp.x, 0) / valid.length;
-  const cy = valid.reduce((s, kp) => s + kp.y, 0) / valid.length;
-  const maxDist = Math.max(
-    ...valid.map((kp) => Math.hypot(kp.x - cx, kp.y - cy)),
-    1,
-  );
+  const leftShoulder = keypoints[5];
+  const rightShoulder = keypoints[6];
+  const leftHip = keypoints[11];
+  const rightHip = keypoints[12];
+  const hasTorso =
+    (leftShoulder?.score ?? 0) > 0.3 &&
+    (rightShoulder?.score ?? 0) > 0.3 &&
+    (leftHip?.score ?? 0) > 0.3 &&
+    (rightHip?.score ?? 0) > 0.3;
+
+  const shoulderMid = hasTorso
+    ? {
+        x: (leftShoulder.x + rightShoulder.x) / 2,
+        y: (leftShoulder.y + rightShoulder.y) / 2,
+      }
+    : null;
+  const hipMid = hasTorso
+    ? {
+        x: (leftHip.x + rightHip.x) / 2,
+        y: (leftHip.y + rightHip.y) / 2,
+      }
+    : null;
+
+  const cx = hasTorso && shoulderMid && hipMid
+    ? (shoulderMid.x + hipMid.x) / 2
+    : valid.reduce((s, kp) => s + kp.x, 0) / valid.length;
+  const cy = hasTorso && shoulderMid && hipMid
+    ? (shoulderMid.y + hipMid.y) / 2
+    : valid.reduce((s, kp) => s + kp.y, 0) / valid.length;
+
+  const torsoScale =
+    hasTorso && shoulderMid && hipMid
+      ? Math.max(
+          Math.hypot(shoulderMid.x - hipMid.x, shoulderMid.y - hipMid.y),
+          Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y),
+          Math.hypot(leftHip.x - rightHip.x, leftHip.y - rightHip.y),
+          1,
+        )
+      : 0;
+  const scale =
+    torsoScale > 0
+      ? torsoScale
+      : Math.max(
+          ...valid.map((kp) => Math.hypot(kp.x - cx, kp.y - cy)),
+          1,
+        );
+  const torsoAngle =
+    hasTorso && shoulderMid && hipMid
+      ? Math.atan2(shoulderMid.y - hipMid.y, shoulderMid.x - hipMid.x)
+      : -Math.PI / 2;
+  const rotation = (-Math.PI / 2) - torsoAngle;
+  const cos = Math.cos(rotation);
+  const sin = Math.sin(rotation);
 
   return keypoints.map((kp) => ({
     ...kp,
-    x: (kp.x - cx) / maxDist,
-    y: (kp.y - cy) / maxDist,
+    x: ((kp.x - cx) * cos - (kp.y - cy) * sin) / scale,
+    y: ((kp.x - cx) * sin + (kp.y - cy) * cos) / scale,
   }));
 }
