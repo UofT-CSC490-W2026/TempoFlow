@@ -1745,10 +1745,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
     overlayDifferenceScore == null
       ? null
       : overlayDifferenceScore >= 80
-        ? "high"
+        ? "low"
         : overlayDifferenceScore >= 70
           ? "medium"
-          : "low";
+          : "high";
   const jointAngleDiffBars = useMemo(() => {
     if (!sessionMode || overlayDetector !== "yolo" || activeVideoSegmentIndex < 0) return [];
     const referenceSample = getNearestSegmentSample(visualReferenceSamples, activeVideoSegmentIndex, state.sharedTime);
