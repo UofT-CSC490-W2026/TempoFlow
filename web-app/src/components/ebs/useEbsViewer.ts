@@ -1,0 +1,677 @@
+/* Core state and behavior for the EBS viewer. */
+
+"use client";
+/* eslint-disable react-hooks/immutability */
+
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { RefObject } from "react";
+import type { EbsData, EbsSegment, PracticeMove } from "./types";
+import {
+  BEAT_FLASH_TOLERANCE,
+  SEGMENT_BOUNDARY_TOLERANCE,
+  buildMovesForSegment,
+  findActiveMoveIndex,
+  findActiveSegmentIndex,
+  getClosestBeatIndex,
+  shouldLoopPracticeSegment,
+} from "./ebsViewerLogic";
+
+export type EbsViewerRefs = {
+  refVideo: RefObject<HTMLVideoElement | null>;
+  userVideo: RefObject<HTMLVideoElement | null>;
+  overlayVideo?: RefObject<HTMLVideoElement | null>;
+};
+
+type PauseOverlayState = {
+  visible: boolean;
+  label: string;
+  completionLabel: string;
+};
+
+export type PracticeState = {
+  enabled: boolean;
+  segmentIndex: number;
+  moves: PracticeMove[];
+  currentMoveIndex: number;
+  doneMoveIndexes: number[];
+  loopSegment: boolean;
+  loopMove: boolean;
+  pauseAtMoveEnd: boolean;
+  playbackRate: number;
+};
+
+export type EbsViewerState = {
+  ebs: EbsData | null;
+  segments: EbsSegment[];
+  beats: number[];
+  sharedLen: number;
+  isPlaying: boolean;
+  mainPlaybackRate: number;
+  pauseAtSegmentEnd: boolean;
+  currentSegmentIndex: number;
+  sharedTime: number;
+  refTime: number;
+  userTime: number;
+  lastBeatIndex: number;
+  beatFlashOn: boolean;
+  doneSegmentIndexes: number[];
+  pauseOverlay: PauseOverlayState;
+  practice: PracticeState;
+};
+
+export type EbsViewerApi = {
+  state: EbsViewerState;
+  loadFromJson: (data: EbsData) => void;
+  resetViewer: () => void;
+  hidePauseOverlay: () => void;
+  showPauseOverlay: (label: string, completionLabel: string) => void;
+  seekToShared: (sec: number) => void;
+  seekToSegment: (idx: number) => void;
+  seekToPrevSegment: () => void;
+  seekToNextSegment: () => void;
+  togglePlay: () => void;
+  pausePlayback: () => void;
+  playSegment: (idx: number) => void;
+  setPauseAtSegmentEnd: (value: boolean) => void;
+  toggleMainSpeed: () => void;
+  markSegmentDone: (idx: number) => void;
+  openPracticeMode: (segmentIndex: number) => void;
+  closePracticeMode: () => void;
+  seekToMove: (idx: number) => void;
+  replayCurrentMove: () => void;
+  seekToPrevMove: () => void;
+  seekToNextMove: () => void;
+  setPracticeRepeatMode: (mode: "off" | "move" | "section") => void;
+  setPracticeLoop: (value: boolean) => void;
+  setPauseAtMoveEnd: (value: boolean) => void;
+  togglePracticeSpeed: () => void;
+};
+
+export function useEbsViewer({ refVideo, userVideo, overlayVideo }: EbsViewerRefs): EbsViewerApi {
+  const [ebs, setEbs] = useState<EbsData | null>(null);
+  const [segments, setSegments] = useState<EbsSegment[]>([]);
+  const [beats, setBeats] = useState<number[]>([]);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [mainPlaybackRate, setMainPlaybackRate] = useState(1);
+  const [pauseAtSegmentEnd, setPauseAtSegmentEnd] = useState(false);
+  const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
+  const [lastBeatIndex, setLastBeatIndex] = useState(-1);
+  const [beatFlashOn, setBeatFlashOn] = useState(false);
+  const [doneSegmentIndexes, setDoneSegmentIndexes] = useState<number[]>([]);
+  const [sharedTime, setSharedTime] = useState(0);
+  const [refTime, setRefTime] = useState(0);
+  const [userTime, setUserTime] = useState(0);
+  const [pauseOverlay, setPauseOverlay] = useState<PauseOverlayState>({
+    visible: false,
+    label: "Seg 0",
+    completionLabel: "Segment complete",
+  });
+  const [practice, setPractice] = useState<PracticeState>({
+    enabled: false,
+    segmentIndex: -1,
+    moves: [],
+    currentMoveIndex: -1,
+    doneMoveIndexes: [],
+    loopSegment: false,
+    loopMove: false,
+    pauseAtMoveEnd: false,
+    playbackRate: 0.5,
+  });
+
+  const animIdRef = useRef<number | null>(null);
+  const playingRef = useRef(false);
+  const beatFlashTimeoutRef = useRef<number | null>(null);
+
+  const alignment = ebs?.alignment;
+  const sharedLen = alignment?.shared_len_sec ?? 0;
+
+  const hidePauseOverlay = useCallback(() => {
+    setPauseOverlay((prev) => ({ ...prev, visible: false }));
+  }, []);
+
+  const showPauseOverlay = useCallback((label: string, completionLabel: string) => {
+    setPauseOverlay({
+      visible: true,
+      label,
+      completionLabel,
+    });
+  }, []);
+
+  const updateTimesFromDom = useCallback(() => {
+    if (!alignment) return;
+    // In overlay mode, read time from overlay video (user video with clip_2_start_sec offset)
+    if (overlayVideo?.current) {
+      const sharedTime = overlayVideo.current.currentTime - alignment.clip_2_start_sec;
+      console.log("[DEBUG] overlay time:", overlayVideo.current.currentTime, "shared:", sharedTime);
+      setSharedTime(sharedTime);
+      return;
+    }
+    if (!refVideo.current || !userVideo.current) return;
+    setRefTime(refVideo.current.currentTime);
+    setUserTime(userVideo.current.currentTime);
+    setSharedTime(refVideo.current.currentTime - alignment.clip_1_start_sec);
+  }, [alignment, refVideo, userVideo, overlayVideo]);
+
+  const syncUserToRef = useCallback(() => {
+    if (!refVideo.current || !userVideo.current || !alignment) return;
+    // Skip sync if overlay video is active (overlay mode handles its own sync)
+    if (overlayVideo?.current) return;
+    const refElement = refVideo.current;
+    const userElement = userVideo.current;
+    const refShared = refElement.currentTime - alignment.clip_1_start_sec;
+    const userShared = userElement.currentTime - alignment.clip_2_start_sec;
+    if (Math.abs(refShared - userShared) > 0.05) {
+      userElement.currentTime = alignment.clip_2_start_sec + refShared;
+    }
+  }, [alignment, refVideo, userVideo, overlayVideo]);
+
+  const seekToSharedInternal = useCallback(
+    (sec: number, keepPauseOverlay: boolean) => {
+      if (!alignment) return;
+      const clamped = Math.max(0, Math.min(sec, sharedLen));
+      // In overlay mode, seek overlay video (user video with clip_2_start_sec offset)
+      if (overlayVideo?.current) {
+        overlayVideo.current.currentTime = alignment.clip_2_start_sec + clamped;
+        if (!keepPauseOverlay) {
+          hidePauseOverlay();
+        }
+        setSharedTime(clamped);
+        return;
+      }
+      if (!refVideo.current || !userVideo.current) return;
+      const refElement = refVideo.current;
+      const userElement = userVideo.current;
+      refElement.currentTime = alignment.clip_1_start_sec + clamped;
+      userElement.currentTime = alignment.clip_2_start_sec + clamped;
+      if (!keepPauseOverlay) {
+        hidePauseOverlay();
+      }
+      updateTimesFromDom();
+    },
+    [alignment, hidePauseOverlay, refVideo, sharedLen, updateTimesFromDom, userVideo, overlayVideo],
+  );
+
+  const seekToShared = useCallback(
+    (sec: number) => {
+      seekToSharedInternal(sec, false);
+    },
+    [seekToSharedInternal],
+  );
+
+  const markSegmentDone = useCallback((idx: number) => {
+    setDoneSegmentIndexes((prev) => (prev.includes(idx) ? prev : [...prev, idx]));
+  }, []);
+
+  const buildMoves = useCallback(
+    (segmentIndex: number): PracticeMove[] => buildMovesForSegment(beats, segments, segmentIndex),
+    [beats, segments],
+  );
+
+  const pausePlayback = useCallback(() => {
+    playingRef.current = false;
+    refVideo.current?.pause();
+    userVideo.current?.pause();
+    overlayVideo?.current?.pause();
+    setIsPlaying(false);
+    if (animIdRef.current != null) {
+      window.cancelAnimationFrame(animIdRef.current);
+      animIdRef.current = null;
+    }
+  }, [refVideo, userVideo, overlayVideo]);
+
+  const startPlayback = useCallback(() => {
+    console.log("[DEBUG] startPlayback called, overlayVideo?.current:", overlayVideo?.current ? "exists" : "null");
+    if (overlayVideo?.current) {
+      // Overlay mode: play only overlay video
+      hidePauseOverlay();
+      playingRef.current = true;
+      void overlayVideo.current.play().catch((e) => { console.log("[DEBUG] overlay play error:", e); });
+      setIsPlaying(true);
+
+      const tick = () => {
+        updateTimesFromDom();
+        if (playingRef.current) {
+          animIdRef.current = window.requestAnimationFrame(tick);
+        }
+      };
+
+      if (animIdRef.current != null) {
+        window.cancelAnimationFrame(animIdRef.current);
+      }
+      animIdRef.current = window.requestAnimationFrame(tick);
+      return;
+    }
+    if (!refVideo.current || !userVideo.current) return;
+    hidePauseOverlay();
+    playingRef.current = true;
+    void refVideo.current.play().catch(() => undefined);
+    void userVideo.current.play().catch(() => undefined);
+    setIsPlaying(true);
+
+    const tick = () => {
+      updateTimesFromDom();
+      syncUserToRef();
+      if (playingRef.current) {
+        animIdRef.current = window.requestAnimationFrame(tick);
+      }
+    };
+
+    if (animIdRef.current != null) {
+      window.cancelAnimationFrame(animIdRef.current);
+    }
+    animIdRef.current = window.requestAnimationFrame(tick);
+  }, [hidePauseOverlay, refVideo, syncUserToRef, updateTimesFromDom, userVideo, overlayVideo]);
+
+  const togglePlay = useCallback(() => {
+    console.log("[DEBUG] togglePlay called, playingRef.current:", playingRef.current, "overlayVideo?.current:", overlayVideo?.current ? "exists" : "null");
+    if (playingRef.current) {
+      pausePlayback();
+    } else {
+      startPlayback();
+    }
+  }, [pausePlayback, startPlayback]);
+
+  const playSegment = useCallback(
+    (idx: number) => {
+      if (!segments.length) return;
+      const clampedIndex = Math.max(0, Math.min(idx, segments.length - 1));
+      seekToShared(segments[clampedIndex].shared_start_sec);
+      startPlayback();
+    },
+    [seekToShared, segments, startPlayback],
+  );
+
+  const seekToSegment = useCallback(
+    (idx: number) => {
+      if (!segments.length) return;
+      const clampedIndex = Math.max(0, Math.min(idx, segments.length - 1));
+      seekToShared(segments[clampedIndex].shared_start_sec);
+    },
+    [seekToShared, segments],
+  );
+
+  const seekToPrevSegment = useCallback(() => {
+    const idx = currentSegmentIndex > 0 ? currentSegmentIndex - 1 : 0;
+    seekToSegment(idx);
+  }, [currentSegmentIndex, seekToSegment]);
+
+  const seekToNextSegment = useCallback(() => {
+    if (!segments.length) return;
+    if (currentSegmentIndex + 1 < segments.length) {
+      seekToSegment(currentSegmentIndex + 1);
+    } else if (currentSegmentIndex < 0) {
+      seekToSegment(0);
+    }
+  }, [currentSegmentIndex, seekToSegment, segments.length]);
+
+  const toggleMainSpeed = useCallback(() => {
+    // Cycle: 1 -> 0.5 -> 0.25 -> 1
+    const nextRate = mainPlaybackRate === 1 ? 0.5 : mainPlaybackRate === 0.5 ? 0.25 : 1;
+    setMainPlaybackRate(nextRate);
+    if (!practice.enabled) {
+      const refElement = refVideo.current;
+      const userElement = userVideo.current;
+      const overlayElement = overlayVideo?.current;
+      if (refElement) refElement.playbackRate = nextRate;
+      if (userElement) userElement.playbackRate = nextRate;
+      if (overlayElement) overlayElement.playbackRate = nextRate;
+    }
+  }, [mainPlaybackRate, practice.enabled, refVideo, userVideo, overlayVideo]);
+
+  const loadFromJson = useCallback((data: EbsData) => {
+    pausePlayback();
+    setEbs(data);
+    setSegments(data.segments ?? []);
+    setBeats(data.beats_shared_sec ?? []);
+    setCurrentSegmentIndex(-1);
+    setLastBeatIndex(-1);
+    setDoneSegmentIndexes([]);
+    setPractice({
+      enabled: false,
+      segmentIndex: -1,
+      moves: [],
+      currentMoveIndex: -1,
+      doneMoveIndexes: [],
+      loopSegment: false,
+      loopMove: false,
+      pauseAtMoveEnd: false,
+      playbackRate: 0.5,
+    });
+    setPauseOverlay({
+      visible: false,
+      label: "Seg 0",
+      completionLabel: "Segment complete",
+    });
+    setBeatFlashOn(false);
+    setSharedTime(0);
+    setRefTime(0);
+    setUserTime(0);
+  }, [pausePlayback]);
+
+  const resetViewer = useCallback(() => {
+    pausePlayback();
+    hidePauseOverlay();
+    setCurrentSegmentIndex(-1);
+    setLastBeatIndex(-1);
+    setDoneSegmentIndexes([]);
+    setPractice((prev) => ({
+      ...prev,
+      enabled: false,
+      segmentIndex: -1,
+        moves: [],
+        currentMoveIndex: -1,
+        doneMoveIndexes: [],
+        loopMove: false,
+      }));
+    setSharedTime(0);
+  }, [hidePauseOverlay, pausePlayback]);
+
+  const openPracticeMode = useCallback(
+    (segmentIndex: number) => {
+      if (segmentIndex < 0 || segmentIndex >= segments.length) return;
+      const moves = buildMoves(segmentIndex);
+      if (!moves.length) return;
+
+      pausePlayback();
+      hidePauseOverlay();
+      setPractice({
+        enabled: true,
+        segmentIndex,
+        moves,
+        currentMoveIndex: -1,
+        doneMoveIndexes: [],
+        loopSegment: false,
+        loopMove: false,
+        pauseAtMoveEnd: false,
+        playbackRate: 0.5,
+      });
+      const refElement = refVideo.current;
+      const userElement = userVideo.current;
+      const overlayElement = overlayVideo?.current;
+      if (refElement) refElement.playbackRate = 0.5;
+      if (userElement) userElement.playbackRate = 0.5;
+      if (overlayElement) overlayElement.playbackRate = 0.5;
+      seekToShared(moves[0].startSec);
+    },
+    [buildMoves, hidePauseOverlay, overlayVideo, pausePlayback, refVideo, seekToShared, segments.length, userVideo],
+  );
+
+  const closePracticeMode = useCallback(() => {
+    pausePlayback();
+    hidePauseOverlay();
+    setPractice((prev) => ({
+      ...prev,
+      enabled: false,
+      segmentIndex: -1,
+      moves: [],
+      currentMoveIndex: -1,
+      doneMoveIndexes: [],
+      loopMove: false,
+    }));
+    const refElement = refVideo.current;
+    const userElement = userVideo.current;
+    const overlayElement = overlayVideo?.current;
+    if (refElement) refElement.playbackRate = mainPlaybackRate;
+    if (userElement) userElement.playbackRate = mainPlaybackRate;
+    if (overlayElement) overlayElement.playbackRate = mainPlaybackRate;
+  }, [hidePauseOverlay, mainPlaybackRate, overlayVideo, pausePlayback, refVideo, userVideo]);
+
+  const seekToMove = useCallback(
+    (idx: number) => {
+      if (!practice.moves.length) return;
+      const clampedIndex = Math.max(0, Math.min(idx, practice.moves.length - 1));
+      setPractice((prev) => ({ ...prev, currentMoveIndex: clampedIndex }));
+      seekToShared(practice.moves[clampedIndex].startSec);
+    },
+    [practice.moves, seekToShared],
+  );
+
+  const replayCurrentMove = useCallback(() => {
+    if (!practice.enabled || practice.moves.length === 0) return;
+    const targetIndex =
+      practice.currentMoveIndex >= 0 && practice.currentMoveIndex < practice.moves.length
+        ? practice.currentMoveIndex
+        : 0;
+    const move = practice.moves[targetIndex];
+    setPractice((prev) => ({ ...prev, currentMoveIndex: targetIndex }));
+    seekToShared(move.startSec);
+    startPlayback();
+  }, [practice.currentMoveIndex, practice.enabled, practice.moves, seekToShared, startPlayback]);
+
+  const seekToPrevMove = useCallback(() => {
+    const idx = practice.currentMoveIndex > 0 ? practice.currentMoveIndex - 1 : 0;
+    seekToMove(idx);
+  }, [practice.currentMoveIndex, seekToMove]);
+
+  const seekToNextMove = useCallback(() => {
+    if (!practice.moves.length) return;
+    if (practice.currentMoveIndex + 1 < practice.moves.length) {
+      seekToMove(practice.currentMoveIndex + 1);
+    } else if (practice.currentMoveIndex < 0) {
+      seekToMove(0);
+    }
+  }, [practice.currentMoveIndex, practice.moves.length, seekToMove]);
+
+  const setPracticeLoop = useCallback((value: boolean) => {
+    setPractice((prev) => ({ ...prev, loopSegment: value, loopMove: false }));
+  }, []);
+
+  const setPracticeRepeatMode = useCallback((mode: "off" | "move" | "section") => {
+    setPractice((prev) => ({
+      ...prev,
+      loopMove: mode === "move",
+      loopSegment: mode === "section",
+    }));
+  }, []);
+
+  const setPauseAtMoveEnd = useCallback((value: boolean) => {
+    setPractice((prev) => ({ ...prev, pauseAtMoveEnd: value }));
+  }, []);
+
+  const togglePracticeSpeed = useCallback(() => {
+    setPractice((prev) => {
+      const nextRate = prev.playbackRate === 0.5 ? 0.25 : 0.5;
+      if (refVideo.current) refVideo.current.playbackRate = nextRate;
+      if (userVideo.current) userVideo.current.playbackRate = nextRate;
+      if (overlayVideo?.current) overlayVideo.current.playbackRate = nextRate;
+      return { ...prev, playbackRate: nextRate };
+    });
+  }, [overlayVideo, refVideo, userVideo]);
+
+  useEffect(() => {
+    if (beatFlashTimeoutRef.current != null) {
+      window.clearTimeout(beatFlashTimeoutRef.current);
+    }
+    if (lastBeatIndex < 0) {
+      setBeatFlashOn(false);
+      return;
+    }
+    setBeatFlashOn(true);
+    beatFlashTimeoutRef.current = window.setTimeout(() => {
+      setBeatFlashOn(false);
+    }, 80);
+  }, [lastBeatIndex]);
+
+  useEffect(() => {
+    if (!segments.length || !alignment) return;
+
+    if (practice.enabled) {
+      const segment = segments[practice.segmentIndex];
+      if (!segment) return;
+      const isRepeating = practice.loopMove || practice.loopSegment;
+
+      const newMoveIndex = findActiveMoveIndex(sharedTime, practice.moves);
+
+      if (newMoveIndex !== practice.currentMoveIndex) {
+        if (practice.loopMove && playingRef.current && practice.currentMoveIndex >= 0) {
+          const repeatedMove = practice.moves[practice.currentMoveIndex];
+          if (repeatedMove) {
+            seekToSharedInternal(repeatedMove.startSec, true);
+            return;
+          }
+        }
+
+        if (practice.pauseAtMoveEnd && !isRepeating && playingRef.current && practice.currentMoveIndex >= 0) {
+          const completedMove = practice.moves[practice.currentMoveIndex];
+          setPractice((prev) => ({
+            ...prev,
+            currentMoveIndex: newMoveIndex,
+            doneMoveIndexes: prev.doneMoveIndexes.includes(prev.currentMoveIndex)
+              ? prev.doneMoveIndexes
+              : [...prev.doneMoveIndexes, prev.currentMoveIndex],
+          }));
+          showPauseOverlay(
+            completedMove.isTransition
+              ? `Move ${completedMove.num} (Transition)`
+              : `Move ${completedMove.num}`,
+            "Move complete",
+          );
+          pausePlayback();
+          seekToSharedInternal(completedMove.endSec, true);
+          return;
+        }
+
+        setPractice((prev) => ({ ...prev, currentMoveIndex: newMoveIndex }));
+      }
+
+      if (playingRef.current && shouldLoopPracticeSegment(sharedTime, segment)) {
+        if (practice.loopMove && practice.currentMoveIndex >= 0) {
+          const repeatedMove = practice.moves[practice.currentMoveIndex];
+          if (repeatedMove) {
+            seekToSharedInternal(repeatedMove.startSec, true);
+            return;
+          }
+        } else if (practice.loopSegment) {
+          seekToSharedInternal(segment.shared_start_sec, true);
+          setPractice((prev) => ({ ...prev, currentMoveIndex: -1 }));
+        } else {
+          pausePlayback();
+        }
+      }
+    } else {
+      const newSegmentIndex = findActiveSegmentIndex(sharedTime, segments);
+
+      if (newSegmentIndex !== currentSegmentIndex) {
+        if (pauseAtSegmentEnd && playingRef.current && currentSegmentIndex >= 0) {
+          const completedIndex = currentSegmentIndex;
+          markSegmentDone(completedIndex);
+          showPauseOverlay(`Seg ${completedIndex}`, "Segment complete");
+          pausePlayback();
+          seekToSharedInternal(segments[completedIndex].shared_end_sec, true);
+          setCurrentSegmentIndex(newSegmentIndex);
+          return;
+        }
+        setCurrentSegmentIndex(newSegmentIndex);
+      }
+    }
+
+    const closestBeat = getClosestBeatIndex(sharedTime, beats);
+
+    if (closestBeat >= 0 && closestBeat !== lastBeatIndex) {
+      if (
+        currentSegmentIndex < 0 ||
+        beats[closestBeat] < (segments[Math.max(currentSegmentIndex, 0)]?.shared_end_sec ?? Infinity)
+      ) {
+        setLastBeatIndex(closestBeat);
+      }
+    }
+  }, [
+    alignment,
+    beats,
+    currentSegmentIndex,
+    lastBeatIndex,
+    markSegmentDone,
+    pauseAtSegmentEnd,
+    pausePlayback,
+    practice.currentMoveIndex,
+    practice.enabled,
+    practice.loopMove,
+    practice.loopSegment,
+    practice.moves,
+    practice.pauseAtMoveEnd,
+    practice.segmentIndex,
+    segments,
+    seekToSharedInternal,
+    sharedTime,
+    showPauseOverlay,
+  ]);
+
+  useEffect(() => {
+    return () => {
+      playingRef.current = false;
+      if (animIdRef.current != null) {
+        window.cancelAnimationFrame(animIdRef.current);
+      }
+      if (beatFlashTimeoutRef.current != null) {
+        window.clearTimeout(beatFlashTimeoutRef.current);
+      }
+    };
+  }, []);
+
+  const state = useMemo<EbsViewerState>(
+    () => ({
+      ebs,
+      segments,
+      beats,
+      sharedLen,
+      isPlaying,
+      mainPlaybackRate,
+      pauseAtSegmentEnd,
+      currentSegmentIndex,
+      sharedTime,
+      refTime,
+      userTime,
+      lastBeatIndex,
+      beatFlashOn,
+      doneSegmentIndexes,
+      pauseOverlay,
+      practice,
+    }),
+    [
+      beats,
+      beatFlashOn,
+      currentSegmentIndex,
+      doneSegmentIndexes,
+      ebs,
+      isPlaying,
+      lastBeatIndex,
+      mainPlaybackRate,
+      pauseAtSegmentEnd,
+      pauseOverlay,
+      practice,
+      refTime,
+      segments,
+      sharedLen,
+      sharedTime,
+      userTime,
+    ],
+  );
+
+  return {
+    state,
+    loadFromJson,
+    resetViewer,
+    hidePauseOverlay,
+    showPauseOverlay,
+    seekToShared,
+    seekToSegment,
+    seekToPrevSegment,
+    seekToNextSegment,
+    togglePlay,
+    pausePlayback,
+    playSegment,
+    setPauseAtSegmentEnd,
+    toggleMainSpeed,
+    markSegmentDone,
+    openPracticeMode,
+    closePracticeMode,
+    seekToMove,
+    replayCurrentMove,
+    seekToPrevMove,
+    seekToNextMove,
+    setPracticeRepeatMode,
+    setPracticeLoop,
+    setPauseAtMoveEnd,
+    togglePracticeSpeed,
+  };
+}

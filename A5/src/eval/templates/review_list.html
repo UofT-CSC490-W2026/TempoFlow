@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}Review — TempoFlow Eval{% endblock %}
+{% block content %}
+<h1>Evaluation Review</h1>
+{% if videos %}
+<div class="card" style="padding:0;overflow:auto">
+<table>
+<thead>
+<tr>
+  <th>Video ID</th><th>Date</th><th>Segments</th><th>Models</th><th>Seg Rated</th><th>Experts</th><th></th>
+</tr>
+</thead>
+<tbody>
+{% for v in videos %}
+<tr>
+  <td style="font-weight:600">{{ v.video_id }}</td>
+  <td style="color:var(--text2);font-size:13px">{{ v.date or '—' }}</td>
+  <td>{{ v.segments }}</td>
+  <td>
+    {% for m in v.models %}<span class="tag">{{ m }}</span>{% endfor %}
+  </td>
+  <td>
+    {% if v.rated == v.total and v.total > 0 %}
+    <span class="badge badge-green">{{ v.rated }}/{{ v.total }}</span>
+    {% elif v.rated > 0 %}
+    <span class="badge badge-amber">{{ v.rated }}/{{ v.total }}</span>
+    {% else %}
+    <span class="badge badge-gray">0/{{ v.total }}</span>
+    {% endif %}
+  </td>
+  <td>
+    {% if v.experts_done == v.experts_max %}
+    <span class="badge badge-green">{{ v.experts_done }}/{{ v.experts_max }}</span>
+    {% elif v.experts_done > 0 %}
+    <span class="badge badge-amber">{{ v.experts_done }}/{{ v.experts_max }}</span>
+    {% else %}
+    <span class="badge badge-gray">0/{{ v.experts_max }}</span>
+    {% endif %}
+  </td>
+  <td><a class="btn btn-sm" href="/review/{{ v.video_id }}">Review</a></td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+{% else %}
+<div class="card empty-state">
+  <p style="font-size:18px;font-weight:600;margin-bottom:8px">No evaluations yet</p>
+  <p>Run a move-feedback analysis to generate evaluation data.</p>
+</div>
+{% endif %}
+{% endblock %}

@@ -29,6 +29,36 @@ What the script does:
 2. Runs `cdk bootstrap` (safe to repeat).
 3. Runs `STAGE=<arg> cdk deploy`.
 
+To also deploy the **optional** Next.js stack (`TempoFlow-Web-<stage>` — Fargate + ALB), set `DEPLOY_WEB_STACK=1` when running the deploy script (requires Docker because CDK builds the `web-app/` container image locally):
+
+```bash
+DEPLOY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+To deploy the web app with **AWS Amplify Hosting** (no local Docker required), set:
+
+```bash
+export AMPLIFY_GITHUB_REPO="owner/repo"
+export AMPLIFY_GITHUB_BRANCH="main"   # optional
+export AMPLIFY_GITHUB_ACCESS_TOKEN="ghp_..."         # classic PAT (do not commit; do not paste in chat)
+DEPLOY_AMPLIFY_WEB_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+Amplify will pull/build automatically using the PAT passed as a NoEcho CloudFormation parameter.
+
+To deploy the **A5 FastAPI backend** on **Elastic Beanstalk** (CDK zips `A5/` and uploads to S3 — **no Docker**, **no CodeConnections**):
+
+```bash
+export GEMINI_API_KEY="..."   # do not commit; avoid pasting in chat
+DEPLOY_A5_BACKEND_STACK=1 ./scripts/deploy_infra.sh dev
+```
+
+The script resolves the EB **solution stack name** for `AWS_DEFAULT_REGION` automatically. To pin one explicitly: `export A5_EB_SOLUTION_STACK='64bit Amazon Linux 2023 v…. running Python 3.12'`.
+
+You can combine flags in one run (for example Amplify + A5 + core infra): export `DEPLOY_AMPLIFY_WEB_STACK=1`, `DEPLOY_A5_BACKEND_STACK=1`, and the Amplify PAT/repo vars plus `GEMINI_API_KEY`, then run the script once.
+
+See `A2/infrastructure/README.md` for details.
+
 ### 4. Verify in AWS console
 - CloudFormation → Stack `TempoFlow-Infra-<stage>` should be `CREATE_COMPLETE`/`UPDATE_COMPLETE`.
 - Outputs tab lists the bucket + table names to plug into pipelines/web app.

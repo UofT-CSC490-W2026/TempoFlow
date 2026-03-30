@@ -31,7 +31,9 @@ yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)
-.env*
+.env.local
+.env.production
+.env.copy.local
 
 # vercel
 .vercel
@@ -41,3 +43,8 @@ yarn-error.log*
 next-env.d.ts
 
 package-lock.json
+
+.coverage
+coverage/
+htmlcov/
+public/models/*
