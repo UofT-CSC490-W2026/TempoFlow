@@ -216,12 +216,14 @@ export function OverlayVisualFeedback(props: {
   const focusTop = mediaBox.top + cue.yPct * mediaBox.height;
   const focusWidth = cue.focusSizePct * mediaBox.width;
   const focusRadius = focusWidth / 2;
-  const focusStyle = {
-    left: `${(focusLeft * 100).toFixed(2)}%`,
-    top: `${(focusTop * 100).toFixed(2)}%`,
-    width: `${(focusWidth * 100).toFixed(2)}%`,
-    ...styleVars,
-  } as CSSProperties;
+  const toFocusStyle = (params: { xPct: number; yPct: number; focusSizePct: number }) =>
+    ({
+      left: `${((mediaBox.left + params.xPct * mediaBox.width) * 100).toFixed(2)}%`,
+      top: `${((mediaBox.top + params.yPct * mediaBox.height) * 100).toFixed(2)}%`,
+      width: `${(params.focusSizePct * mediaBox.width * 100).toFixed(2)}%`,
+      ...styleVars,
+    }) as CSSProperties;
+  const focusStyle = toFocusStyle(cue);
 
   const cardStyle = {
     left: `${cardPlacement.cardLeftPx.toFixed(2)}px`,
@@ -292,6 +294,17 @@ export function OverlayVisualFeedback(props: {
           <div className="overlay-feedback-focus-core" />
         </div>
       ) : null}
+      {showFocus
+        ? cue.hotspots?.map((hotspot) => (
+            <div
+              key={hotspot.id}
+              className="overlay-feedback-focus overlay-feedback-focus-secondary"
+              style={toFocusStyle(hotspot)}
+            >
+              <div className="overlay-feedback-focus-core" />
+            </div>
+          ))
+        : null}
       <div
         ref={cardRef}
         className={[

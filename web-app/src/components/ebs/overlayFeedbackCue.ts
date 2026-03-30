@@ -1,4 +1,4 @@
-import type { DanceFeedback, FeedbackFeatureFamily, FeedbackSeverity, SampledPoseFrame } from "../../lib/bodyPix";
+import { JOINT_ANGLES, type DanceFeedback, type FeedbackFeatureFamily, type FeedbackSeverity, type SampledPoseFrame } from "../../lib/bodyPix";
 import { normalizeKeypoints } from "../../lib/bodyPix/geometry";
 import type { GeminiFlatMove } from "../../lib/geminiFeedbackTypes";
 import type { OverlayArtifact, OverlaySegmentArtifact } from "../../lib/overlayStorage";
@@ -38,6 +38,12 @@ export type OverlayVisualCue = {
   xPct: number;
   yPct: number;
   focusSizePct: number;
+  hotspots?: Array<{
+    id: string;
+    xPct: number;
+    yPct: number;
+    focusSizePct: number;
+  }>;
   horizontalAlign: "left" | "center" | "right";
   verticalAlign: "above" | "below";
 };
@@ -120,7 +126,12 @@ function summarizeMessage(feedback: DanceFeedback) {
   return `${message.slice(0, 85).trimEnd()}...`;
 }
 
-function toFeatureTitle(family: FeedbackFeatureFamily | undefined) {
+function toFeatureTitle(feedback: DanceFeedback) {
+  if (feedback.signalType === "angle_delta" || feedback.jointName) {
+    return "Angle diff";
+  }
+
+  const family = feedback.featureFamily;
   switch (family) {
     case "micro_timing":
       return "Timing cue";
@@ -226,6 +237,13 @@ function getNormalizedScreenAnchor(sample: SampledPoseFrame, keypointIndices: nu
   return averagePoint(points);
 }
 
+function getJointAnchor(sample: SampledPoseFrame, jointName: string | undefined) {
+  if (!jointName) return null;
+  const joint = JOINT_ANGLES.find((candidate) => candidate.name === jointName);
+  if (!joint) return null;
+  return getNormalizedScreenAnchor(sample, [joint.joints[1]]);
+}
+
 function scoreNormalizedSideDelta(
   referencePoints: ReturnType<typeof normalizeKeypoints>,
   practicePoints: ReturnType<typeof normalizeKeypoints>,
@@ -298,6 +316,10 @@ function getSampleCueAnchor(
   referenceSample: SampledPoseFrame | null,
 ) {
   if (!practiceSample) return null;
+  if (feedback.signalType === "angle_delta" || feedback.jointName) {
+    const jointAnchor = getJointAnchor(practiceSample, feedback.jointName);
+    if (jointAnchor) return jointAnchor;
+  }
   if (!referenceSample) {
     if (feedback.bodyRegion === "arms") return getNormalizedScreenAnchor(practiceSample, ARM_KEYPOINTS.right);
     if (feedback.bodyRegion === "legs") return getNormalizedScreenAnchor(practiceSample, LEG_KEYPOINTS.right);
@@ -499,8 +521,8 @@ export function buildOverlayVisualCue(params: {
   const anchor = sampleAnchor ?? getCueAnchor(feedback.bodyRegion, bounds);
 
   return {
-    id: `${feedback.segmentIndex}:${feedback.featureFamily ?? "generic"}:${feedback.timestamp.toFixed(3)}`,
-    title: toFeatureTitle(feedback.featureFamily),
+    id: `${feedback.segmentIndex}:${feedback.featureFamily ?? "generic"}:${feedback.jointName ?? "generic"}:${feedback.timestamp.toFixed(3)}`,
+    title: toFeatureTitle(feedback),
     message: summarizeMessage(feedback),
     severityLabel: SEVERITY_LABELS[feedback.severity] ?? "Cue",
     color: SEVERITY_COLORS[feedback.severity] ?? "#38bdf8",

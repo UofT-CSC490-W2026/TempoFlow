@@ -1,8 +1,8 @@
 "use client";
 
 import type { EbsSegment } from "../components/ebs/types";
+import { JOINT_ANGLES, jointAnglesDegFromKeypoints } from "./bodyPix";
 import { KEYPOINT_NAMES } from "./bodyPix/constants";
-import { buildFamilyFeedbackForSegment, representativeDenseFrameIndex } from "./bodyPix/beatFeedback";
 import type {
   BodyPixComparisonResult,
   BodyRegion,
@@ -30,6 +30,8 @@ const BODY_REGION_KEYPOINTS: Record<BodyRegion, number[]> = {
   legs: [11, 12, 13, 14, 15, 16],
   full_body: Array.from({ length: KEYPOINT_NAMES.length }, (_, index) => index),
 };
+export const ANGLE_SIGNAL_STANDARD_DEGREES = 30;
+const MIN_ANGLE_SIGNAL_PCT = 100;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -131,6 +133,114 @@ function buildSamplesForSegment(params: {
   });
 }
 
+function smallestAngleDifferenceDegrees(a: number, b: number) {
+  let delta = Math.abs(a - b);
+  if (delta > 180) delta = 360 - delta;
+  return delta;
+}
+
+function toSignalPercent(deltaDeg: number) {
+  return (deltaDeg / ANGLE_SIGNAL_STANDARD_DEGREES) * 100;
+}
+
+function angleSeverity(signalPct: number): DanceFeedback["severity"] {
+  if (signalPct >= 300) return "major";
+  if (signalPct >= 200) return "moderate";
+  if (signalPct >= 100) return "minor";
+  return "good";
+}
+
+function jointToBodyRegion(jointName: string): BodyRegion {
+  if (jointName.includes("elbow")) return "arms";
+  if (jointName.includes("shoulder")) return "torso";
+  return "legs";
+}
+
+function jointToFeatureFamily(jointName: string): DanceFeedback["featureFamily"] {
+  return jointName.includes("elbow") || jointName.includes("shoulder")
+    ? "upper_body"
+    : "lower_body";
+}
+
+function jointToFocusSide(jointName: string): DanceFeedback["focusSide"] {
+  if (jointName.startsWith("left")) return "left";
+  if (jointName.startsWith("right")) return "right";
+  return "center";
+}
+
+function formatJointLabel(jointName: string) {
+  return jointName.replace(/\b\w/g, (match) => match.toUpperCase());
+}
+
+function buildAngleFeedbackForSegment(params: {
+  segmentIndex: number;
+  globalOffset: number;
+  referenceSamples: SampledPoseFrame[];
+  userSamples: SampledPoseFrame[];
+}) {
+  const { segmentIndex, globalOffset, referenceSamples, userSamples } = params;
+  const frameCount = Math.min(referenceSamples.length, userSamples.length);
+  if (frameCount <= 0) return [];
+
+  const referenceAngles = referenceSamples
+    .slice(0, frameCount)
+    .map((sample) => jointAnglesDegFromKeypoints(sample.keypoints));
+  const userAngles = userSamples
+    .slice(0, frameCount)
+    .map((sample) => jointAnglesDegFromKeypoints(sample.keypoints));
+  const feedback: DanceFeedback[] = [];
+
+  for (const joint of JOINT_ANGLES) {
+    const deltas: Array<{
+      localFrameIndex: number;
+      timestamp: number;
+      deltaDeg: number;
+    }> = [];
+
+    for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+      const referenceAngle = referenceAngles[frameIndex]?.[joint.name];
+      const userAngle = userAngles[frameIndex]?.[joint.name];
+      if (!isFiniteNumber(referenceAngle) || !isFiniteNumber(userAngle)) continue;
+
+      deltas.push({
+        localFrameIndex: frameIndex,
+        timestamp: userSamples[frameIndex]?.timestamp ?? referenceSamples[frameIndex]?.timestamp ?? 0,
+        deltaDeg: smallestAngleDifferenceDegrees(referenceAngle, userAngle),
+      });
+    }
+
+    if (!deltas.length) continue;
+
+    const ranked = [...deltas].sort((a, b) => b.deltaDeg - a.deltaDeg);
+    const representativeDeg =
+      ranked.length >= 2
+        ? (ranked[0]!.deltaDeg + ranked[1]!.deltaDeg) / 2
+        : ranked[0]!.deltaDeg;
+    const signalPct = toSignalPercent(representativeDeg);
+    if (signalPct < MIN_ANGLE_SIGNAL_PCT) continue;
+
+    const peak = ranked[0]!;
+    const jointLabel = formatJointLabel(joint.name);
+    feedback.push({
+      timestamp: peak.timestamp,
+      segmentIndex,
+      bodyRegion: jointToBodyRegion(joint.name),
+      severity: angleSeverity(signalPct),
+      message: `${jointLabel} angle differs by ${Math.round(representativeDeg)}° from the guide.`,
+      deviation: signalPct / 100,
+      frameIndex: globalOffset + peak.localFrameIndex,
+      featureFamily: jointToFeatureFamily(joint.name),
+      focusSide: jointToFocusSide(joint.name),
+      jointName: joint.name,
+      angleDeltaDeg: representativeDeg,
+      angleDeltaPct: signalPct,
+      signalType: "angle_delta",
+    });
+  }
+
+  return feedback;
+}
+
 export function buildVisualFeedbackFromYoloArtifacts(params: {
   referenceArtifact: OverlayArtifact | null;
   userArtifact: OverlayArtifact | null;
@@ -163,35 +273,22 @@ export function buildVisualFeedbackFromYoloArtifacts(params: {
     refSamples.push(...refSegmentSamples);
     userSamples.push(...userSegmentSamples);
 
-    const sharedSegment = segments[segmentIndex];
-    const midT = sharedSegment
-      ? (sharedSegment.shared_start_sec + sharedSegment.shared_end_sec) / 2
-      : (refSegmentSamples[0]!.timestamp + refSegmentSamples[refSegmentSamples.length - 1]!.timestamp) / 2;
-    const localFrameIndex = representativeDenseFrameIndex(refSegmentSamples, segmentIndex);
     feedback.push(
-      ...buildFamilyFeedbackForSegment(
+      ...buildAngleFeedbackForSegment({
         segmentIndex,
-        midT,
-        globalOffset + localFrameIndex,
-        refSegmentSamples,
-        userSegmentSamples,
-      ),
+        globalOffset,
+        referenceSamples: refSegmentSamples,
+        userSamples: userSegmentSamples,
+      }),
     );
   }
 
-  const orderFam = [
-    "micro_timing",
-    "upper_body",
-    "lower_body",
-    "attack_transition",
-  ] as const;
-
   feedback.sort((a, b) => {
+    const deltaPctDiff = (b.angleDeltaPct ?? 0) - (a.angleDeltaPct ?? 0);
+    if (Math.abs(deltaPctDiff) > 1e-9) return deltaPctDiff;
     if (Math.abs(b.deviation - a.deviation) > 1e-9) return b.deviation - a.deviation;
     if (a.timestamp !== b.timestamp) return a.timestamp - b.timestamp;
-    const ai = orderFam.indexOf(a.featureFamily ?? "attack_transition");
-    const bi = orderFam.indexOf(b.featureFamily ?? "attack_transition");
-    return ai - bi;
+    return (a.jointName ?? "").localeCompare(b.jointName ?? "");
   });
 
   return {

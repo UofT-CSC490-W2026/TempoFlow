@@ -657,6 +657,16 @@
     0 0 18px color-mix(in srgb, var(--overlay-feedback-tone) 62%, transparent);
 }
 
+.overlay-feedback-focus-secondary {
+  opacity: 0.78;
+  animation-duration: 1.7s;
+}
+
+.overlay-feedback-focus-secondary .overlay-feedback-focus-core {
+  width: 8px;
+  height: 8px;
+}
+
 .overlay-feedback-card {
   position: absolute;
   width: min(280px, calc(100% - 24px));
@@ -1028,24 +1038,6 @@
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.55);
 }
 
-.timeline-score-chip.low {
-  border-color: #a7f3d0;
-  background: #ecfdf5;
-  color: #065f46;
-}
-
-.timeline-score-chip.medium {
-  border-color: #fdba74;
-  background: #fff7ed;
-  color: #9a3412;
-}
-
-.timeline-score-chip.high {
-  border-color: #fca5a5;
-  background: #fef2f2;
-  color: #991b1b;
-}
-
 .timeline-score-label {
   font-size: 10px;
   font-weight: 700;
@@ -1059,13 +1051,33 @@
   font-weight: 800;
   letter-spacing: 0.01em;
   line-height: 1;
+  color: #0f172a;
 }
 
-.timeline-score-value span {
+.timeline-score-number,
+.timeline-score-max {
   margin-left: 2px;
+}
+
+.timeline-score-max {
   font-size: 11px;
   font-weight: 700;
   opacity: 0.68;
+}
+
+.timeline-score-number.higher,
+.timeline-score-max.higher {
+  color: #15803d;
+}
+
+.timeline-score-number.lower,
+.timeline-score-max.lower {
+  color: #dc2626;
+}
+
+.timeline-score-number.equal,
+.timeline-score-max.equal {
+  color: #0f172a;
 }
 
 .timeline-joint-diff-grid {

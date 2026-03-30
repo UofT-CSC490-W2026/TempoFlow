@@ -31,6 +31,12 @@ const VISUAL_MIN_DEVIATION: Record<FeedbackDifficulty, number> = {
   advanced: 0.14,
 };
 
+const VISUAL_MIN_ANGLE_SIGNAL_PCT: Record<FeedbackDifficulty, number> = {
+  beginner: 300,
+  standard: 200,
+  advanced: 100,
+};
+
 const VISUAL_SEVERITY_SCORE = {
   good: 0,
   minor: 1,
@@ -77,9 +83,12 @@ export function isFeedbackDifficulty(value: string): value is FeedbackDifficulty
 }
 
 export function passesVisualFeedbackDifficulty(
-  feedback: Pick<DanceFeedback, "deviation" | "severity">,
+  feedback: Pick<DanceFeedback, "deviation" | "severity" | "angleDeltaPct">,
   difficulty: FeedbackDifficulty,
 ) {
+  if (typeof feedback.angleDeltaPct === "number" && Number.isFinite(feedback.angleDeltaPct)) {
+    return feedback.angleDeltaPct >= VISUAL_MIN_ANGLE_SIGNAL_PCT[difficulty];
+  }
   const severityScore = VISUAL_SEVERITY_SCORE[feedback.severity ?? "good"] ?? 0;
   return (
     feedback.deviation >= VISUAL_MIN_DEVIATION[difficulty] &&

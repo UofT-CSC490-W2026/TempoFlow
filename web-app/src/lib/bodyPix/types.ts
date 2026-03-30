@@ -42,6 +42,12 @@ export type DanceFeedback = {
   attackDecay?: string;
   /** Coaching: how this shape should move toward the next sampled pose. */
   transitionToNext?: string;
+  /** Optional joint-level signal metadata for angle-based visual feedback. */
+  jointName?: string;
+  angleDeltaDeg?: number;
+  /** 100 = standard threshold crossed for angle-delta feedback. */
+  angleDeltaPct?: number;
+  signalType?: "legacy_family" | "angle_delta";
 };
 
 export type ComparisonProgress = {

@@ -181,6 +181,7 @@ vi.mock("../../lib/ensureBrowserYoloOverlays", () => ({
 }));
 
 vi.mock("../../lib/yoloFeedback", () => ({
+  ANGLE_SIGNAL_STANDARD_DEGREES: 30,
   buildVisualFeedbackFromYoloArtifacts: buildVisualFeedbackFromYoloArtifactsMock,
   overlayArtifactHasYoloPoseFrames: vi.fn((artifact: { segments?: Array<{ meta?: { poseFrames?: unknown[] } }> } | null) =>
     Boolean(artifact?.segments?.some((segment) => Array.isArray(segment.meta?.poseFrames))),
@@ -508,6 +509,9 @@ describe("FeedbackViewer", () => {
       expect(screen.getByText("left elbow")).toBeInTheDocument();
       expect(container.querySelector(".timeline-score-chip")).not.toBeNull();
     });
+
+    expect(container.querySelector(".timeline-score-number.lower")).not.toBeNull();
+    expect(container.querySelector(".timeline-score-max.higher")).not.toBeNull();
   });
 
   it("seeks when a timeline feedback marker is clicked", async () => {
@@ -557,6 +561,99 @@ describe("FeedbackViewer", () => {
 
     expect(await screen.findByText("Position diff")).toBeInTheDocument();
     expect(await screen.findByText(/Upper-body shape differs from the guide phrase/i)).toBeInTheDocument();
+  });
+
+  it("renders multiple focus circles when multiple angle cues violate the threshold together", async () => {
+    (useEbsViewer as any).mockReturnValue({
+      state: {
+        ...mockState,
+        sharedTime: 2.5,
+        refTime: 2.5,
+        userTime: 2.5,
+      },
+      ...mockActions,
+    });
+
+    buildVisualFeedbackFromYoloArtifactsMock.mockReturnValue({
+      feedback: [
+        {
+          timestamp: 2.5,
+          segmentIndex: 0,
+          bodyRegion: "arms",
+          severity: "moderate",
+          message: "Left Elbow angle differs by 68° from the guide.",
+          deviation: 2.26,
+          featureFamily: "upper_body",
+          frameIndex: 0,
+          jointName: "left elbow",
+          angleDeltaDeg: 68,
+          angleDeltaPct: 226,
+          focusSide: "left",
+          signalType: "angle_delta",
+        },
+        {
+          timestamp: 2.5,
+          segmentIndex: 0,
+          bodyRegion: "arms",
+          severity: "moderate",
+          message: "Right Shoulder angle differs by 64° from the guide.",
+          deviation: 2.13,
+          featureFamily: "upper_body",
+          frameIndex: 0,
+          jointName: "right shoulder",
+          angleDeltaDeg: 64,
+          angleDeltaPct: 213,
+          focusSide: "right",
+          signalType: "angle_delta",
+        },
+      ],
+      refSamples: [
+        {
+          timestamp: 2.5,
+          segmentIndex: 0,
+          frameWidth: 64,
+          frameHeight: 48,
+          keypoints: Array.from({ length: 17 }, (_, index) => ({
+            name: `kp-${index}`,
+            x: 18 + index,
+            y: 8 + index,
+            score: 0.95,
+          })),
+          partCoverage: { head: 1, arms: 1, torso: 1, legs: 1, full_body: 1 },
+        },
+      ],
+      userSamples: [
+        {
+          timestamp: 2.5,
+          segmentIndex: 0,
+          frameWidth: 64,
+          frameHeight: 48,
+          keypoints: Array.from({ length: 17 }, (_, index) => ({
+            name: `kp-${index}`,
+            x: 20 + index,
+            y: 10 + index,
+            score: 0.95,
+          })),
+          partCoverage: { head: 1, arms: 1, torso: 1, legs: 1, full_body: 1 },
+        },
+      ],
+    });
+
+    const { container } = render(
+      <FeedbackViewer
+        mode="session"
+        sessionId="test-session"
+        referenceVideoUrl="ref.mp4"
+        userVideoUrl="user.mp4"
+        ebsData={{ segments: [{ shared_start_sec: 0, shared_end_sec: 5 }], alignment: {} } as any}
+      />,
+    );
+
+    fireEvent.click(screen.getByTitle(/Overlay view/i));
+
+    await waitFor(() => {
+      expect(container.querySelectorAll(".overlay-feedback-focus").length).toBeGreaterThanOrEqual(2);
+    });
   });
 
   it("shows local visual feedback on the user clip in split view", async () => {

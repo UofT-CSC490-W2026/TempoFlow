@@ -50,6 +50,7 @@ import {
 import { normalizeKeypoints } from "../../lib/bodyPix/geometry";
 import { buildVisualFeedbackKey, getVisualFeedbackRun, storeVisualFeedbackRun } from "../../lib/visualFeedbackStorage";
 import {
+  ANGLE_SIGNAL_STANDARD_DEGREES,
   buildVisualFeedbackFromYoloArtifacts,
   overlayArtifactHasYoloPoseFrames,
 } from "../../lib/yoloFeedback";
@@ -144,7 +145,8 @@ type JointAngleDiffBar = {
   key: string;
   label: string;
   deltaDeg: number | null;
-  percent: number;
+  signalPct: number;
+  barPct: number;
   tone: "low" | "medium" | "high" | "unknown";
 };
 
@@ -316,19 +318,21 @@ function getJointAngleDiffBars(referenceKeypoints: PoseKeypoint[], practiceKeypo
         key: joint.name,
         label: joint.name,
         deltaDeg: null,
-        percent: 0,
+        signalPct: 0,
+        barPct: 0,
         tone: "unknown",
       } satisfies JointAngleDiffBar;
     }
 
     const deltaDeg = smallestAngleDifferenceDegrees(referenceAngle, practiceAngle);
-    const percent = clamp01(deltaDeg / 90) * 100;
+    const signalPct = (deltaDeg / ANGLE_SIGNAL_STANDARD_DEGREES) * 100;
     return {
       key: joint.name,
       label: joint.name,
       deltaDeg,
-      percent,
-      tone: deltaDeg >= 35 ? "high" : deltaDeg >= 15 ? "medium" : "low",
+      signalPct,
+      barPct: Math.min(100, Math.max(8, signalPct)),
+      tone: signalPct >= 200 ? "high" : signalPct >= 100 ? "medium" : "low",
     } satisfies JointAngleDiffBar;
   });
 }
@@ -1372,7 +1376,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
           if (!row) return null;
           const cueWindow = getVisualCueTimingWindow(segment, row.featureFamily);
           return {
-            id: `visual:${segmentIndex}:${phaseMoment.key}:${row.featureFamily ?? "generic"}:${row.timestamp.toFixed(3)}`,
+            id: `visual:${segmentIndex}:${phaseMoment.key}:${row.featureFamily ?? "generic"}:${row.jointName ?? "generic"}:${row.timestamp.toFixed(3)}`,
             time: cueWindow.startTime,
             kind: "visual" as const,
             seriousness: getVisualMarkerSeriousness(row.severity),
@@ -1636,6 +1640,27 @@ export function FeedbackViewer(props: EbsViewerProps) {
     }
   }, [state.ebs, state.sharedTime, viewMode]);
 
+  const activeVisualFeedbackRows = useMemo(() => {
+    const segment = activeVideoSegmentIndex >= 0 ? state.segments[activeVideoSegmentIndex] ?? null : null;
+    if (!segment || activeVideoSegmentIndex < 0) return [];
+
+    return visualFeedbackRows
+      .filter(
+        (row) =>
+          row.segmentIndex === activeVideoSegmentIndex &&
+          passesVisualFeedbackDifficulty(row, feedbackDifficulty) &&
+          getVisualCueTimingWindow(segment, row.featureFamily).startTime <= state.sharedTime &&
+          getVisualCueTimingWindow(segment, row.featureFamily).endTime >= state.sharedTime,
+      )
+      .sort((a, b) => {
+        if ((b.angleDeltaPct ?? 0) !== (a.angleDeltaPct ?? 0)) {
+          return (b.angleDeltaPct ?? 0) - (a.angleDeltaPct ?? 0);
+        }
+        if (b.deviation !== a.deviation) return b.deviation - a.deviation;
+        return a.timestamp - b.timestamp;
+      });
+  }, [activeVideoSegmentIndex, feedbackDifficulty, state.segments, state.sharedTime, visualFeedbackRows]);
+
   const activeVisualFeedback = useMemo(() => {
     const segment = activeVideoSegmentIndex >= 0 ? state.segments[activeVideoSegmentIndex] ?? null : null;
     return pickActiveSegmentFeedback({
@@ -1649,19 +1674,44 @@ export function FeedbackViewer(props: EbsViewerProps) {
 
   const overlayVisualCue = useMemo(
     () => {
-      const sampleIndex = activeVisualFeedback?.frameIndex;
-      return buildOverlayVisualCue({
-        feedback: activeVisualFeedback,
-        practiceArtifact: overlayCuePracticeArtifact,
-        referenceArtifact: overlayCueReferenceArtifact,
-        practiceSample:
-          typeof sampleIndex === "number" && sampleIndex >= 0 ? (visualUserSamples[sampleIndex] ?? null) : null,
-        referenceSample:
-          typeof sampleIndex === "number" && sampleIndex >= 0 ? (visualReferenceSamples[sampleIndex] ?? null) : null,
+      const buildCueForRow = (row: DanceFeedback | null) => {
+        const sampleIndex = row?.frameIndex;
+        return buildOverlayVisualCue({
+          feedback: row,
+          practiceArtifact: overlayCuePracticeArtifact,
+          referenceArtifact: overlayCueReferenceArtifact,
+          practiceSample:
+            typeof sampleIndex === "number" && sampleIndex >= 0 ? (visualUserSamples[sampleIndex] ?? null) : null,
+          referenceSample:
+            typeof sampleIndex === "number" && sampleIndex >= 0 ? (visualReferenceSamples[sampleIndex] ?? null) : null,
+        });
+      };
+
+      const primaryCue = buildCueForRow(activeVisualFeedback);
+      if (!primaryCue) return null;
+
+      const hotspotMap = new Map<string, { id: string; xPct: number; yPct: number; focusSizePct: number }>();
+      activeVisualFeedbackRows.forEach((row) => {
+        if (!row.angleDeltaPct || row.angleDeltaPct <= 0) return;
+        const cue = buildCueForRow(row);
+        if (!cue) return;
+        if (cue.id === primaryCue.id) return;
+        hotspotMap.set(cue.id, {
+          id: cue.id,
+          xPct: cue.xPct,
+          yPct: cue.yPct,
+          focusSizePct: Math.max(0.08, cue.focusSizePct * 0.82),
+        });
       });
+
+      return {
+        ...primaryCue,
+        hotspots: [...hotspotMap.values()],
+      };
     },
     [
       activeVisualFeedback,
+      activeVisualFeedbackRows,
       overlayCuePracticeArtifact,
       overlayCueReferenceArtifact,
       visualReferenceSamples,
@@ -1690,8 +1740,23 @@ export function FeedbackViewer(props: EbsViewerProps) {
     visualReferenceSamples,
     visualUserSamples,
   ]);
-  const overlayDifferenceTone =
-    overlayDifferenceScore == null ? null : overlayDifferenceScore >= 67 ? "high" : overlayDifferenceScore >= 34 ? "medium" : "low";
+  const overlayDifferenceMax = 100;
+  const overlayDifferenceValueTone =
+    overlayDifferenceScore == null
+      ? null
+      : overlayDifferenceScore === overlayDifferenceMax
+        ? "equal"
+        : overlayDifferenceScore > overlayDifferenceMax
+          ? "higher"
+          : "lower";
+  const overlayDifferenceMaxTone =
+    overlayDifferenceScore == null
+      ? null
+      : overlayDifferenceScore === overlayDifferenceMax
+        ? "equal"
+        : overlayDifferenceScore < overlayDifferenceMax
+          ? "higher"
+          : "lower";
   const jointAngleDiffBars = useMemo(() => {
     if (!sessionMode || overlayDetector !== "yolo" || activeVideoSegmentIndex < 0) return [];
     const referenceSample = getNearestSegmentSample(visualReferenceSamples, activeVideoSegmentIndex, state.sharedTime);
@@ -2101,11 +2166,15 @@ export function FeedbackViewer(props: EbsViewerProps) {
                   <div className="timeline-header-main">
                     <div className="move-tl-label">Section Timeline</div>
                     {overlayDifferenceScore != null ? (
-                      <div className={`timeline-score-chip ${overlayDifferenceTone ?? "medium"}`} aria-live="polite">
+                      <div className="timeline-score-chip" aria-live="polite">
                         <span className="timeline-score-label">Overlay diff</span>
                         <span className="timeline-score-value">
-                          {overlayDifferenceScore}
-                          <span>/100</span>
+                          <span className={`timeline-score-number ${overlayDifferenceValueTone ?? ""}`}>
+                            {overlayDifferenceScore}
+                          </span>
+                          <span className={`timeline-score-max ${overlayDifferenceMaxTone ?? ""}`}>
+                            /{overlayDifferenceMax}
+                          </span>
                         </span>
                       </div>
                     ) : null}
@@ -2136,17 +2205,21 @@ export function FeedbackViewer(props: EbsViewerProps) {
                 {jointAngleDiffBars.length > 0 ? (
                   <div className="timeline-joint-diff-grid" aria-live="polite">
                     {jointAngleDiffBars.map((joint) => (
-                      <div key={joint.key} className={`timeline-joint-diff-card ${joint.tone}`}>
+                      <div
+                        key={joint.key}
+                        className={`timeline-joint-diff-card ${joint.tone}`}
+                        title={joint.deltaDeg == null ? "Angle delta unavailable in this frame" : `${Math.round(joint.deltaDeg)}° off the guide`}
+                      >
                         <div className="timeline-joint-diff-topline">
                           <span className="timeline-joint-diff-label">{joint.label}</span>
                           <span className="timeline-joint-diff-value">
-                            {joint.deltaDeg == null ? "--" : `${Math.round(joint.deltaDeg)}°`}
+                            {joint.deltaDeg == null ? "--" : `${Math.round(joint.signalPct)}%`}
                           </span>
                         </div>
                         <div className="timeline-joint-diff-bar">
                           <span
                             className={`timeline-joint-diff-fill ${joint.tone}`}
-                            style={{ width: `${joint.deltaDeg == null ? 18 : Math.max(8, joint.percent)}%` }}
+                            style={{ width: `${joint.deltaDeg == null ? 18 : joint.barPct}%` }}
                           />
                         </div>
                       </div>

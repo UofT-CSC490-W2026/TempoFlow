@@ -27,6 +27,39 @@ describe("feedbackDifficulty", () => {
     ).toBe(true);
   });
 
+  it("uses angle-delta percent thresholds for yolo visual feedback", () => {
+    expect(
+      passesVisualFeedbackDifficulty(
+        { deviation: 0.1, severity: "minor", angleDeltaPct: 196 },
+        "standard",
+      ),
+    ).toBe(false);
+    expect(
+      passesVisualFeedbackDifficulty(
+        { deviation: 0.1, severity: "minor", angleDeltaPct: 204 },
+        "standard",
+      ),
+    ).toBe(true);
+    expect(
+      passesVisualFeedbackDifficulty(
+        { deviation: 0.1, severity: "minor", angleDeltaPct: 104 },
+        "advanced",
+      ),
+    ).toBe(true);
+    expect(
+      passesVisualFeedbackDifficulty(
+        { deviation: 0.1, severity: "major", angleDeltaPct: 290 },
+        "beginner",
+      ),
+    ).toBe(false);
+    expect(
+      passesVisualFeedbackDifficulty(
+        { deviation: 0.1, severity: "major", angleDeltaPct: 305 },
+        "beginner",
+      ),
+    ).toBe(true);
+  });
+
   it("filters Gemini moves using stronger standard confidence and prior checks", () => {
     const moves = [
       { micro_timing_label: "on-time", confidence: "high", id: "a" },
