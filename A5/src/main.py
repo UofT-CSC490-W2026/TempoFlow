@@ -330,17 +330,14 @@ async def move_feedback_sync(
 
         feedback = await asyncio.to_thread(
             run_move_feedback_pipeline,
-            ref_tmp,
-            user_tmp,
-            ebs_data,
-            segment_index,
-            None,
-            None,
-            None,
-            pose_priors,
-            yolo_context,
-            burn_in,
-            audio_on,
+            ref_video_path=ref_tmp,
+            user_video_path=user_tmp,
+            ebs_artifact=ebs_data,
+            segment_index=segment_index,
+            pose_priors=pose_priors,
+            yolo_context=yolo_context,
+            burn_in_labels=burn_in,
+            include_audio=audio_on,
         )
         return JSONResponse(feedback, status_code=200)
     except Exception as exc:

@@ -995,8 +995,7 @@ async function runSegmentedBrowserYoloPipeline(params: {
 
       const updateStatus = () => {
         const avg = (refSegProgress + refPoseProgress + practiceSegProgress + practicePoseProgress) / 4;
-        const hasPendingWork = avg < 1;
-        const visibleProgress = hasPendingWork && avg <= 0 ? 0.08 : avg;
+        const visibleProgress = Math.max(0, Math.min(1, avg));
         const pct = Math.max(0, Math.min(100, Math.round(visibleProgress * 100)));
         onSegmentProgress?.(plan.index, visibleProgress);
         onStatus(

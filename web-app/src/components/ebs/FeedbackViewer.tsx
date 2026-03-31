@@ -2363,7 +2363,11 @@ export function FeedbackViewer(props: EbsViewerProps) {
               <div className="ebs-inline-note">Aligned videos loaded...</div>
             )}
           </div>
-          {overlayStatus && !overlayBusy && /failed|error/i.test(overlayStatus) && sessionMode ? (
+          {overlayStatus &&
+          !overlayBusy &&
+          sessionMode &&
+          !/ready\./i.test(overlayStatus) &&
+          !/already ready\./i.test(overlayStatus) ? (
             <div className="mb-3 rounded-2xl border border-sky-100 bg-sky-50 px-4 py-2 text-xs text-slate-700">
               <div>{overlayStatus}</div>
               {moveReadySummary ? (
