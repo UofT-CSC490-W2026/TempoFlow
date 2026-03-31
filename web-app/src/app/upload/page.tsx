@@ -1,8 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from 'react';
-import Link from 'next/link';
-import Image from 'next/image';
+import type { ChangeEvent, DragEvent } from 'react';
 import { useRouter } from 'next/navigation';
 
 import { AppHeader } from '../../components/AppHeader';
@@ -30,7 +29,11 @@ export default function UploadPage() {
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [recordingSeconds, setRecordingSeconds] = useState(0);
   const [recordedPreviewUrl, setRecordedPreviewUrl] = useState<string | null>(null);
+  const [referencePreviewUrl, setReferencePreviewUrl] = useState<string | null>(null);
   const [recorderTarget, setRecorderTarget] = useState<'reference' | 'practice'>('practice');
+  const [guidedPracticeMode, setGuidedPracticeMode] = useState(false);
+  const [guidedCountdownValue, setGuidedCountdownValue] = useState<number | null>(null);
+  const [guidedReferenceAudioEnabled, setGuidedReferenceAudioEnabled] = useState(true);
   const [introFadingOut, setIntroFadingOut] = useState(false);
   const [pauseReferenceAutoAdvance, setPauseReferenceAutoAdvance] = useState(false);
   const [stepTransitionDirection, setStepTransitionDirection] = useState<'forward' | 'backward'>('forward');
@@ -38,10 +41,13 @@ export default function UploadPage() {
   const storageMode = getStorageMode();
   const analysisMode = getAnalysisMode();
   const liveVideoRef = useRef<HTMLVideoElement>(null);
+  const guidedReferenceVideoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const recordedChunksRef = useRef<Blob[]>([]);
   const recordingTimerRef = useRef<number | null>(null);
+  const guidedCountdownTimeoutRef = useRef<number | null>(null);
+  const guidedPlaybackEndHandlerRef = useRef<(() => void) | null>(null);
   const launchStartedRef = useRef(false);
 
   const formatFileSize = (bytes: number) => {
@@ -71,13 +77,41 @@ export default function UploadPage() {
         URL.revokeObjectURL(recordedPreviewUrl);
       }
 
+      if (referencePreviewUrl) {
+        URL.revokeObjectURL(referencePreviewUrl);
+      }
+
       if (recordingTimerRef.current) {
         window.clearInterval(recordingTimerRef.current);
       }
 
+      if (guidedCountdownTimeoutRef.current) {
+        window.clearTimeout(guidedCountdownTimeoutRef.current);
+      }
+
       streamRef.current?.getTracks().forEach((track) => track.stop());
     };
-  }, [recordedPreviewUrl]);
+  }, [recordedPreviewUrl, referencePreviewUrl]);
+
+  useEffect(() => {
+    if (!referenceFile) {
+      setReferencePreviewUrl((current) => {
+        if (current) {
+          URL.revokeObjectURL(current);
+        }
+        return null;
+      });
+      return;
+    }
+
+    const nextUrl = URL.createObjectURL(referenceFile);
+    setReferencePreviewUrl((current) => {
+      if (current) {
+        URL.revokeObjectURL(current);
+      }
+      return nextUrl;
+    });
+  }, [referenceFile]);
 
   useEffect(() => {
     if (flowStep !== 'intro') return;
@@ -115,7 +149,7 @@ export default function UploadPage() {
     return () => window.clearTimeout(timeoutId);
   }, [flowStep, practiceFile, recorderOpen]);
 
-  const handleFileChange = (type: 'reference' | 'practice') => (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileChange = (type: 'reference' | 'practice') => (e: ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       if (type === 'reference') {
         setReferenceFile(e.target.files[0]);
@@ -127,7 +161,7 @@ export default function UploadPage() {
     }
   };
 
-  const handleDrop = (type: 'reference' | 'practice') => (e: React.DragEvent<HTMLDivElement>) => {
+  const handleDrop = (type: 'reference' | 'practice') => (e: DragEvent<HTMLDivElement>) => {
     e.preventDefault();
     setDraggingType(null);
     
@@ -166,6 +200,20 @@ export default function UploadPage() {
       recordingTimerRef.current = null;
     }
 
+    if (guidedCountdownTimeoutRef.current) {
+      window.clearTimeout(guidedCountdownTimeoutRef.current);
+      guidedCountdownTimeoutRef.current = null;
+    }
+
+    if (guidedReferenceVideoRef.current) {
+      if (guidedPlaybackEndHandlerRef.current) {
+        guidedReferenceVideoRef.current.removeEventListener('ended', guidedPlaybackEndHandlerRef.current);
+      }
+      guidedReferenceVideoRef.current.pause();
+      guidedReferenceVideoRef.current.currentTime = 0;
+    }
+    guidedPlaybackEndHandlerRef.current = null;
+
     if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
       mediaRecorderRef.current.stop();
     }
@@ -176,6 +224,8 @@ export default function UploadPage() {
     setCameraReady(false);
     setRecording(false);
     setRecordingSeconds(0);
+    setGuidedCountdownValue(null);
+    setGuidedPracticeMode(false);
     setRecorderOpen(false);
   };
 
@@ -217,13 +267,13 @@ export default function UploadPage() {
     const stream = streamRef.current;
     if (!stream) {
       setCameraError('Camera is not ready yet.');
-      return;
+      return false;
     }
 
     const mimeType = getSupportedRecordingMimeType();
     if (mimeType === null) {
       setCameraError('Recording is not supported in this browser.');
-      return;
+      return false;
     }
 
     try {
@@ -272,9 +322,11 @@ export default function UploadPage() {
       recordingTimerRef.current = window.setInterval(() => {
         setRecordingSeconds((value) => value + 1);
       }, 1000);
+      return true;
     } catch (error) {
       console.error(error);
       setCameraError('Failed to start recording. Try again or upload a file instead.');
+      return false;
     }
   };
 
@@ -282,6 +334,61 @@ export default function UploadPage() {
     if (mediaRecorderRef.current?.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
+  };
+
+  const startGuidedPracticeRecording = () => {
+    const referenceVideo = guidedReferenceVideoRef.current;
+    if (!referenceVideo) {
+      setCameraError('Reference preview is not ready yet.');
+      return;
+    }
+    if (!cameraReady) {
+      setCameraError('Camera is not ready yet.');
+      return;
+    }
+
+    setCameraError(null);
+    setGuidedCountdownValue(3);
+
+    const tick = (nextValue: number) => {
+      if (nextValue <= 0) {
+        setGuidedCountdownValue(null);
+
+        referenceVideo.pause();
+        referenceVideo.currentTime = 0;
+        referenceVideo.muted = !guidedReferenceAudioEnabled;
+
+        const handleEnded = () => {
+          stopRecording();
+        };
+        if (guidedPlaybackEndHandlerRef.current) {
+          referenceVideo.removeEventListener('ended', guidedPlaybackEndHandlerRef.current);
+        }
+        guidedPlaybackEndHandlerRef.current = handleEnded;
+        referenceVideo.addEventListener('ended', handleEnded, { once: true });
+
+        const didStart = startRecording();
+        if (!didStart) {
+          referenceVideo.removeEventListener('ended', handleEnded);
+          guidedPlaybackEndHandlerRef.current = null;
+          return;
+        }
+
+        void referenceVideo.play().catch((error) => {
+          console.error(error);
+          stopRecording();
+          setCameraError('Could not play the reference video with audio. Try toggling audio or starting again.');
+        });
+        return;
+      }
+
+      guidedCountdownTimeoutRef.current = window.setTimeout(() => {
+        setGuidedCountdownValue(nextValue);
+        tick(nextValue - 1);
+      }, 1000);
+    };
+
+    tick(2);
   };
 
   const validateFile = (file: File, type: 'reference' | 'practice') => {
@@ -393,12 +500,15 @@ export default function UploadPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [flowStep, referenceFile, practiceFile, uploading]);
 
-  const UploadZone = ({ type, file }: {
+  const UploadZone = ({ type, file, compact = false }: {
     type: 'reference' | 'practice', 
     file: File | null,
+    compact?: boolean,
   }) => {
     const label = type === 'reference' ? 'Reference' : 'Practice';
     const actionLabel = type === 'reference' ? 'Choose reference' : 'Choose practice';
+    const panelMinHeightClass = compact ? 'min-h-[280px]' : stepPanelMinHeightClass;
+    const panelBodyMinHeightClass = compact ? 'min-h-[196px]' : stepPanelBodyMinHeightClass;
 
     return (
       <div className="space-y-2">
@@ -417,7 +527,7 @@ export default function UploadPage() {
           onDragLeave={() => setDraggingType(null)}
           className={`
             group relative overflow-hidden rounded-[28px] border p-8 transition-all
-            ${stepPanelMinHeightClass}
+            ${panelMinHeightClass}
             ${draggingType === type ? 'border-sky-400 bg-sky-100/80 shadow-lg shadow-sky-200/60' : 'border-sky-100 bg-white/90 hover:border-sky-300 hover:shadow-lg hover:shadow-sky-100/80'}
             ${file ? 'border-sky-200 bg-gradient-to-br from-white to-sky-50/70' : ''}
           `}
@@ -432,7 +542,7 @@ export default function UploadPage() {
           />
 
           {!file ? (
-            <div className={`relative flex h-full ${stepPanelBodyMinHeightClass} flex-col items-center justify-center text-center`}>
+            <div className={`relative flex h-full ${panelBodyMinHeightClass} flex-col items-center justify-center text-center`}>
               <div className="flex h-16 w-16 items-center justify-center rounded-3xl border border-sky-100 bg-white text-sky-500 shadow-sm transition-transform group-hover:scale-105">
                 <svg className="h-8 w-8" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.8} d="M12 5v14M19 12H5" />
@@ -442,7 +552,7 @@ export default function UploadPage() {
               <p className="mt-2 max-w-xs text-sm text-slate-500">Drop video or click to browse</p>
             </div>
           ) : (
-            <div className={`relative flex h-full ${stepPanelBodyMinHeightClass} flex-col justify-between`}>
+            <div className={`relative flex h-full ${panelBodyMinHeightClass} flex-col justify-between`}>
               <div className="flex h-14 w-14 items-center justify-center rounded-3xl bg-sky-100 text-sky-700">
                 <svg className="h-7 w-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
@@ -466,6 +576,7 @@ export default function UploadPage() {
   const stepLabel = flowStep === 'practice' ? 'Practice' : 'Reference';
   const activeFile = flowStep === 'practice' ? practiceFile : referenceFile;
   const isReferenceStep = flowStep === 'reference';
+  const guidedPracticeLayout = !isReferenceStep && guidedPracticeMode && recorderOpen && recorderTarget === 'practice';
 
   const goToPreviousStep = () => {
     setMessage('');
@@ -491,7 +602,7 @@ export default function UploadPage() {
       <AppHeader primaryHref="/dashboard" primaryLabel="Dashboard" />
 
       <div className="px-6 py-14 md:py-20">
-        <div className="mx-auto w-full max-w-5xl">
+        <div className={`mx-auto w-full ${guidedPracticeLayout ? 'max-w-7xl' : 'max-w-5xl'}`}>
           {flowStep === 'intro' ? (
             <div
               className={`overflow-hidden rounded-[44px] border border-sky-100/80 bg-white/80 shadow-[0_24px_80px_rgba(14,165,233,0.12)] backdrop-blur-sm transition-all duration-700 ${
@@ -564,12 +675,24 @@ export default function UploadPage() {
                 </div>
               </div>
 
-              <div className="grid items-stretch gap-8 lg:grid-cols-[minmax(0,1fr)_360px]">
+              <div
+                className={`grid items-stretch gap-8 ${
+                  guidedPracticeLayout
+                    ? 'xl:grid-cols-[minmax(300px,0.8fr)_minmax(0,1.45fr)]'
+                    : 'lg:grid-cols-[minmax(0,1fr)_360px]'
+                }`}
+              >
                 <div className="flex h-full flex-col">
-                  <UploadZone type={isReferenceStep ? 'reference' : 'practice'} file={activeFile} />
+                  <UploadZone
+                    type={isReferenceStep ? 'reference' : 'practice'}
+                    file={activeFile}
+                    compact={guidedPracticeLayout}
+                  />
                 </div>
 
-                <div className={`flex h-full ${stepPanelMinHeightClass} flex-col rounded-[32px] border border-slate-200/80 bg-slate-50/80 p-5`}>
+                <div
+                  className={`flex h-full ${guidedPracticeLayout ? 'min-h-[720px]' : stepPanelMinHeightClass} flex-col rounded-[32px] border border-slate-200/80 bg-slate-50/80 ${guidedPracticeLayout ? 'p-6 lg:p-7' : 'p-5'}`}
+                >
                   <div className="flex items-start gap-3">
                     <div className="flex h-11 w-11 items-center justify-center rounded-2xl bg-sky-100 text-sky-700">
                       <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -578,57 +701,149 @@ export default function UploadPage() {
                     </div>
                     <div>
                       <h2 className="text-xl font-semibold tracking-tight text-slate-950">
-                        Record {isReferenceStep ? 'reference' : 'practice'}
+                        {isReferenceStep ? 'Record reference' : 'Record practice'}
                       </h2>
-                      <p className="mt-1 text-sm text-slate-500">Use your camera instead of uploading.</p>
+                      <p className="mt-1 text-sm text-slate-500">
+                        {isReferenceStep
+                          ? 'Use your camera instead of uploading.'
+                          : 'Use your camera instead of uploading, or record while watching the reference clip.'}
+                      </p>
                     </div>
                   </div>
 
-                  <button
-                    onClick={() =>
-                      recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice')
-                        ? closeRecorder()
-                        : openRecorder(isReferenceStep ? 'reference' : 'practice')
-                    }
-                    disabled={uploading}
-                    className={`mt-5 inline-flex w-full items-center justify-center rounded-full px-5 py-3.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
-                      recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice')
-                        ? 'bg-slate-950 text-white'
-                        : 'bg-sky-600 text-white hover:bg-sky-700'
-                    }`}
-                  >
-                    {recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice')
-                      ? 'Close Recorder'
-                      : `Record ${stepLabel}`}
-                  </button>
+                    <div className={`mt-5 flex ${guidedPracticeLayout ? 'flex-row flex-wrap items-center gap-3' : 'flex-col gap-3'}`}>
+                      <button
+                      onClick={() => {
+                        if (recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice')) {
+                          closeRecorder();
+                          return;
+                        }
+                        setGuidedPracticeMode(false);
+                        void openRecorder(isReferenceStep ? 'reference' : 'practice');
+                      }}
+                      disabled={uploading}
+                        className={`inline-flex ${guidedPracticeLayout ? 'w-auto min-w-[220px]' : 'w-full'} items-center justify-center rounded-full px-5 py-3.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                          recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice') && !guidedPracticeMode
+                            ? 'bg-slate-950 text-white'
+                            : 'bg-sky-600 text-white hover:bg-sky-700'
+                      }`}
+                    >
+                      {recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice') && !guidedPracticeMode
+                        ? 'Close Recorder'
+                        : `Record ${stepLabel}`}
+                    </button>
+
+                    {!isReferenceStep && referenceFile ? (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (recorderOpen && recorderTarget === 'practice' && guidedPracticeMode) {
+                            closeRecorder();
+                            return;
+                          }
+                          setGuidedPracticeMode(true);
+                          void openRecorder('practice');
+                        }}
+                        disabled={uploading}
+                        className={`inline-flex ${guidedPracticeLayout ? 'w-auto min-w-[280px]' : 'w-full'} items-center justify-center rounded-full px-5 py-3.5 text-sm font-medium transition-all disabled:cursor-not-allowed disabled:opacity-60 ${
+                          recorderOpen && recorderTarget === 'practice' && guidedPracticeMode
+                            ? 'bg-slate-950 text-white'
+                            : 'border border-sky-200 bg-white text-sky-700 hover:border-sky-300 hover:bg-sky-50'
+                        }`}
+                      >
+                        {recorderOpen && recorderTarget === 'practice' && guidedPracticeMode
+                          ? 'Close Guided Recording'
+                          : 'Record While Watching Reference'}
+                      </button>
+                    ) : null}
+                  </div>
 
                   {recorderOpen && recorderTarget === (isReferenceStep ? 'reference' : 'practice') ? (
                     <div className="mt-5 flex flex-1 flex-col space-y-4">
-                      <div className="overflow-hidden rounded-3xl bg-gray-950">
-                        {cameraReady ? (
-                          <video
-                            ref={liveVideoRef}
-                            className="aspect-video w-full object-cover"
-                            autoPlay
-                            muted
-                            playsInline
-                          />
-                        ) : (
-                          <div className="flex aspect-video items-center justify-center px-6 text-center text-sm text-gray-300">
-                            {cameraError ?? 'Requesting camera access...'}
+                      <div className={`grid gap-4 ${guidedPracticeMode ? 'xl:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]' : ''}`}>
+                        {guidedPracticeMode ? (
+                          <div className="overflow-hidden rounded-3xl border border-sky-100 bg-white shadow-sm">
+                            <div className="flex items-center justify-between border-b border-sky-100 px-4 py-3">
+                              <div>
+                                <p className="text-xs font-semibold uppercase tracking-[0.22em] text-sky-600">Reference</p>
+                                <p className="mt-1 text-sm text-slate-500">Watch the full clip while recording.</p>
+                              </div>
+                              <button
+                                type="button"
+                                onClick={() => setGuidedReferenceAudioEnabled((value) => !value)}
+                                className={`rounded-full px-3 py-1.5 text-xs font-semibold transition-colors ${
+                                  guidedReferenceAudioEnabled
+                                    ? 'bg-emerald-100 text-emerald-800'
+                                    : 'bg-slate-100 text-slate-600'
+                                }`}
+                              >
+                                Audio {guidedReferenceAudioEnabled ? 'On' : 'Off'}
+                              </button>
+                            </div>
+                            <div className="relative bg-gray-950">
+                              {referencePreviewUrl ? (
+                                <video
+                                  ref={guidedReferenceVideoRef}
+                                  src={referencePreviewUrl}
+                                  className={`${guidedPracticeLayout ? 'aspect-[16/10]' : 'aspect-video'} w-full object-cover`}
+                                  playsInline
+                                  controls={false}
+                                  muted={!guidedReferenceAudioEnabled}
+                                  preload="auto"
+                                />
+                              ) : (
+                                <div className="flex aspect-video items-center justify-center px-6 text-center text-sm text-gray-300">
+                                  Add a reference clip to use guided recording.
+                                </div>
+                              )}
+                              {guidedCountdownValue != null ? (
+                                <div className="pointer-events-none absolute inset-0 flex items-center justify-center bg-slate-950/40">
+                                  <div className="flex h-24 w-24 items-center justify-center rounded-full border border-white/30 bg-slate-950/55 text-5xl font-bold text-white shadow-2xl backdrop-blur-sm">
+                                    {guidedCountdownValue}
+                                  </div>
+                                </div>
+                              ) : null}
+                            </div>
                           </div>
-                        )}
+                        ) : null}
+
+                        <div className="overflow-hidden rounded-3xl bg-gray-950">
+                          {cameraReady ? (
+                            <video
+                              ref={liveVideoRef}
+                              className={`${guidedPracticeLayout ? 'aspect-[16/10]' : 'aspect-video'} w-full object-cover`}
+                              autoPlay
+                              muted
+                              playsInline
+                            />
+                          ) : (
+                            <div className="flex aspect-video items-center justify-center px-6 text-center text-sm text-gray-300">
+                              {cameraError ?? 'Requesting camera access...'}
+                            </div>
+                          )}
+                        </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-3">
+                      <div className={`flex flex-wrap items-center gap-3 ${guidedPracticeLayout ? 'justify-between' : ''}`}>
                         {!recording ? (
-                          <button
-                            onClick={startRecording}
-                            disabled={!cameraReady || uploading}
-                            className="rounded-full bg-slate-950 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
-                          >
-                            Start Recording
-                          </button>
+                          guidedPracticeMode ? (
+                            <button
+                              type="button"
+                              onClick={startGuidedPracticeRecording}
+                              disabled={!cameraReady || !referencePreviewUrl || uploading || guidedCountdownValue != null}
+                              className="rounded-full bg-slate-950 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              {guidedCountdownValue != null ? `Starting in ${guidedCountdownValue}` : 'Start 3, 2, 1 Recording'}
+                            </button>
+                          ) : (
+                            <button
+                              onClick={startRecording}
+                              disabled={!cameraReady || uploading}
+                              className="rounded-full bg-slate-950 px-5 py-3 text-sm font-medium text-white transition-all hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50"
+                            >
+                              Start Recording
+                            </button>
+                          )
                         ) : (
                           <button
                             onClick={stopRecording}
@@ -638,9 +853,19 @@ export default function UploadPage() {
                           </button>
                         )}
                         <span className="text-sm text-slate-500">
-                          {recording ? `Recording... ${recordingSeconds}s` : `${stepLabel} camera ready`}
+                          {recording
+                            ? `Recording... ${recordingSeconds}s`
+                            : guidedPracticeMode
+                              ? 'Camera ready for guided practice capture'
+                              : `${stepLabel} camera ready`}
                         </span>
                       </div>
+
+                      {guidedPracticeMode ? (
+                        <div className="rounded-3xl border border-sky-100 bg-sky-50/70 px-4 py-3 text-sm text-slate-600">
+                          We&apos;ll count you in, play the reference clip with optional audio, and stop recording when the video ends.
+                        </div>
+                      ) : null}
 
                       {recordedPreviewUrl && !recording ? (
                         <video

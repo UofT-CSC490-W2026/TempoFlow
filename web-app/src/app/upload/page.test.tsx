@@ -39,11 +39,28 @@ describe("UploadPage", () => {
     });
   };
 
+  const selectReferenceAndAdvanceToPractice = async (container: HTMLElement) => {
+    await advanceToReferenceStep();
+    const referenceInput = container.querySelector('input[type="file"]') as HTMLInputElement;
+    const referenceFile = new File(["reference"], "reference.mp4", { type: "video/mp4" });
+
+    await act(async () => {
+      fireEvent.change(referenceInput, { target: { files: [referenceFile] } });
+    });
+
+    await act(async () => {
+      vi.advanceTimersByTime(750);
+    });
+  };
+
   beforeEach(() => {
     vi.useFakeTimers();
     global.MediaRecorder = vi.fn().mockImplementation(function(this: MockMediaRecorderInstance) {
-      this.start = vi.fn();
+      this.start = vi.fn(() => {
+        this.state = 'recording';
+      });
       this.stop = vi.fn(() => {
+        this.state = 'inactive';
         this.ondataavailable?.({ data: new Blob(["test"], { type: "video/webm" }) });
         this.onstop?.();
       });
@@ -76,6 +93,17 @@ describe("UploadPage", () => {
     vi.mocked(sessionStorage.createSession).mockReturnValue({ id: 'mock-id' } as ReturnType<typeof sessionStorage.createSession>);
     vi.mocked(sessionStorage.getAnalysisMode).mockReturnValue('api');
     vi.mocked(sessionStorage.getStorageMode).mockReturnValue('aws');
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+    Object.defineProperty(HTMLMediaElement.prototype, 'srcObject', {
+      configurable: true,
+      get() {
+        return (this as HTMLMediaElement & { __srcObject?: unknown }).__srcObject;
+      },
+      set(value) {
+        (this as HTMLMediaElement & { __srcObject?: unknown }).__srcObject = value;
+      },
+    });
   });
 
   afterEach(() => {
@@ -151,5 +179,45 @@ describe("UploadPage", () => {
     });
 
     expect(screen.getByTestId("upload-step-card").className).toContain("upload-step-enter-backward");
+  });
+
+  it("shows guided practice recording after a reference clip is chosen", async () => {
+    const { container } = render(<UploadPage />);
+    await selectReferenceAndAdvanceToPractice(container);
+
+    expect(screen.getByRole("button", { name: /record while watching reference/i })).toBeInTheDocument();
+    expect(screen.getByText(/record while watching the reference clip/i)).toBeInTheDocument();
+  });
+
+  it("starts guided recording after the countdown and stops when the reference video ends", async () => {
+    const { container } = render(<UploadPage />);
+    await selectReferenceAndAdvanceToPractice(container);
+    vi.useRealTimers();
+
+    fireEvent.click(screen.getByRole("button", { name: /record while watching reference/i }));
+
+    await waitFor(() => {
+      expect(screen.getByRole("button", { name: /start 3, 2, 1 recording/i })).toBeInTheDocument();
+    });
+
+    const guidedStartButton = screen.getByRole("button", { name: /start 3, 2, 1 recording/i });
+    await waitFor(() => {
+      expect(guidedStartButton).not.toBeDisabled();
+    });
+
+    fireEvent.click(guidedStartButton);
+
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 3200));
+    });
+
+    expect(global.MediaRecorder).toHaveBeenCalled();
+    const recorderInstance = vi.mocked(global.MediaRecorder).mock.instances[0] as MockMediaRecorderInstance;
+    expect(recorderInstance.start).toHaveBeenCalled();
+    expect(HTMLMediaElement.prototype.play).toHaveBeenCalled();
+
+    const referenceVideo = document.querySelector('video[src="blob:mock-url"]') as HTMLVideoElement;
+    fireEvent(referenceVideo, new Event('ended'));
+    expect(recorderInstance.stop).toHaveBeenCalled();
   });
 });
