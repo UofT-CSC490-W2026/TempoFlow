@@ -181,60 +181,61 @@ export default function Home() {
             <div className="home-float-fast rounded-[1.75rem] border border-slate-950/8 bg-slate-950 px-5 py-5 text-white shadow-[0_24px_50px_rgba(15,23,42,0.2)]">
               <div className="mb-4 flex items-center justify-between">
                 <span className="rounded-full bg-white/10 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-cyan-200">
-                  Cue
+                  AI Focus
                 </span>
-                <span className="text-xs uppercase tracking-[0.28em] text-white/45">Sync</span>
+                <span className="text-xs uppercase tracking-[0.28em] text-white/45">Visual Cue</span>
               </div>
-              <p className="text-2xl font-black tracking-[-0.04em]">Move cleaner</p>
-              <div className="mt-5 flex items-end gap-2">
-                {beatBars.map((height, index) => (
-                  <span
-                    key={`dark-${height + index}`}
-                    className="inline-block w-3 rounded-full bg-gradient-to-t from-cyan-300 to-blue-500"
-                    style={{ height: `${height}px` }}
-                  />
-                ))}
+              <p className="text-2xl font-black tracking-[-0.04em]">Angle & Micro timing feedback</p>
+              <div className="relative mt-5 h-24 overflow-hidden rounded-2xl bg-white/5">
+                <Image
+                  src="/Screenshot 2026-03-31 at 2.48.32 PM.png"
+                  alt="Angle diff circle feature"
+                  fill
+                  className="object-cover"
+                />
               </div>
             </div>
 
             <div className="rounded-[1.75rem] border border-sky-100 bg-white/70 p-5 shadow-[0_20px_45px_rgba(56,189,248,0.1)] backdrop-blur">
               <div className="flex items-center justify-between">
                 <span className="rounded-full bg-sky-50 px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-sky-700">
-                  Replay
+                  Analytics
                 </span>
                 <svg className="h-6 w-6 text-sky-500" viewBox="0 0 24 24" fill="none" aria-hidden="true">
                   <path d="M12 5V2L7 7L12 12V9C15.3 9 18 11.7 18 15C18 18.3 15.3 21 12 21C8.7 21 6 18.3 6 15H4C4 19.4 7.6 23 12 23C16.4 23 20 19.4 20 15C20 10.6 16.4 7 12 7V5Z" fill="currentColor" />
                 </svg>
               </div>
-              <p className="mt-5 text-2xl font-black tracking-[-0.04em] text-slate-950">See the beat land</p>
-              <div className="mt-5 rounded-[1.5rem] bg-[linear-gradient(135deg,#e0f2fe,#ffffff)] p-4">
-                <div className="flex flex-wrap gap-2">
-                  <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-sky-700 shadow-sm">
-                    128 BPM
-                  </span>
-                  <span className="rounded-full bg-white px-3 py-1 text-xs font-semibold text-slate-700 shadow-sm">
-                    6 segments
-                  </span>
-                </div>
-                <div className="mt-4 h-20 rounded-[1.2rem] bg-[radial-gradient(circle_at_top,#bae6fd_0%,#eff6ff_58%,#ffffff_100%)]" />
+              <p className="mt-5 text-2xl font-black tracking-[-0.04em] text-slate-950">Scoring & Timeline</p>
+              <div className="mt-5 overflow-hidden rounded-[1.5rem] border border-sky-100 bg-white shadow-sm ring-1 ring-sky-50">
+                <Image
+                  src="/Screenshot 2026-03-31 at 2.49.31 PM.png"
+                  alt="Score, timeline bar, and segmentation"
+                  width={400}
+                  height={180}
+                  className="w-full object-cover"
+                />
               </div>
             </div>
 
             <div className="rounded-[1.75rem] border border-white/70 bg-[linear-gradient(135deg,rgba(255,255,255,0.95),rgba(240,249,255,0.78))] p-5 shadow-[0_22px_48px_rgba(125,211,252,0.14)] backdrop-blur">
               <div className="flex items-center justify-between">
                 <span className="rounded-full border border-slate-200 bg-white px-3 py-1 text-[11px] font-semibold uppercase tracking-[0.24em] text-slate-500">
-                  Overlay
+                  Insights
                 </span>
                 <svg className="home-spin-slow h-8 w-8 text-sky-400" viewBox="0 0 48 48" fill="none" aria-hidden="true">
                   <path d="M24 4C18 12 18 18 24 24C30 30 30 36 24 44" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" />
                   <path d="M8 24C16 18 22 18 28 24C34 30 40 30 40 24" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" />
                 </svg>
               </div>
-              <div className="mt-5 space-y-3">
-                <p className="text-2xl font-black tracking-[-0.04em] text-slate-950">Stay in pocket</p>
-                <span className="inline-flex rounded-full bg-slate-950 px-3 py-1.5 text-xs font-semibold uppercase tracking-[0.22em] text-cyan-100">
-                  YOLO
-                </span>
+              <p className="mt-5 text-2xl font-black tracking-[-0.04em] text-slate-950">Move Analysis</p>
+              <div className="mt-4 overflow-hidden rounded-2xl border border-slate-200 bg-slate-50 shadow-sm">
+                <Image
+                  src="/Screenshot 2026-03-31 at 2.50.04 PM.png"
+                  alt="Move analysis bar"
+                  width={400}
+                  height={120}
+                  className="w-full object-cover"
+                />
               </div>
             </div>
           </div>
