@@ -324,6 +324,13 @@ def process_videos_from_paths(ref_video_path: str, user_video_path: str) -> dict
     or `user_video_path`. It only cleans up the extracted temporary audio
     `.wav` files.
     """
+    # Defensive check for missing or empty paths
+    for label, p in [("Reference", ref_video_path), ("Practice", user_video_path)]:
+        if not p or not Path(p).exists():
+             raise ValueError(f"Invalid file: {label} path is {p}")
+        if Path(p).stat().st_size == 0:
+             raise ValueError(f"Invalid file: {label} ({Path(p).name}) is empty (0 bytes)")
+
     ref_wav: str | None = None
     user_wav: str | None = None
     try:

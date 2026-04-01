@@ -144,25 +144,38 @@ async def startup_event():
             except OSError:
                 pass
 
-    # 2. Start a background task to prune stale in-memory dicts
+    # 2. Start a background task to prune stale in-memory dicts AND /tmp files
     async def stale_state_monitor():
         while True:
             await asyncio.sleep(600)  # Check every 10 minutes
             now = time.time()
 
-            # Prune old sessions
+            # A. Prune old in-memory sessions
             for sid in list(SESSION_TIMESTAMPS.keys()):
                 if now - SESSION_TIMESTAMPS[sid] > MAX_STATE_AGE_SEC:
                     SESSION_STATUS.pop(sid, None)
                     SESSION_RESULTS.pop(sid, None)
                     SESSION_TIMESTAMPS.pop(sid, None)
 
-            # Prune old Gemini jobs
+            # B. Prune old Gemini jobs
             for jid in list(MOVE_FEEDBACK_JOBS.keys()):
                 job = MOVE_FEEDBACK_JOBS[jid]
                 created = job.get("created_at", 0)
                 if created > 0 and now - created > MAX_STATE_AGE_SEC:
                     MOVE_FEEDBACK_JOBS.pop(jid, None)
+
+            # C. Prune orphaned /tmp files (EBS, Gemini, MF)
+            tmp_root = Path("/tmp")
+            if tmp_root.exists():
+                patterns = ["ebs_*", "gemini_clip_*", "mf_ref_*", "mf_user_*"]
+                for pattern in patterns:
+                    for p in tmp_root.glob(pattern):
+                        try:
+                            # If older than 45 mins, delete.
+                            if now - p.stat().st_mtime > MAX_STATE_AGE_SEC:
+                                p.unlink(missing_ok=True)
+                        except Exception:
+                            pass
 
     asyncio.create_task(stale_state_monitor())
 
