@@ -151,8 +151,10 @@ export function OverlayVisualFeedback(props: {
   mediaRef?: RefObject<HTMLVideoElement | null>;
   showFocus?: boolean;
   variant?: "visual" | "gemini";
+  intrinsicWidth?: number;
+  intrinsicHeight?: number;
 }) {
-  const { cue, mediaRef, showFocus = true, variant = "visual" } = props;
+  const { cue, mediaRef, showFocus = true, variant = "visual", intrinsicWidth, intrinsicHeight } = props;
   const stageRef = useRef<HTMLDivElement | null>(null);
   const cardRef = useRef<HTMLDivElement | null>(null);
   const [mediaBox, setMediaBox] = useState<RelativeBox>({
@@ -187,8 +189,8 @@ export function OverlayVisualFeedback(props: {
           mediaTop: mediaRect.top - stageRect.top,
           mediaWidth: mediaRect.width,
           mediaHeight: mediaRect.height,
-          intrinsicWidth: media.videoWidth,
-          intrinsicHeight: media.videoHeight,
+          intrinsicWidth: media.videoWidth || intrinsicWidth,
+          intrinsicHeight: media.videoHeight || intrinsicHeight,
           objectFit,
         }),
       );
@@ -206,7 +208,7 @@ export function OverlayVisualFeedback(props: {
       media.removeEventListener("loadedmetadata", update);
       window.removeEventListener("resize", update);
     };
-  }, [mediaRef, cue.id]);
+  }, [cue.id, intrinsicHeight, intrinsicWidth, mediaRef]);
 
   const styleVars = {
     ["--overlay-feedback-tone" as string]: cue.color,

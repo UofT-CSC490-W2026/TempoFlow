@@ -3354,7 +3354,12 @@ export function FeedbackViewer(props: EbsViewerProps) {
                     </>
                   )}
                   {sessionMode && showFeedback && overlayVisualCue ? (
-                    <OverlayVisualFeedback cue={overlayVisualCue} mediaRef={overlayVideoRef} />
+                    <OverlayVisualFeedback
+                      cue={overlayVisualCue}
+                      mediaRef={overlayVideoRef}
+                      intrinsicWidth={activeOverlayPracticeSegment?.width}
+                      intrinsicHeight={activeOverlayPracticeSegment?.height}
+                    />
                   ) : null}
                   {sessionMode && showFeedback && positionedOverlayGeminiCue ? (
                     <OverlayVisualFeedback
@@ -3362,6 +3367,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                       mediaRef={overlayVideoRef}
                       showFocus={false}
                       variant="gemini"
+                      intrinsicWidth={activeOverlayPracticeSegment?.width}
+                      intrinsicHeight={activeOverlayPracticeSegment?.height}
                     />
                   ) : null}
                 </div>
