@@ -350,14 +350,22 @@ def _compute_pose_part_coverage(conf: Any, threshold: float = 0.25) -> dict[str,
     return coverage
 
 
-def _serialize_primary_pose_frame(instances: list[tuple[Any, Any | None]]) -> dict[str, Any] | None:
-    primary = _select_primary_pose_instance(instances)
-    if primary is None:
+def _serialize_pose_frame(instances: list[tuple[Any, Any | None]]) -> dict[str, Any] | None:
+    if not instances:
         return None
-    xy, conf = primary
+    serialized_instances: list[dict[str, Any]] = []
+    for xy, conf in instances:
+        serialized_instances.append(
+            {
+                "keypoints": _serialize_pose_keypoints(xy, conf),
+                "part_coverage": _compute_pose_part_coverage(conf),
+            }
+        )
+    primary = serialized_instances[0]
     return {
-        "keypoints": _serialize_pose_keypoints(xy, conf),
-        "part_coverage": _compute_pose_part_coverage(conf),
+        "keypoints": primary["keypoints"],
+        "part_coverage": primary["part_coverage"],
+        "instances": serialized_instances,
     }
 
 
@@ -1099,13 +1107,17 @@ def _run_pose_overlay_job(
             kp = result[0].keypoints
             instances = _iter_pose_instances(kp)
             primary_instance = _select_primary_pose_instance(instances)
-            selected_instances = [primary_instance] if primary_instance is not None else []
+            selected_instances = list(instances)
             pose_summaries = _summarize_pose_instances(selected_instances, w, h)
             pose_summary_frames.append(pose_summaries)
-            if pose_summaries:
+            if primary_instance is not None:
+                primary_summary = _summarize_pose_instances([primary_instance], w, h)
+            else:
+                primary_summary = []
+            if primary_summary:
                 pose_anchor = (
-                    float(pose_summaries[0].get("anchor_x", 0.5)),
-                    float(pose_summaries[0].get("anchor_y", 0.5)),
+                    float(primary_summary[0].get("anchor_x", 0.5)),
+                    float(primary_summary[0].get("anchor_y", 0.5)),
                 )
             for xy, conf in selected_instances:
                 pose_arms_overlay, pose_legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
@@ -1256,15 +1268,19 @@ def _run_hybrid_overlay_job(
             kp = pose_result[0].keypoints
             instances = _iter_pose_instances(kp)
             primary_instance = _select_primary_pose_instance(instances)
-            selected_instances = [primary_instance] if primary_instance is not None else []
+            selected_instances = list(instances)
             pose_summaries = _summarize_pose_instances(selected_instances, w, h)
             pose_summary_frames.append(pose_summaries)
-            if pose_summaries:
+            if primary_instance is not None:
+                primary_summary = _summarize_pose_instances([primary_instance], w, h)
+            else:
+                primary_summary = []
+            if primary_summary:
                 pose_anchor = (
-                    float(pose_summaries[0].get("anchor_x", 0.5)),
-                    float(pose_summaries[0].get("anchor_y", 0.5)),
+                    float(primary_summary[0].get("anchor_x", 0.5)),
+                    float(primary_summary[0].get("anchor_y", 0.5)),
                 )
-            pose_frame = _serialize_primary_pose_frame(selected_instances)
+            pose_frame = _serialize_pose_frame(selected_instances)
             for xy, conf in selected_instances:
                 pose_arms_overlay, pose_legs_overlay = _render_pose_layers(xy, conf, w, h, arms_color, legs_color)
                 arms_overlay = np.maximum(arms_overlay, pose_arms_overlay)

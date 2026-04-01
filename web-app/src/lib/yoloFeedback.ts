@@ -21,6 +21,15 @@ type StoredPoseFrame = {
     score: number;
   }>;
   part_coverage?: Record<string, number> | null;
+  instances?: Array<{
+    keypoints?: Array<{
+      name?: string;
+      x: number;
+      y: number;
+      score: number;
+    }>;
+    part_coverage?: Record<string, number> | null;
+  }> | null;
 };
 
 const BODY_REGION_KEYPOINTS: Record<BodyRegion, number[]> = {

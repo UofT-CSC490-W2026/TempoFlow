@@ -14,7 +14,7 @@ import {
 } from "./overlaySegments";
 
 export const BROWSER_YOLO_OVERLAY_FPS = 12;
-export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v18";
+export const BROWSER_YOLO_VARIANT = "yolo26n-python-hybrid-v22";
 
 type VideoSide = "reference" | "practice";
 type PoseLayer = "arms" | "legs";
@@ -77,6 +77,15 @@ type HybridPoseFrame = {
     score: number;
   }>;
   part_coverage?: Record<string, number> | null;
+  instances?: Array<{
+    keypoints: Array<{
+      name?: string;
+      x: number;
+      y: number;
+      score: number;
+    }>;
+    part_coverage?: Record<string, number> | null;
+  }> | null;
 };
 
 type HybridResult = {
