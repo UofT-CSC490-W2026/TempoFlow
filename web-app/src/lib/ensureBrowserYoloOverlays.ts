@@ -937,6 +937,7 @@ async function runSegmentedBrowserYoloPipeline(params: {
     });
   };
   signal?.addEventListener("abort", cancelStartedJobs, { once: true });
+  const uploadedSides = new Set<VideoSide>();
   const rememberJob = async (job: PythonJobRegistration) => {
     startedJobs.push(job);
     if (signal?.aborted) {
@@ -1024,7 +1025,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
         if (!segExists && !poseExists) {
           throwIfAborted(signal);
           const hybridForm = new FormData();
-          hybridForm.append("video", file, file.name);
+          if (!uploadedSides.has(side)) {
+            hybridForm.append("video", file, file.name);
+            uploadedSides.add(side);
+          }
           hybridForm.append("color", YOLO_SEG_COLORS[side]);
           hybridForm.append("arms_color", YOLO_POSE_COLORS[side].arms);
           hybridForm.append("legs_color", YOLO_POSE_COLORS[side].legs);
@@ -1068,7 +1072,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
           : (async () => {
               throwIfAborted(signal);
               const segForm = new FormData();
-              segForm.append("video", file, file.name);
+              if (!uploadedSides.has(side)) {
+                segForm.append("video", file, file.name);
+                uploadedSides.add(side);
+              }
               segForm.append("color", YOLO_SEG_COLORS[side]);
               segForm.append("fps", String(BROWSER_YOLO_OVERLAY_FPS));
               segForm.append("session_id", sessionId);
@@ -1093,7 +1100,10 @@ async function runSegmentedBrowserYoloPipeline(params: {
           : (async () => {
               throwIfAborted(signal);
               const poseForm = new FormData();
-              poseForm.append("video", file, file.name);
+              if (!uploadedSides.has(side)) {
+                poseForm.append("video", file, file.name);
+                uploadedSides.add(side);
+              }
               poseForm.append("arms_color", YOLO_POSE_COLORS[side].arms);
               poseForm.append("legs_color", YOLO_POSE_COLORS[side].legs);
               poseForm.append("fps", String(BROWSER_YOLO_OVERLAY_FPS));
