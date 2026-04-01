@@ -199,6 +199,35 @@ function getSegmentBounds(segment: OverlaySegmentArtifact | null | undefined) {
   );
 }
 
+function getSampleBounds(sample: SampledPoseFrame | null | undefined) {
+  if (!sample) return null;
+  const visible = sample.keypoints
+    .filter((point) => (point.score ?? 0) > 0.25)
+    .map((point) => ({
+      x: point.x / Math.max(1, sample.frameWidth),
+      y: point.y / Math.max(1, sample.frameHeight),
+    }));
+  if (visible.length < 4) return null;
+
+  const min_x = Math.min(...visible.map((point) => point.x));
+  const max_x = Math.max(...visible.map((point) => point.x));
+  const min_y = Math.min(...visible.map((point) => point.y));
+  const max_y = Math.max(...visible.map((point) => point.y));
+
+  return {
+    anchor_x: (min_x + max_x) / 2,
+    anchor_y: max_y,
+    center_x: (min_x + max_x) / 2,
+    center_y: (min_y + max_y) / 2,
+    width: Math.max(0.05, max_x - min_x),
+    height: Math.max(0.08, max_y - min_y),
+    min_x,
+    max_x,
+    min_y,
+    max_y,
+  } satisfies OverlayPersonSummary;
+}
+
 function getCueAnchor(
   bodyRegion: DanceFeedback["bodyRegion"],
   bounds: OverlayPersonSummary,
@@ -579,7 +608,12 @@ export function buildOverlayVisualCue(params: {
 
   const practiceSegment = getOverlaySegmentByIndex(practiceArtifact, feedback.segmentIndex);
   const referenceSegment = getOverlaySegmentByIndex(referenceArtifact, feedback.segmentIndex);
-  const bounds = getSegmentBounds(practiceSegment) ?? getSegmentBounds(referenceSegment) ?? DEFAULT_BOUNDS;
+  const bounds =
+    getSampleBounds(practiceSample) ??
+    getSampleBounds(referenceSample) ??
+    getSegmentBounds(practiceSegment) ??
+    getSegmentBounds(referenceSegment) ??
+    DEFAULT_BOUNDS;
   const sampleAnchor = getSampleCueAnchor(feedback, practiceSample, referenceSample);
   const fallbackAnchor = getCueAnchor(feedback.bodyRegion, bounds);
   const anchor = stabilizeAnchorWithinBounds(sampleAnchor, bounds, fallbackAnchor);

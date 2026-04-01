@@ -663,6 +663,76 @@ function getStoredOverlayPoseInstances(segment: OverlaySegmentArtifact | null, s
     .filter((instance) => instance.some((point) => (point.score ?? 0) >= OVERLAY_SCORE_CONFIDENCE));
 }
 
+function normalizeSampleKeypoints(sample: SampledPoseFrame) {
+  const width = Math.max(1, sample.frameWidth || 1);
+  const height = Math.max(1, sample.frameHeight || 1);
+  return sample.keypoints.map((point) => ({
+    ...point,
+    x: point.x / width,
+    y: point.y / height,
+  }));
+}
+
+function chooseClosestOverlayPoseInstance(
+  instances: PoseKeypoint[][],
+  targetSample: SampledPoseFrame | null,
+) {
+  if (!instances.length) return null;
+  if (!targetSample) return instances[0] ?? null;
+
+  const target = normalizeSampleKeypoints(targetSample);
+  let bestInstance: PoseKeypoint[] | null = null;
+  let bestScore = Number.POSITIVE_INFINITY;
+
+  instances.forEach((instance) => {
+    let total = 0;
+    let count = 0;
+    for (let index = 0; index < Math.min(instance.length, target.length); index += 1) {
+      const livePoint = instance[index];
+      const targetPoint = target[index];
+      if ((livePoint?.score ?? 0) < OVERLAY_SCORE_CONFIDENCE || (targetPoint?.score ?? 0) < OVERLAY_SCORE_CONFIDENCE) {
+        continue;
+      }
+      total += Math.hypot((livePoint?.x ?? 0) - (targetPoint?.x ?? 0), (livePoint?.y ?? 0) - (targetPoint?.y ?? 0));
+      count += 1;
+    }
+    if (count < 4) return;
+    const score = total / count;
+    if (score < bestScore) {
+      bestScore = score;
+      bestInstance = instance;
+    }
+  });
+
+  return bestInstance ?? instances[0] ?? null;
+}
+
+function buildSampledPoseFrameFromOverlayInstance(params: {
+  instance: PoseKeypoint[];
+  segmentIndex: number;
+  timestamp: number;
+}): SampledPoseFrame {
+  const { instance, segmentIndex, timestamp } = params;
+  return {
+    timestamp,
+    segmentIndex,
+    frameWidth: 1,
+    frameHeight: 1,
+    keypoints: instance.map((point) => ({
+      ...point,
+      x: point.x,
+      y: point.y,
+    })),
+    partCoverage: {
+      head: 1,
+      arms: 1,
+      torso: 1,
+      legs: 1,
+      full_body: 1,
+    },
+  };
+}
+
 function getContainedVideoRect(containerWidth: number, containerHeight: number, mediaWidth: number, mediaHeight: number) {
   const safeMediaWidth = Math.max(1, mediaWidth);
   const safeMediaHeight = Math.max(1, mediaHeight);
@@ -2631,6 +2701,32 @@ export function FeedbackViewer(props: EbsViewerProps) {
     if (activeVideoSegmentIndex < 0) return null;
     return getNearestSegmentSample(visualReferenceSamples, activeVideoSegmentIndex, state.sharedTime);
   }, [activeVideoSegmentIndex, state.sharedTime, visualReferenceSamples]);
+  const liveCuePracticeSample = useMemo(() => {
+    if (activeVideoSegmentIndex < 0 || !activeOverlayPracticeSegment) return currentVisualPracticeSample;
+    const instance = chooseClosestOverlayPoseInstance(
+      getStoredOverlayPoseInstances(activeOverlayPracticeSegment, state.sharedTime),
+      currentVisualPracticeSample,
+    );
+    if (!instance) return currentVisualPracticeSample;
+    return buildSampledPoseFrameFromOverlayInstance({
+      instance,
+      segmentIndex: activeVideoSegmentIndex,
+      timestamp: state.sharedTime,
+    });
+  }, [activeOverlayPracticeSegment, activeVideoSegmentIndex, currentVisualPracticeSample, state.sharedTime]);
+  const liveCueReferenceSample = useMemo(() => {
+    if (activeVideoSegmentIndex < 0 || !activeOverlayReferenceSegment) return currentVisualReferenceSample;
+    const instance = chooseClosestOverlayPoseInstance(
+      getStoredOverlayPoseInstances(activeOverlayReferenceSegment, state.sharedTime),
+      currentVisualReferenceSample,
+    );
+    if (!instance) return currentVisualReferenceSample;
+    return buildSampledPoseFrameFromOverlayInstance({
+      instance,
+      segmentIndex: activeVideoSegmentIndex,
+      timestamp: state.sharedTime,
+    });
+  }, [activeOverlayReferenceSegment, activeVideoSegmentIndex, currentVisualReferenceSample, state.sharedTime]);
 
   const overlayVisualCue = useMemo(
     () => {
@@ -2641,10 +2737,10 @@ export function FeedbackViewer(props: EbsViewerProps) {
           practiceArtifact: overlayCuePracticeArtifact,
           referenceArtifact: overlayCueReferenceArtifact,
           practiceSample:
-            currentVisualPracticeSample ??
+            liveCuePracticeSample ??
             (typeof sampleIndex === "number" && sampleIndex >= 0 ? (visualUserSamples[sampleIndex] ?? null) : null),
           referenceSample:
-            currentVisualReferenceSample ??
+            liveCueReferenceSample ??
             (typeof sampleIndex === "number" && sampleIndex >= 0 ? (visualReferenceSamples[sampleIndex] ?? null) : null),
         });
       };
@@ -2674,8 +2770,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
     [
       activeVisualFeedback,
       activeVisualFeedbackRows,
-      currentVisualPracticeSample,
-      currentVisualReferenceSample,
+      liveCuePracticeSample,
+      liveCueReferenceSample,
       overlayCuePracticeArtifact,
       overlayCueReferenceArtifact,
       visualReferenceSamples,
