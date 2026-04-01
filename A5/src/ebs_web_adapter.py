@@ -259,8 +259,8 @@ def process_uploads(ref_video: UploadFile, user_video: UploadFile) -> dict[str, 
         shared_end = alignment["clip_1_end_sec"]
         shared_len_sec = round(float(shared_end - shared_start), ROUNDING_PRECISION)
 
-        shared_audio = ref_audio[int(shared_start * SAMPLE_RATE) : int(shared_end * SAMPLE_RATE)]
-        beat_times, bpm, confidence_info, onset_env, beat_frames = track_beats(shared_audio, SAMPLE_RATE)
+        shared_audio = ref_audio[int(shared_start * load_sr) : int(shared_end * load_sr)]
+        beat_times, bpm, confidence_info, onset_env, beat_frames = track_beats(shared_audio, load_sr)
 
         segmentation_mode = "fixed_time"
         beats_shared: list[float] = []
@@ -359,8 +359,8 @@ def process_videos_from_paths(ref_video_path: str, user_video_path: str) -> dict
         shared_end = alignment["clip_1_end_sec"]
         shared_len_sec = round(float(shared_end - shared_start), ROUNDING_PRECISION)
 
-        shared_audio = ref_audio[int(shared_start * SAMPLE_RATE) : int(shared_end * SAMPLE_RATE)]
-        beat_times, bpm, confidence_info, onset_env, beat_frames = track_beats(shared_audio, SAMPLE_RATE)
+        shared_audio = ref_audio[int(shared_start * load_sr) : int(shared_end * load_sr)]
+        beat_times, bpm, confidence_info, onset_env, beat_frames = track_beats(shared_audio, load_sr)
 
         segmentation_mode = "fixed_time"
         beats_shared: list[float] = []
