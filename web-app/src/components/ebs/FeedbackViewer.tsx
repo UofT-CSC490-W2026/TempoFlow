@@ -685,6 +685,7 @@ function drawPoseInstance(
   fill: string,
   nodeFill: string,
 ) {
+  const headIndexes = [0, 1, 2, 3, 4];
   const segments = [
     [5, 6],
     [5, 7],
@@ -733,8 +734,23 @@ function drawPoseInstance(
     ctx.stroke();
   });
 
+  const visibleHeadPoints = headIndexes.filter(visible).map(pointAt);
+  if (visibleHeadPoints.length > 0) {
+    const headCenter = {
+      x: visibleHeadPoints.reduce((sum, point) => sum + point.x, 0) / visibleHeadPoints.length,
+      y: visibleHeadPoints.reduce((sum, point) => sum + point.y, 0) / visibleHeadPoints.length,
+    };
+    const shoulderSpan =
+      visible(5) && visible(6) ? Math.abs(pointAt(6).x - pointAt(5).x) : rect.width * 0.08;
+    const headRadius = Math.max(8, shoulderSpan * 0.22);
+    ctx.beginPath();
+    ctx.arc(headCenter.x, headCenter.y, headRadius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   ctx.fillStyle = nodeFill;
   keypoints.forEach((point, index) => {
+    if (headIndexes.includes(index)) return;
     if (!visible(index)) return;
     const drawn = pointAt(index);
     ctx.beginPath();
