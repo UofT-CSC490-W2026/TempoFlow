@@ -16,7 +16,7 @@ import {
 } from "./ebsProcessorUrl";
 import { mergePostProcessMeta } from "./sessionPostProcessing";
 
-const MAX_EBS_PROCESSING_SECONDS = 5 * 60;
+const MAX_EBS_PROCESSING_SECONDS = 55; // Below CloudFront 60s origin timeout; triggers poll fallback
 const PROCESSING_POLL_MS = 1200;
 
 type ProcessorStatusPayload = {

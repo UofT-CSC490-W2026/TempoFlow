@@ -25,7 +25,7 @@ BEATS_PER_SEGMENT = 8
 FALLBACK_CHUNK_SEC = 3.0
 
 # Performance constants for long videos
-LONG_SESSION_THRESHOLD_SEC = 300  # 5 minutes
+LONG_SESSION_THRESHOLD_SEC = 60   # 1 minute — fast path for EC2 (no Apple Accelerate BLAS)
 LOWER_SAMPLE_RATE = 11025
 LARGER_HOP_LENGTH = 1024
 

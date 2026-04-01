@@ -8,6 +8,7 @@ librosa
 numpy
 soundfile
 scipy
+scikit-learn
 matplotlib
 pandas
 httpx

@@ -1647,7 +1647,7 @@ async def overlay_yolo_pose_result(job_id: str, layer: str, background_tasks: Ba
 
 
 # Use a shared executor to limit concurrent YOLO inference tasks
-YOLO_EXECUTOR = ThreadPoolExecutor(max_workers=1)
+YOLO_EXECUTOR = ThreadPoolExecutor(max_workers=2)
 
 # Global models cached to avoid reloading weights in every thread
 _YOLO_SEG_MODEL_CACHE: Any = None
