@@ -202,7 +202,7 @@ export class A5BackendStack extends cdk.Stack {
         {
           namespace: 'aws:autoscaling:launchconfiguration',
           optionName: 'InstanceType',
-          value: 't3.large',
+          value: 'c5.xlarge',
         },
         {
           namespace: 'aws:autoscaling:launchconfiguration',
@@ -212,7 +212,7 @@ export class A5BackendStack extends cdk.Stack {
         {
           namespace: 'aws:autoscaling:launchconfiguration',
           optionName: 'RootVolumeSize',
-          value: '24',
+          value: '50',
         },
         {
           namespace: 'aws:elasticbeanstalk:application:environment',

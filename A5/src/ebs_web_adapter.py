@@ -250,9 +250,9 @@ def process_uploads(ref_video: UploadFile, user_video: UploadFile) -> dict[str, 
         ref_wav = extract_audio_from_video(ref_tmp, sr=load_sr)
         user_wav = extract_audio_from_video(user_tmp, sr=load_sr)
 
-        # Load into memory
-        ref_audio, _ = librosa.load(ref_wav, sr=load_sr, mono=True)
-        user_audio, _ = librosa.load(user_wav, sr=load_sr, mono=True)
+        # Load into memory (direct load, bypass internal resampler)
+        ref_audio, _ = librosa.load(ref_wav, sr=None, mono=True)
+        user_audio, _ = librosa.load(user_wav, sr=None, mono=True)
 
         alignment = _auto_align(ref_audio, user_audio, load_sr)
         shared_start = alignment["clip_1_start_sec"]
@@ -350,9 +350,9 @@ def process_videos_from_paths(ref_video_path: str, user_video_path: str) -> dict
         ref_wav = extract_audio_from_video(ref_video_path, sr=load_sr)
         user_wav = extract_audio_from_video(user_video_path, sr=load_sr)
 
-        # Load into memory
-        ref_audio, _ = librosa.load(ref_wav, sr=load_sr, mono=True)
-        user_audio, _ = librosa.load(user_wav, sr=load_sr, mono=True)
+        # Load into memory (direct load, bypass internal resampler)
+        ref_audio, _ = librosa.load(ref_wav, sr=None, mono=True)
+        user_audio, _ = librosa.load(user_wav, sr=None, mono=True)
 
         alignment = _auto_align(ref_audio, user_audio, load_sr)
         shared_start = alignment["clip_1_start_sec"]
