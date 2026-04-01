@@ -10,6 +10,7 @@ import type {
   PoseKeypoint,
   SampledPoseFrame,
 } from "./bodyPix/types";
+import { buildOverlayPosePairs } from "../components/ebs/overlayPoseMatching";
 import type { OverlayArtifact, OverlaySegmentArtifact } from "./overlayStorage";
 import { getOverlaySegmentByIndex } from "./overlaySegments";
 
@@ -41,6 +42,7 @@ const BODY_REGION_KEYPOINTS: Record<BodyRegion, number[]> = {
 };
 export const ANGLE_SIGNAL_STANDARD_DEGREES = 30;
 const MIN_ANGLE_SIGNAL_PCT = 100;
+const MIN_INSTANCE_KEYPOINT_SCORE = 0.25;
 
 function isFiniteNumber(value: unknown): value is number {
   return typeof value === "number" && Number.isFinite(value);
@@ -104,42 +106,130 @@ function readStoredPoseFrames(segment: OverlaySegmentArtifact | null | undefined
 }
 
 export function overlaySegmentHasYoloPoseFrames(segment: OverlaySegmentArtifact | null | undefined) {
-  return readStoredPoseFrames(segment).some((frame) => Array.isArray(frame?.keypoints) && frame.keypoints.length > 0);
+  return readStoredPoseFrames(segment).some((frame) => {
+    if (!frame) return false;
+    if (Array.isArray(frame.keypoints) && frame.keypoints.length > 0) return true;
+    return Boolean(frame.instances?.some((inst) => Array.isArray(inst.keypoints) && inst.keypoints.length > 0));
+  });
 }
 
 export function overlayArtifactHasYoloPoseFrames(artifact: OverlayArtifact | null) {
   return (artifact?.segments ?? []).some((segment) => overlaySegmentHasYoloPoseFrames(segment));
 }
 
-function buildSamplesForSegment(params: {
-  segment: OverlaySegmentArtifact;
+function expandFrameToPixelInstances(frame: StoredPoseFrame | null): PoseKeypoint[][] {
+  if (!frame) return [];
+  const instanceRecords =
+    Array.isArray(frame.instances) && frame.instances.length > 0
+      ? frame.instances
+      : [{ keypoints: frame.keypoints }];
+
+  return instanceRecords
+    .map((inst) => toPoseKeypoints(inst?.keypoints ?? frame.keypoints))
+    .filter((kp) => kp.some((point) => (point.score ?? 0) >= MIN_INSTANCE_KEYPOINT_SCORE));
+}
+
+function keypointsPixelsToNormalized(keypoints: PoseKeypoint[], width: number, height: number): PoseKeypoint[] {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  return keypoints.map((point) => ({ ...point, x: point.x / w, y: point.y / h }));
+}
+
+function keypointsNormalizedToPixels(keypoints: PoseKeypoint[], width: number, height: number): PoseKeypoint[] {
+  const w = Math.max(1, width);
+  const h = Math.max(1, height);
+  return keypoints.map((point) => ({ ...point, x: point.x * w, y: point.y * h }));
+}
+
+function primaryPairedKeypointsForFrames(params: {
+  referenceFrame: StoredPoseFrame | null;
+  practiceFrame: StoredPoseFrame | null;
+  referenceSegment: OverlaySegmentArtifact;
+  practiceSegment: OverlaySegmentArtifact;
+}): { reference: PoseKeypoint[]; practice: PoseKeypoint[] } | null {
+  const { referenceFrame, practiceFrame, referenceSegment, practiceSegment } = params;
+  const referenceInstances = expandFrameToPixelInstances(referenceFrame);
+  const practiceInstances = expandFrameToPixelInstances(practiceFrame);
+  if (!referenceInstances.length || !practiceInstances.length) return null;
+
+  const referenceNormalized = referenceInstances.map((keypoints) =>
+    keypointsPixelsToNormalized(keypoints, referenceSegment.width, referenceSegment.height),
+  );
+  const practiceNormalized = practiceInstances.map((keypoints) =>
+    keypointsPixelsToNormalized(keypoints, practiceSegment.width, practiceSegment.height),
+  );
+  const pairs = buildOverlayPosePairs(referenceNormalized, practiceNormalized);
+  const primary = pairs[0];
+  if (!primary) return null;
+
+  return {
+    reference: keypointsNormalizedToPixels(primary.reference, referenceSegment.width, referenceSegment.height),
+    practice: keypointsNormalizedToPixels(primary.practice, practiceSegment.width, practiceSegment.height),
+  };
+}
+
+/** Per-frame samples for ref + practice that use the same dancer pairing as on-screen overlays (multi-person safe). */
+function buildAlignedPairSamplesForSegment(params: {
+  referenceSegment: OverlaySegmentArtifact;
+  practiceSegment: OverlaySegmentArtifact;
   segmentIndex: number;
   sharedSegment?: EbsSegment | null;
-}): SampledPoseFrame[] {
-  const { segment, segmentIndex, sharedSegment } = params;
-  const poseFrames = readStoredPoseFrames(segment);
-  const meta = (segment.meta ?? {}) as Record<string, unknown>;
-  const sharedStartSec = isFiniteNumber(meta.sharedStartSec)
-    ? meta.sharedStartSec
-    : sharedSegment?.shared_start_sec ?? segment.startSec;
-  const sharedEndSec = isFiniteNumber(meta.sharedEndSec)
-    ? meta.sharedEndSec
-    : sharedSegment?.shared_end_sec ?? segment.endSec;
-  const durationSec = Math.max(0, sharedEndSec - sharedStartSec);
-  const fps = Math.max(1, segment.fps || 1);
+}): { referenceSamples: SampledPoseFrame[]; practiceSamples: SampledPoseFrame[] } {
+  const { referenceSegment, practiceSegment, segmentIndex, sharedSegment } = params;
+  const refFrames = readStoredPoseFrames(referenceSegment);
+  const practiceFrames = readStoredPoseFrames(practiceSegment);
+  const frameCount = Math.min(refFrames.length, practiceFrames.length);
 
-  return poseFrames.map((frame, frameIndex) => {
-    const keypoints = toPoseKeypoints(frame?.keypoints);
+  const refMeta = (referenceSegment.meta ?? {}) as Record<string, unknown>;
+  const practiceMeta = (practiceSegment.meta ?? {}) as Record<string, unknown>;
+  const sharedStartSec = isFiniteNumber(refMeta.sharedStartSec)
+    ? refMeta.sharedStartSec
+    : isFiniteNumber(practiceMeta.sharedStartSec)
+      ? practiceMeta.sharedStartSec
+      : sharedSegment?.shared_start_sec ?? referenceSegment.startSec;
+  const sharedEndSec = isFiniteNumber(refMeta.sharedEndSec)
+    ? refMeta.sharedEndSec
+    : isFiniteNumber(practiceMeta.sharedEndSec)
+      ? practiceMeta.sharedEndSec
+      : sharedSegment?.shared_end_sec ?? referenceSegment.endSec;
+  const durationSec = Math.max(0, sharedEndSec - sharedStartSec);
+  const fps = Math.max(1, Math.min(referenceSegment.fps || 1, practiceSegment.fps || 1));
+
+  const referenceSamples: SampledPoseFrame[] = [];
+  const practiceSamples: SampledPoseFrame[] = [];
+
+  for (let frameIndex = 0; frameIndex < frameCount; frameIndex += 1) {
+    const refFrame = refFrames[frameIndex] ?? null;
+    const practiceFrame = practiceFrames[frameIndex] ?? null;
+    const paired = primaryPairedKeypointsForFrames({
+      referenceFrame: refFrame,
+      practiceFrame,
+      referenceSegment,
+      practiceSegment,
+    });
+    const refKeypoints = paired?.reference ?? toPoseKeypoints(refFrame?.keypoints);
+    const practiceKeypoints = paired?.practice ?? toPoseKeypoints(practiceFrame?.keypoints);
     const timestamp = sharedStartSec + Math.min(durationSec, frameIndex / fps);
-    return {
+
+    referenceSamples.push({
       timestamp,
       segmentIndex,
-      frameWidth: Math.max(1, segment.width),
-      frameHeight: Math.max(1, segment.height),
-      keypoints,
-      partCoverage: toPartCoverage(frame?.part_coverage, keypoints),
-    };
-  });
+      frameWidth: Math.max(1, referenceSegment.width),
+      frameHeight: Math.max(1, referenceSegment.height),
+      keypoints: refKeypoints,
+      partCoverage: toPartCoverage(refFrame?.part_coverage, refKeypoints),
+    });
+    practiceSamples.push({
+      timestamp,
+      segmentIndex,
+      frameWidth: Math.max(1, practiceSegment.width),
+      frameHeight: Math.max(1, practiceSegment.height),
+      keypoints: practiceKeypoints,
+      partCoverage: toPartCoverage(practiceFrame?.part_coverage, practiceKeypoints),
+    });
+  }
+
+  return { referenceSamples, practiceSamples };
 }
 
 function smallestAngleDifferenceDegrees(a: number, b: number) {
@@ -266,13 +356,9 @@ export function buildVisualFeedbackFromYoloArtifacts(params: {
     if (!refSegment || !userSegment) continue;
     if (!overlaySegmentHasYoloPoseFrames(refSegment) || !overlaySegmentHasYoloPoseFrames(userSegment)) continue;
 
-    const refSegmentSamples = buildSamplesForSegment({
-      segment: refSegment,
-      segmentIndex,
-      sharedSegment: segments[segmentIndex] ?? null,
-    });
-    const userSegmentSamples = buildSamplesForSegment({
-      segment: userSegment,
+    const { referenceSamples: refSegmentSamples, practiceSamples: userSegmentSamples } = buildAlignedPairSamplesForSegment({
+      referenceSegment: refSegment,
+      practiceSegment: userSegment,
       segmentIndex,
       sharedSegment: segments[segmentIndex] ?? null,
     });

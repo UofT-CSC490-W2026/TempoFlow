@@ -21,6 +21,11 @@ import {
   ensureBrowserYoloOverlays,
 } from "../../lib/ensureBrowserYoloOverlays";
 import {
+  applyOverlayNormalizationToNormalizedKeypoints,
+  readOverlayNormalization,
+  type OverlayNormalization,
+} from "../../lib/overlayNormalization";
+import {
   buildOverlayKey,
   getSessionOverlay,
   type OverlayArtifact,
@@ -210,15 +215,6 @@ const GEMINI_MIN_ANGLE_SUPPORT_FRAMES: Record<FeedbackDifficulty, number> = {
   advanced: 1,
 };
 
-type OverlayNormalization = {
-  scaleX: number;
-  scaleY: number;
-  translateX: number;
-  translateY: number;
-  pivotX: number;
-  pivotY: number;
-};
-
 type ReferenceOverlayAdjustments = {
   scaleX: number;
   scaleY: number;
@@ -254,63 +250,15 @@ function clamp01(value: number) {
   return Math.max(0, Math.min(1, value));
 }
 
-function readOverlayNormalization(segment: OverlaySegmentArtifact | null) {
-  const normalization = segment?.meta?.normalization as
-    | {
-        scaleX?: number;
-        scaleY?: number;
-        translateX?: number;
-        translateY?: number;
-        pivotX?: number;
-        pivotY?: number;
-      }
-    | undefined;
-  if (!normalization) return null;
-
-  const scaleX = Number(normalization.scaleX);
-  const scaleY = Number(normalization.scaleY);
-  const translateX = Number(normalization.translateX);
-  const translateY = Number(normalization.translateY);
-  const pivotX = Number(normalization.pivotX);
-  const pivotY = Number(normalization.pivotY);
-
-  if (
-    !Number.isFinite(scaleX) ||
-    !Number.isFinite(scaleY) ||
-    !Number.isFinite(translateX) ||
-    !Number.isFinite(translateY) ||
-    !Number.isFinite(pivotX) ||
-    !Number.isFinite(pivotY)
-  ) {
-    return null;
-  }
-
-  return {
-    scaleX,
-    scaleY,
-    translateX,
-    translateY,
-    pivotX,
-    pivotY,
-  } satisfies OverlayNormalization;
-}
-
-function toOverlaySpaceKeypoints(
-  sample: SampledPoseFrame,
-  normalization: OverlayNormalization | null,
-): PoseKeypoint[] {
+function toOverlaySpaceKeypoints(sample: SampledPoseFrame, normalization: OverlayNormalization | null): PoseKeypoint[] {
   const width = Math.max(1, sample.frameWidth || 1);
   const height = Math.max(1, sample.frameHeight || 1);
-
-  return sample.keypoints.map((keypoint) => {
-    let x = keypoint.x / width;
-    let y = keypoint.y / height;
-    if (normalization) {
-      x = normalization.pivotX + (x - normalization.pivotX) * normalization.scaleX + normalization.translateX;
-      y = normalization.pivotY + (y - normalization.pivotY) * normalization.scaleY + normalization.translateY;
-    }
-    return { ...keypoint, x, y };
-  });
+  const normalized = sample.keypoints.map((keypoint) => ({
+    ...keypoint,
+    x: keypoint.x / width,
+    y: keypoint.y / height,
+  }));
+  return applyOverlayNormalizationToNormalizedKeypoints(normalized, normalization);
 }
 
 function getNearestSegmentSample(
@@ -646,7 +594,11 @@ function toOverlayPoseKeypoints(
   });
 }
 
-function getStoredOverlayPoseInstances(segment: OverlaySegmentArtifact | null, sharedTime: number): PoseKeypoint[][] {
+function getStoredOverlayPoseInstances(
+  segment: OverlaySegmentArtifact | null,
+  sharedTime: number,
+  frameDimensions?: { width: number; height: number } | null,
+): PoseKeypoint[][] {
   if (!segment) return [];
   const frames = readStoredOverlayPoseFrames(segment);
   if (!frames.length) return [];
@@ -658,8 +610,10 @@ function getStoredOverlayPoseInstances(segment: OverlaySegmentArtifact | null, s
   const frame = frames[frameIndex];
   if (!frame) return [];
   const instances = Array.isArray(frame.instances) && frame.instances.length ? frame.instances : [frame];
+  const width = Math.max(1, frameDimensions?.width ?? segment.width);
+  const height = Math.max(1, frameDimensions?.height ?? segment.height);
   return instances
-    .map((instance) => toOverlayPoseKeypoints(instance?.keypoints, segment.width, segment.height))
+    .map((instance) => toOverlayPoseKeypoints(instance?.keypoints, width, height))
     .filter((instance) => instance.some((point) => (point.score ?? 0) >= OVERLAY_SCORE_CONFIDENCE));
 }
 
@@ -834,8 +788,11 @@ function DirectReferencePoseOverlay(props: {
   referenceSegment: OverlaySegmentArtifact | null;
   practiceSegment: OverlaySegmentArtifact | null;
   sharedTime: number;
+  /** Decoder size for practice pose JSON (px → 0..1). Must match the file the pipeline used. */
+  practiceFrameDims?: { width: number; height: number } | null;
+  referenceFrameDims?: { width: number; height: number } | null;
 }) {
-  const { videoRef, referenceSegment, practiceSegment, sharedTime } = props;
+  const { videoRef, referenceSegment, practiceSegment, sharedTime, practiceFrameDims, referenceFrameDims } = props;
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
@@ -845,42 +802,81 @@ function DirectReferencePoseOverlay(props: {
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
 
-    const cssWidth = video.clientWidth || 0;
-    const cssHeight = video.clientHeight || 0;
-    if (cssWidth <= 0 || cssHeight <= 0) return;
+    const draw = () => {
+      const cssWidth = video.clientWidth || 0;
+      const cssHeight = video.clientHeight || 0;
+      if (cssWidth <= 0 || cssHeight <= 0) return;
 
-    const dpr = window.devicePixelRatio || 1;
-    const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
-    const pixelHeight = Math.max(1, Math.round(cssHeight * dpr));
-    if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
-      canvas.width = pixelWidth;
-      canvas.height = pixelHeight;
-    }
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.scale(dpr, dpr);
+      const dpr = window.devicePixelRatio || 1;
+      const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
+      const pixelHeight = Math.max(1, Math.round(cssHeight * dpr));
+      if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+        canvas.width = pixelWidth;
+        canvas.height = pixelHeight;
+      }
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+      ctx.scale(dpr, dpr);
 
-    const referenceInstances = getStoredOverlayPoseInstances(referenceSegment, sharedTime);
-    const practiceInstances = getStoredOverlayPoseInstances(practiceSegment, sharedTime);
-    if (!referenceInstances.length || !practiceInstances.length) return;
+      const practiceW =
+        video.videoWidth > 0 ? video.videoWidth : practiceFrameDims?.width ?? practiceSegment?.width ?? 1;
+      const practiceH =
+        video.videoHeight > 0 ? video.videoHeight : practiceFrameDims?.height ?? practiceSegment?.height ?? 1;
+      const refW = referenceFrameDims?.width ?? referenceSegment?.width ?? 1;
+      const refH = referenceFrameDims?.height ?? referenceSegment?.height ?? 1;
 
-    const mediaWidth =
-      video.videoWidth ||
-      practiceSegment?.width ||
-      referenceSegment?.width ||
-      cssWidth;
-    const mediaHeight =
-      video.videoHeight ||
-      practiceSegment?.height ||
-      referenceSegment?.height ||
-      cssHeight;
-    const rect = getContainedVideoRect(cssWidth, cssHeight, mediaWidth, mediaHeight);
-    const pairs = buildOverlayPosePairs(referenceInstances, practiceInstances);
-    pairs.forEach((pair) => {
-      const transformed = transformReferencePoseToPractice(pair.reference, pair.practice);
-      drawPoseInstance(ctx, rect, transformed, "rgba(125, 211, 252, 0.95)", "rgba(56, 189, 248, 0.18)", "rgba(147, 197, 253, 0.9)");
-    });
-  }, [practiceSegment, referenceSegment, sharedTime, videoRef]);
+      const referenceInstances = getStoredOverlayPoseInstances(referenceSegment, sharedTime, { width: refW, height: refH });
+      const practiceInstances = getStoredOverlayPoseInstances(practiceSegment, sharedTime, { width: practiceW, height: practiceH });
+      if (!referenceInstances.length || !practiceInstances.length) return;
+
+      const normalization = readOverlayNormalization(referenceSegment);
+      const referenceForPairing = referenceInstances.map((instance) =>
+        applyOverlayNormalizationToNormalizedKeypoints(instance, normalization),
+      );
+
+      const mediaWidth =
+        video.videoWidth ||
+        practiceSegment?.width ||
+        referenceSegment?.width ||
+        cssWidth;
+      const mediaHeight =
+        video.videoHeight ||
+        practiceSegment?.height ||
+        referenceSegment?.height ||
+        cssHeight;
+      const rect = getContainedVideoRect(cssWidth, cssHeight, mediaWidth, mediaHeight);
+      const pairs = buildOverlayPosePairs(referenceForPairing, practiceInstances);
+      pairs.forEach((pair) => {
+        const transformed = transformReferencePoseToPractice(pair.reference, pair.practice);
+        drawPoseInstance(
+          ctx,
+          rect,
+          transformed,
+          "rgba(125, 211, 252, 0.95)",
+          "rgba(56, 189, 248, 0.18)",
+          "rgba(147, 197, 253, 0.9)",
+        );
+      });
+    };
+
+    draw();
+    const resizeObserver = typeof ResizeObserver !== "undefined" ? new ResizeObserver(draw) : null;
+    resizeObserver?.observe(video);
+    video.addEventListener("loadedmetadata", draw);
+    video.addEventListener("seeked", draw);
+    return () => {
+      resizeObserver?.disconnect();
+      video.removeEventListener("loadedmetadata", draw);
+      video.removeEventListener("seeked", draw);
+    };
+  }, [
+    practiceFrameDims,
+    practiceSegment,
+    referenceFrameDims,
+    referenceSegment,
+    sharedTime,
+    videoRef,
+  ]);
 
   return <canvas ref={canvasRef} className="pointer-events-none absolute inset-0 z-30 h-full w-full" />;
 }
@@ -2544,6 +2540,52 @@ export function FeedbackViewer(props: EbsViewerProps) {
     () => (activeVideoSegmentIndex >= 0 ? getRenderableSegment(overlayCuePracticeArtifact, activeVideoSegmentIndex) : null),
     [activeVideoSegmentIndex, getRenderableSegment, overlayCuePracticeArtifact],
   );
+
+  const [practiceDecoderDims, setPracticeDecoderDims] = useState<{ width: number; height: number } | null>(null);
+  const [referenceDecoderDims, setReferenceDecoderDims] = useState<{ width: number; height: number } | null>(null);
+
+  useEffect(() => {
+    if (!sessionMode) return;
+    const practiceVideo = viewMode === "overlay" ? overlayVideoRef.current : userVideo.current;
+    if (!practiceVideo) {
+      setPracticeDecoderDims(null);
+      return;
+    }
+    const sync = () => {
+      if (practiceVideo.videoWidth > 0 && practiceVideo.videoHeight > 0) {
+        setPracticeDecoderDims({ width: practiceVideo.videoWidth, height: practiceVideo.videoHeight });
+      }
+    };
+    sync();
+    practiceVideo.addEventListener("loadedmetadata", sync);
+    practiceVideo.addEventListener("loadeddata", sync);
+    return () => {
+      practiceVideo.removeEventListener("loadedmetadata", sync);
+      practiceVideo.removeEventListener("loadeddata", sync);
+    };
+  }, [sessionMode, viewMode, activeUserVideoUrl]);
+
+  useEffect(() => {
+    if (!sessionMode) return;
+    const v = refVideo.current;
+    if (!v) {
+      setReferenceDecoderDims(null);
+      return;
+    }
+    const sync = () => {
+      if (v.videoWidth > 0 && v.videoHeight > 0) {
+        setReferenceDecoderDims({ width: v.videoWidth, height: v.videoHeight });
+      }
+    };
+    sync();
+    v.addEventListener("loadedmetadata", sync);
+    v.addEventListener("loadeddata", sync);
+    return () => {
+      v.removeEventListener("loadedmetadata", sync);
+      v.removeEventListener("loadeddata", sync);
+    };
+  }, [sessionMode, activeReferenceVideoUrl]);
+
   // Overlay diff: get frame from per-segment BodyPix artifacts for current time
   const getOverlayDiffFrame = useCallback((
     artifact: OverlayArtifact | null,
@@ -2704,7 +2746,7 @@ export function FeedbackViewer(props: EbsViewerProps) {
   const liveCuePracticeSample = useMemo(() => {
     if (activeVideoSegmentIndex < 0 || !activeOverlayPracticeSegment) return currentVisualPracticeSample;
     const instance = chooseClosestOverlayPoseInstance(
-      getStoredOverlayPoseInstances(activeOverlayPracticeSegment, state.sharedTime),
+      getStoredOverlayPoseInstances(activeOverlayPracticeSegment, state.sharedTime, practiceDecoderDims),
       currentVisualPracticeSample,
     );
     if (!instance) return currentVisualPracticeSample;
@@ -2713,11 +2755,17 @@ export function FeedbackViewer(props: EbsViewerProps) {
       segmentIndex: activeVideoSegmentIndex,
       timestamp: state.sharedTime,
     });
-  }, [activeOverlayPracticeSegment, activeVideoSegmentIndex, currentVisualPracticeSample, state.sharedTime]);
+  }, [
+    activeOverlayPracticeSegment,
+    activeVideoSegmentIndex,
+    currentVisualPracticeSample,
+    practiceDecoderDims,
+    state.sharedTime,
+  ]);
   const liveCueReferenceSample = useMemo(() => {
     if (activeVideoSegmentIndex < 0 || !activeOverlayReferenceSegment) return currentVisualReferenceSample;
     const instance = chooseClosestOverlayPoseInstance(
-      getStoredOverlayPoseInstances(activeOverlayReferenceSegment, state.sharedTime),
+      getStoredOverlayPoseInstances(activeOverlayReferenceSegment, state.sharedTime, referenceDecoderDims),
       currentVisualReferenceSample,
     );
     if (!instance) return currentVisualReferenceSample;
@@ -2726,7 +2774,13 @@ export function FeedbackViewer(props: EbsViewerProps) {
       segmentIndex: activeVideoSegmentIndex,
       timestamp: state.sharedTime,
     });
-  }, [activeOverlayReferenceSegment, activeVideoSegmentIndex, currentVisualReferenceSample, state.sharedTime]);
+  }, [
+    activeOverlayReferenceSegment,
+    activeVideoSegmentIndex,
+    currentVisualReferenceSample,
+    referenceDecoderDims,
+    state.sharedTime,
+  ]);
 
   const overlayVisualCue = useMemo(
     () => {
@@ -3266,6 +3320,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                       key={`side-${overlayVisualCue.id}`}
                       cue={overlayVisualCue}
                       mediaRef={userVideo}
+                      intrinsicWidth={activeOverlayPracticeSegment?.width}
+                      intrinsicHeight={activeOverlayPracticeSegment?.height}
                     />
                   ) : null}
                   {sessionMode && showFeedback && positionedOverlayGeminiCue ? (
@@ -3275,6 +3331,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                       mediaRef={userVideo}
                       showFocus={false}
                       variant="gemini"
+                      intrinsicWidth={activeOverlayPracticeSegment?.width}
+                      intrinsicHeight={activeOverlayPracticeSegment?.height}
                     />
                   ) : null}
                 </div>
@@ -3313,6 +3371,8 @@ export function FeedbackViewer(props: EbsViewerProps) {
                           referenceSegment={activeOverlayReferenceSegment}
                           practiceSegment={activeOverlayPracticeSegment}
                           sharedTime={state.sharedTime}
+                          practiceFrameDims={practiceDecoderDims}
+                          referenceFrameDims={referenceDecoderDims}
                         />
                       )}
                       {(overlayViewSource === "user" || overlayViewSource === "both") && (

@@ -128,6 +128,38 @@ function sleep(ms: number) {
   return new Promise((resolve) => window.setTimeout(resolve, ms));
 }
 
+/** YOLO pose JSON uses native pixel coords; segment width/height must match the decoder — avoid 640×480 fallbacks when metadata is still 0. */
+async function waitForVideoDimensions(video: HTMLVideoElement | null, signal?: AbortSignal) {
+  if (!video) return;
+  if (video.videoWidth > 0 && video.videoHeight > 0) return;
+
+  await new Promise<void>((resolve) => {
+    const cleanup = () => {
+      video.removeEventListener("loadedmetadata", onReady);
+      video.removeEventListener("loadeddata", onReady);
+      video.removeEventListener("error", onError);
+      signal?.removeEventListener("abort", onAbort);
+      clearTimeout(timeout);
+    };
+    const done = () => {
+      cleanup();
+      resolve();
+    };
+    const onReady = () => {
+      if (video.videoWidth > 0 && video.videoHeight > 0) done();
+    };
+    const onError = () => done();
+    const onAbort = () => done();
+
+    video.addEventListener("loadedmetadata", onReady);
+    video.addEventListener("loadeddata", onReady);
+    video.addEventListener("error", onError);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    const timeout = window.setTimeout(done, 10000);
+    onReady();
+  });
+}
+
 type PythonJobKind = "yolo" | "yolo-pose" | "yolo-hybrid";
 
 type PythonJobRegistration = {
@@ -1393,6 +1425,10 @@ export async function ensureBrowserYoloOverlays(params: {
   };
 
   try {
+    await Promise.all([
+      waitForVideoDimensions(refVideo.current, signal),
+      waitForVideoDimensions(userVideo.current, signal),
+    ]);
     const overlaySegmentPlans = buildYoloOverlaySegmentPlans(ebsData);
     const usedSegmented = await runSegmentedBrowserYoloPipeline({
       sessionId,
