@@ -26,6 +26,7 @@ from src.ebs_web_adapter import process_videos_from_paths, save_upload, save_upl
 from src.gemini_move_feedback import run_move_feedback_pipeline
 from src.overlay_api import router as overlay_router
 from src.eval import router as eval_router
+from src.session_video_store import register_session_video
 
 app = FastAPI(title="Audio Alignment API")
 app.add_middleware(
@@ -167,7 +168,10 @@ async def startup_event():
             # C. Prune orphaned /tmp files (EBS, Gemini, MF)
             tmp_root = Path("/tmp")
             if tmp_root.exists():
-                patterns = ["ebs_*", "gemini_clip_*", "mf_ref_*", "mf_user_*"]
+                patterns = [
+                    "ebs_*", "gemini_clip_*", "mf_ref_*", "mf_user_*",
+                    "ref_*", "user_*", "overlay_*", "hybrid_*", "pose_*"
+                ]
                 for pattern in patterns:
                     for p in tmp_root.glob(pattern):
                         try:
@@ -177,6 +181,12 @@ async def startup_event():
                         except Exception:
                             pass
 
+    try:
+        import torch
+        torch.set_num_threads(1)
+    except ImportError:
+        pass
+        
     asyncio.create_task(stale_state_monitor())
 
 @app.get("/")
@@ -215,8 +225,13 @@ async def process(
     ref_tmp: str | None = None
     user_tmp: str | None = None
     try:
-        ref_tmp = await save_upload_async(ref, "ref")
-        user_tmp = await save_upload_async(usr, "user")
+        ref_tmp = await save_upload_async(ref, f"ref_{sid}")
+        user_tmp = await save_upload_async(usr, f"user_{sid}")
+        
+        # Register for later hybrid/segmentation use
+        register_session_video(sid, "reference", ref_tmp)
+        register_session_video(sid, "practice", user_tmp)
+
         # librosa/CPU work must not block the asyncio loop — otherwise GET /api/status never runs
         # and the web UI polls "idle" forever while the POST is in progress.
         artifact = await asyncio.to_thread(process_videos_from_paths, ref_tmp, user_tmp)
@@ -228,13 +243,10 @@ async def process(
         SESSION_STATUS[sid] = "error"
         return JSONResponse({"error": str(exc)}, status_code=500)
     finally:
-        for p in (ref_tmp, user_tmp):
-            if not p:
-                continue
-            try:
-                Path(p).unlink(missing_ok=True)
-            except OSError:
-                pass
+        # We NO LONGER delete ref_tmp and user_tmp here because they are registered in the 
+        # SessionVideoStore for reuse by the YOLO segmenter.
+        # Background monitor (stale_state_monitor) will clean them up after 45-60 mins.
+        pass
 
 
 @app.get("/api/status")

@@ -4,7 +4,7 @@ import math
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, BinaryIO, Optional, Union
 
 import librosa
 import numpy as np
@@ -234,9 +234,14 @@ def _ensure_segment_starts_at_zero(segment_points: list[float]) -> list[float]:
     return [0.0, *segment_points]
 
 
-def process_uploads(ref_video: UploadFile, user_video: UploadFile) -> dict[str, Any]:
-    ref_tmp = save_upload(ref_video, "ref")
-    user_tmp = save_upload(user_video, "user")
+def process_uploads(ref_video: UploadFile, user_video: UploadFile, session_id: str | None = None) -> dict[str, Any]:
+    ref_tmp = save_upload(ref_video, f"ref_{session_id}" if session_id else "ref")
+    user_tmp = save_upload(user_video, f"user_{session_id}" if session_id else "user")
+    
+    if session_id:
+        register_session_video(session_id, "reference", ref_tmp)
+        register_session_video(session_id, "practice", user_tmp)
+        
     ref_wav = None
     user_wav = None
     try:

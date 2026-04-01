@@ -5,15 +5,23 @@ import json
 import math
 import tempfile
 import threading
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any
+from typing import Any, Optional
 
 from fastapi import APIRouter, BackgroundTasks, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
 
-from src.ebs_web_adapter import probe_video_metadata, save_upload
+from src.ebs_web_adapter import (
+    save_upload,
+    probe_video_metadata,
+)
+from src.session_video_store import (
+    register_session_video,
+    get_session_video
+)
 
 router = APIRouter()
 
@@ -805,7 +813,7 @@ def _predict_segmentation_mask(
     import cv2  # type: ignore
     import numpy as np  # type: ignore
 
-    result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+    result = model.predict(frame, imgsz=640, conf=0.12, iou=0.5, classes=[0], verbose=False)
     alpha_u8, summaries = _extract_segmentation_mask_data(
         result,
         w,
@@ -975,7 +983,7 @@ def _run_yolo_overlay_job(job_id: str, tmp_in: str, tmp_out: str, color: str, fp
         if rel_t + (out_dt * 0.25) < next_out_time:
             continue
 
-        result = model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+        result = model.predict(frame, imgsz=640, conf=0.12, iou=0.5, classes=[0], verbose=False)
         alpha_u8, summaries = _extract_segmentation_mask_data(result, w, h, blur_sigma=0.9, primary_only=True)
         overlay_summary_frames.append(summaries)
         overlay = _build_segmentation_overlay(alpha_u8, color)
@@ -985,6 +993,8 @@ def _run_yolo_overlay_job(job_id: str, tmp_in: str, tmp_out: str, color: str, fp
         next_out_time += out_dt
         OVERLAY_JOBS[job_id]["frames_written"] = written
         OVERLAY_JOBS[job_id]["progress"] = min(1.0, written / float(expected))
+        if written % 10 == 0:
+            print(f"[yolo_job:{job_id}] Progress: {int(OVERLAY_JOBS[job_id]['progress']*100)}% ({written}/{expected})")
 
     while written < expected:
         if _job_cancel_requested(OVERLAY_JOBS, job_id):
@@ -1102,7 +1112,7 @@ def _run_pose_overlay_job(
 
         arms_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         legs_overlay = np.zeros((h, w, 3), dtype=np.uint8)
-        result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        result = pose_model.predict(frame, imgsz=640, conf=0.2, iou=0.5, verbose=False)
         pose_anchor: tuple[float, float] | None = None
         if result and getattr(result[0], "keypoints", None) is not None and len(result[0].keypoints.xy) > 0:
             kp = result[0].keypoints
@@ -1242,6 +1252,7 @@ def _run_hybrid_overlay_job(
     pose_frames: list[dict[str, Any] | None] = []
     last_pose_frame: dict[str, Any] | None = None
 
+    t0 = time.time()
     while written < expected:
         if _job_cancel_requested(HYBRID_JOBS, job_id):
             cap.release()
@@ -1262,7 +1273,7 @@ def _run_hybrid_overlay_job(
 
         arms_overlay = np.zeros((h, w, 3), dtype=np.uint8)
         legs_overlay = np.zeros((h, w, 3), dtype=np.uint8)
-        pose_result = pose_model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        pose_result = pose_model.predict(frame, imgsz=640, conf=0.2, iou=0.5, verbose=False)
         pose_anchor: tuple[float, float] | None = None
         if pose_result and getattr(pose_result[0], "keypoints", None) is not None and len(pose_result[0].keypoints.xy) > 0:
             kp = pose_result[0].keypoints
@@ -1289,7 +1300,7 @@ def _run_hybrid_overlay_job(
             pose_summary_frames.append([])
             pose_frame = None
 
-        seg_result = seg_model.predict(frame, imgsz=768, conf=0.12, iou=0.5, classes=[0], verbose=False)
+        seg_result = seg_model.predict(frame, imgsz=640, conf=0.12, iou=0.5, classes=[0], verbose=False)
         alpha_u8, seg_summaries = _extract_segmentation_mask_data(
             seg_result,
             w,
@@ -1315,6 +1326,8 @@ def _run_hybrid_overlay_job(
         next_out_time += out_dt
         HYBRID_JOBS[job_id]["frames_written"] = written
         HYBRID_JOBS[job_id]["progress"] = min(1.0, written / float(expected))
+        if written % 10 == 0:
+            print(f"[hybrid_job:{job_id}] Progress: {int(HYBRID_JOBS[job_id]['progress']*100)}% ({written}/{expected})")
 
     while written < expected:
         if _job_cancel_requested(HYBRID_JOBS, job_id):
@@ -1343,6 +1356,7 @@ def _run_hybrid_overlay_job(
     HYBRID_JOBS[job_id]["pose_summary"] = _aggregate_pose_summaries(pose_summary_frames)
     HYBRID_JOBS[job_id]["pose_frames"] = pose_frames
     HYBRID_JOBS[job_id]["status"] = "done"
+    print(f"[hybrid_job:{job_id}] Done in {time.time() - t0:.2f}s")
 
 
 def _run_bodypx_job(job_id: str, tmp_in: str, out_path: str, arms_color: str, legs_color: str, torso_color: str, head_color: str, fps: int, start_sec: float | None, end_sec: float | None) -> None:
@@ -1417,7 +1431,7 @@ def _run_bodypx_job(job_id: str, tmp_in: str, out_path: str, arms_color: str, le
             continue
 
         overlay = np.zeros((h, w, 3), dtype=np.uint8)
-        result = model.predict(frame, imgsz=768, conf=0.2, iou=0.5, verbose=False)
+        result = model.predict(frame, imgsz=640, conf=0.2, iou=0.5, verbose=False)
         if result and getattr(result[0], "keypoints", None) is not None and len(result[0].keypoints.xy) > 0:
             kp = result[0].keypoints
             for xy, conf in _iter_pose_instances(kp):
@@ -1539,8 +1553,7 @@ async def overlay_yolo_result(job_id: str, background_tasks: BackgroundTasks):
     if not out_path:
         return JSONResponse({"error": "Missing output"}, status_code=500)
     background_tasks.add_task(lambda: Path(out_path).unlink(missing_ok=True))
-    if tmp_in:
-        background_tasks.add_task(lambda: Path(tmp_in).unlink(missing_ok=True))
+    # Note: We NO LONGER unlink tmp_in here because it might be needed for the next segment.
     headers = {}
     encoded_summary = _encode_summary_header(job.get("overlay_summary"))
     if encoded_summary:
@@ -1631,8 +1644,7 @@ async def overlay_yolo_pose_result(job_id: str, layer: str, background_tasks: Ba
     served_layers.add(layer)
     background_tasks.add_task(lambda: Path(out_path).unlink(missing_ok=True))
     if served_layers == {"arms", "legs"}:
-        if job.get("tmp_in"):
-            background_tasks.add_task(lambda: Path(job["tmp_in"]).unlink(missing_ok=True))
+        # Note: We NO LONGER unlink tmp_in here because it might be needed for the next segment.
         POSE_JOBS.pop(job_id, None)
     headers = {}
     encoded_summary = _encode_summary_header(job.get("pose_summary"))
@@ -1667,7 +1679,7 @@ def _get_shared_yolo_models():
 
 @router.post("/api/overlay/yolo-hybrid/start")
 async def overlay_yolo_hybrid_start(
-    video: UploadFile = File(...),
+    video: UploadFile | None = File(None),
     color: str = Form(default="#38bdf8"),
     arms_color: str = Form(default="#38bdf8"),
     legs_color: str = Form(default="#6366f1"),
@@ -1678,7 +1690,17 @@ async def overlay_yolo_hybrid_start(
     end_sec: float | None = Form(default=None),
 ):
     job_id = str(uuid.uuid4())
-    tmp_in = save_upload(video, f"hybrid_{(side or 'unknown')}_{job_id}")
+    tmp_in: str | None = None
+    if video:
+        tmp_in = save_upload(video, f"hybrid_{(side or 'unknown')}_{job_id}")
+        if session_id and side:
+            register_session_video(session_id, side, tmp_in)
+    elif session_id and side:
+        tmp_in = get_session_video(session_id, side)
+
+    if not tmp_in:
+        return JSONResponse({"error": "No video file provided and no session cache found."}, status_code=400)
+
     seg_out = tempfile.NamedTemporaryFile(prefix=f"hybrid_seg_{job_id}_", suffix=".webm", delete=False).name
     arms_out = tempfile.NamedTemporaryFile(prefix=f"hybrid_arms_{job_id}_", suffix=".webm", delete=False).name
     legs_out = tempfile.NamedTemporaryFile(prefix=f"hybrid_legs_{job_id}_", suffix=".webm", delete=False).name
@@ -1767,8 +1789,7 @@ async def overlay_yolo_hybrid_result(job_id: str, layer: str, background_tasks: 
 
     background_tasks.add_task(lambda: Path(out_path).unlink(missing_ok=True))
     if served_layers == {"seg", "arms", "legs"}:
-        if job.get("tmp_in"):
-            background_tasks.add_task(lambda: Path(job["tmp_in"]).unlink(missing_ok=True))
+        # Note: We NO LONGER unlink tmp_in here because it might be needed for the next segment's cache.
         HYBRID_JOBS.pop(job_id, None)
 
     headers = {}

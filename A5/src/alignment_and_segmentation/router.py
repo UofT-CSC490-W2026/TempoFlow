@@ -8,8 +8,12 @@ from src.alignment_and_segmentation.utils import (
     extract_chroma,
     map_segments_to_clips
 )
+from src.ebs_web_adapter import save_upload
+from src.session_video_store import register_session_video
 from src.alignment_and_segmentation.schemas import AlignmentResult, TimeRange, Segment, AlignmentAndSegmentationResult
 import librosa
+import os
+import tempfile
 
 router = APIRouter()
 
@@ -31,7 +35,8 @@ def validate_video_file(file: UploadFile) -> None:
 @router.post("/api/process", response_model=AlignmentAndSegmentationResult)
 async def align_audio(
     file_a: UploadFile = File(...),
-    file_b: UploadFile = File(...)
+    file_b: UploadFile = File(...),
+    session_id: str | None = None
 ) -> AlignmentAndSegmentationResult:
     """
     Align two audio/video files based on their audio tracks and segment the aligned portion.
@@ -42,7 +47,15 @@ async def align_audio(
 
     # Load audio
     try:
-        y_a, y_b, sr = load_audio_files(file_a, file_b)
+        # Save to reuse later in hybrid overlays
+        tmp_a = save_upload(file_a, f"ref_{session_id}" if session_id else "ref")
+        tmp_b = save_upload(file_b, f"user_{session_id}" if session_id else "user")
+        
+        if session_id:
+            register_session_video(session_id, "reference", tmp_a)
+            register_session_video(session_id, "practice", tmp_b)
+            
+        y_a, y_b, sr = load_audio_files(tmp_a, tmp_b)
     except Exception as e:
         raise HTTPException(status_code=422, detail=f"Error processing audio files: {str(e)}")
 
