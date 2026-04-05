@@ -383,7 +383,7 @@ def test_move_feedback_sync_success(mock_to_thread, mock_save, tmp_path):
         if name == "process_videos_from_paths":
             return {"segments": [{"seg": 1}]}
         if name == "run_move_feedback_pipeline":
-            seen["yolo_context"] = args[8]
+            seen["yolo_context"] = kwargs["yolo_context"]
             return {"sync": {"ok": True}}
         raise AssertionError(f"unexpected fn {fn!r}")
 

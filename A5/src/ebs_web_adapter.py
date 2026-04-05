@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
+import logging
 import math
+import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -18,6 +21,8 @@ from src.alignment_and_segmentation.segmentation_core import (
 )
 from src.ffmpeg_paths import resolve_ffmpeg_executable, resolve_ffprobe_executable
 
+logger = logging.getLogger("ebs-web-adapter")
+
 SAMPLE_RATE = 22050
 CHROMA_HOP_LENGTH = 512
 ROUNDING_PRECISION = 3
@@ -28,6 +33,12 @@ FALLBACK_CHUNK_SEC = 3.0
 LONG_SESSION_THRESHOLD_SEC = 60   # 1 minute — fast path for EC2 (no Apple Accelerate BLAS)
 LOWER_SAMPLE_RATE = 11025
 LARGER_HOP_LENGTH = 1024
+
+UPLOAD_MAX_WIDTH = max(2, int(os.environ.get("EBS_UPLOAD_MAX_WIDTH", "1280")))
+UPLOAD_MAX_HEIGHT = max(2, int(os.environ.get("EBS_UPLOAD_MAX_HEIGHT", "720")))
+UPLOAD_VIDEO_CRF = os.environ.get("EBS_UPLOAD_VIDEO_CRF", "28").strip() or "28"
+UPLOAD_TRANSCODE_TIMEOUT_SEC = 300
+AUDIO_EXTRACT_WORKERS = 2
 
 
 def sanitize_json(obj: Any) -> Any:
@@ -40,26 +51,105 @@ def sanitize_json(obj: Any) -> Any:
     return obj
 
 
-def save_upload(upload: UploadFile, prefix: str) -> str:
-    suffix = Path(upload.filename or "video.mp4").suffix or ".mp4"
-    tmp = tempfile.NamedTemporaryFile(prefix=f"ebs_{prefix}_", suffix=suffix, delete=False)
-    try:
-        tmp.write(upload.file.read())
-    finally:
-        tmp.close()
-    return tmp.name
-
-
-async def save_upload_async(upload: UploadFile, prefix: str) -> str:
-    """Read multipart body asynchronously; write to disk without blocking the event loop."""
-    data = await upload.read()
-    suffix = Path(upload.filename or "video.mp4").suffix or ".mp4"
+def _write_upload_bytes(data: bytes, filename: str | None, prefix: str) -> str:
+    suffix = Path(filename or "video.mp4").suffix or ".mp4"
     tmp = tempfile.NamedTemporaryFile(prefix=f"ebs_{prefix}_", suffix=suffix, delete=False)
     try:
         tmp.write(data)
     finally:
         tmp.close()
     return tmp.name
+
+
+def _compute_downscale_dimensions(meta: dict[str, Any]) -> tuple[int, int] | None:
+    width = int(meta.get("width") or 0)
+    height = int(meta.get("height") or 0)
+    if width <= 0 or height <= 0:
+        return None
+
+    scale = min(UPLOAD_MAX_WIDTH / width, UPLOAD_MAX_HEIGHT / height, 1.0)
+    if scale >= 1.0:
+        return None
+
+    target_width = max(2, int(math.floor((width * scale) / 2.0) * 2))
+    target_height = max(2, int(math.floor((height * scale) / 2.0) * 2))
+    return target_width, target_height
+
+
+def _transcode_video_for_upload(video_path: str, width: int, height: int) -> str:
+    ffmpeg_exe = resolve_ffmpeg_executable()
+    out = tempfile.NamedTemporaryFile(prefix="ebs_scaled_", suffix=".mp4", delete=False)
+    out_path = out.name
+    out.close()
+
+    cmd = [
+        ffmpeg_exe,
+        "-y",
+        "-i",
+        video_path,
+        "-vf",
+        f"scale={width}:{height}",
+        "-c:v",
+        "libx264",
+        "-preset",
+        "ultrafast",
+        "-crf",
+        UPLOAD_VIDEO_CRF,
+        "-pix_fmt",
+        "yuv420p",
+        "-c:a",
+        "aac",
+        "-movflags",
+        "+faststart",
+        out_path,
+    ]
+    result = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=UPLOAD_TRANSCODE_TIMEOUT_SEC,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"ffmpeg upload downscale failed: {result.stderr.strip()}")
+    return out_path
+
+
+def _maybe_downscale_uploaded_video(video_path: str, *, preserve_original: bool = False) -> str:
+    try:
+        meta = probe_video_metadata(video_path)
+        target = _compute_downscale_dimensions(meta)
+        if target is None:
+            return video_path
+
+        scaled_path = _transcode_video_for_upload(video_path, *target)
+        if not preserve_original:
+            try:
+                Path(video_path).unlink(missing_ok=True)
+            except OSError:
+                logger.warning("Could not remove original upload after downscale: %s", video_path)
+
+        logger.info(
+            "Downscaled upload %s from %sx%s to %sx%s",
+            video_path,
+            meta.get("width"),
+            meta.get("height"),
+            target[0],
+            target[1],
+        )
+        return scaled_path
+    except Exception as exc:
+        logger.warning("Skipping upload downscale for %s: %s", video_path, exc)
+        return video_path
+
+
+def save_upload(upload: UploadFile, prefix: str) -> str:
+    return _write_upload_bytes(upload.file.read(), upload.filename, prefix)
+
+
+async def save_upload_async(upload: UploadFile, prefix: str) -> str:
+    """Read multipart body asynchronously; write to disk without blocking the event loop."""
+    data = await upload.read()
+    return _write_upload_bytes(data, upload.filename, prefix)
 
 
 def extract_audio_from_video(video_path: str, sr: int = SAMPLE_RATE) -> str:
@@ -88,6 +178,13 @@ def extract_audio_from_video(video_path: str, sr: int = SAMPLE_RATE) -> str:
     return out_path
 
 
+def extract_audio_pair(ref_video_path: str, user_video_path: str, sr: int) -> tuple[str, str]:
+    with ThreadPoolExecutor(max_workers=AUDIO_EXTRACT_WORKERS) as executor:
+        ref_future = executor.submit(extract_audio_from_video, ref_video_path, sr)
+        user_future = executor.submit(extract_audio_from_video, user_video_path, sr)
+        return ref_future.result(), user_future.result()
+
+
 def probe_video_metadata(video_path: str) -> dict[str, Any]:
     ffprobe_exe = resolve_ffprobe_executable()
     cmd = [
@@ -97,7 +194,7 @@ def probe_video_metadata(video_path: str) -> dict[str, Any]:
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=avg_frame_rate,nb_frames,duration",
+        "stream=avg_frame_rate,nb_frames,duration,width,height",
         "-of",
         "json",
         video_path,
@@ -116,12 +213,20 @@ def probe_video_metadata(video_path: str) -> dict[str, Any]:
     num, den = fps_raw.split("/")
     fps = float(num) / float(den) if float(den) != 0 else 0.0
     duration_sec = float(stream.get("duration") or 0.0)
+    width = int(stream.get("width") or 0)
+    height = int(stream.get("height") or 0)
     nb_frames_raw = stream.get("nb_frames")
     if nb_frames_raw and str(nb_frames_raw).isdigit():
         frame_count = int(nb_frames_raw)
     else:
         frame_count = int(round(duration_sec * fps)) if fps > 0 else 0
-    return {"fps": fps, "duration_sec": duration_sec, "frame_count": frame_count}
+    return {
+        "fps": fps,
+        "duration_sec": duration_sec,
+        "frame_count": frame_count,
+        "width": width,
+        "height": height,
+    }
 
 
 def _auto_align(ref_audio: np.ndarray, user_audio: np.ndarray, sr: int) -> dict[str, Any]:
@@ -252,8 +357,7 @@ def process_uploads(ref_video: UploadFile, user_video: UploadFile, session_id: s
             load_sr = LOWER_SAMPLE_RATE
 
         # Run extraction
-        ref_wav = extract_audio_from_video(ref_tmp, sr=load_sr)
-        user_wav = extract_audio_from_video(user_tmp, sr=load_sr)
+        ref_wav, user_wav = extract_audio_pair(ref_tmp, user_tmp, load_sr)
 
         # Load into memory (direct load, bypass internal resampler)
         ref_audio, _ = librosa.load(ref_wav, sr=None, mono=True)
@@ -352,8 +456,7 @@ def process_videos_from_paths(ref_video_path: str, user_video_path: str) -> dict
             load_sr = LOWER_SAMPLE_RATE
 
         # Run extraction
-        ref_wav = extract_audio_from_video(ref_video_path, sr=load_sr)
-        user_wav = extract_audio_from_video(user_video_path, sr=load_sr)
+        ref_wav, user_wav = extract_audio_pair(ref_video_path, user_video_path, load_sr)
 
         # Load into memory (direct load, bypass internal resampler)
         ref_audio, _ = librosa.load(ref_wav, sr=None, mono=True)

@@ -3,6 +3,7 @@ import importlib
 import json
 import sys
 import types
+import asyncio
 from types import SimpleNamespace
 
 import pytest
@@ -132,6 +133,37 @@ def test_save_upload_defaults_suffix_when_missing(monkeypatch, tmp_path):
     assert ewa.save_upload(upload, "ref").endswith(".mp4")
 
 
+def test_save_upload_async_writes_bytes(monkeypatch, tmp_path):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    captured = {}
+
+    class _Tmp:
+        def __init__(self, name):
+            self.name = name
+
+        def write(self, b):
+            captured["bytes"] = b
+            return len(b)
+
+        def close(self):
+            captured["closed"] = True
+
+    monkeypatch.setattr(
+        ewa.tempfile,
+        "NamedTemporaryFile",
+        lambda prefix, suffix, delete: _Tmp(str(tmp_path / "async.mp4")),
+    )
+
+    async def _run():
+        upload = SimpleNamespace(filename="v.mp4", read=lambda: asyncio.sleep(0, result=b"xyz"))
+        return await ewa.save_upload_async(upload, "ref")
+
+    p = asyncio.run(_run())
+    assert p.endswith(".mp4")
+    assert captured["bytes"] == b"xyz"
+    assert captured["closed"] is True
+
+
 def test_extract_audio_from_video_success(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
     monkeypatch.setattr(ewa, "resolve_ffmpeg_executable", lambda: "ffmpeg")
@@ -176,10 +208,25 @@ def test_extract_audio_from_video_raises_on_ffmpeg_error(monkeypatch):
         ewa.extract_audio_from_video("in.mp4")
 
 
+def test_extract_audio_pair_returns_ref_and_user_outputs(monkeypatch):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    seen = []
+
+    def _extract(path, sr=None):
+        seen.append((path, sr))
+        return f"{path}.{sr}.wav"
+
+    monkeypatch.setattr(ewa, "extract_audio_from_video", _extract)
+    ref_wav, user_wav = ewa.extract_audio_pair("ref.mp4", "user.mp4", 12345)
+    assert ref_wav == "ref.mp4.12345.wav"
+    assert user_wav == "user.mp4.12345.wav"
+    assert sorted(seen) == [("ref.mp4", 12345), ("user.mp4", 12345)]
+
+
 def test_probe_video_metadata_happy_path_nb_frames_digit(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
     monkeypatch.setattr(ewa, "resolve_ffprobe_executable", lambda: "ffprobe")
-    payload = {"streams": [{"avg_frame_rate": "30000/1001", "nb_frames": "12", "duration": "1.0"}]}
+    payload = {"streams": [{"avg_frame_rate": "30000/1001", "nb_frames": "12", "duration": "1.0", "width": 1920, "height": 1080}]}
     monkeypatch.setattr(
         ewa.subprocess,
         "run",
@@ -188,12 +235,14 @@ def test_probe_video_metadata_happy_path_nb_frames_digit(monkeypatch):
     meta = ewa.probe_video_metadata("v.mp4")
     assert meta["frame_count"] == 12
     assert meta["fps"] > 0
+    assert meta["width"] == 1920
+    assert meta["height"] == 1080
 
 
 def test_probe_video_metadata_uses_duration_times_fps_when_nb_frames_missing(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
     monkeypatch.setattr(ewa, "resolve_ffprobe_executable", lambda: "ffprobe")
-    payload = {"streams": [{"avg_frame_rate": "10/1", "duration": "2.0"}]}
+    payload = {"streams": [{"avg_frame_rate": "10/1", "duration": "2.0", "width": 640, "height": 360}]}
     monkeypatch.setattr(
         ewa.subprocess,
         "run",
@@ -207,7 +256,7 @@ def test_probe_video_metadata_uses_duration_times_fps_when_nb_frames_missing(mon
 def test_probe_video_metadata_handles_den_zero_and_fps_zero(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
     monkeypatch.setattr(ewa, "resolve_ffprobe_executable", lambda: "ffprobe")
-    payload = {"streams": [{"avg_frame_rate": "1/0", "duration": "2.0"}]}
+    payload = {"streams": [{"avg_frame_rate": "1/0", "duration": "2.0", "width": 0, "height": 0}]}
     monkeypatch.setattr(
         ewa.subprocess,
         "run",
@@ -236,6 +285,94 @@ def test_probe_video_metadata_errors(monkeypatch):
     )
     with pytest.raises(RuntimeError, match="No video stream found"):
         ewa.probe_video_metadata("v.mp4")
+
+
+def test_compute_downscale_dimensions_returns_even_dimensions(monkeypatch):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    dims = ewa._compute_downscale_dimensions({"width": 1920, "height": 1080})
+    assert dims == (1280, 720)
+
+
+def test_compute_downscale_dimensions_skips_small_or_invalid_videos(monkeypatch):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    assert ewa._compute_downscale_dimensions({"width": 640, "height": 360}) is None
+    assert ewa._compute_downscale_dimensions({"width": 0, "height": 360}) is None
+
+
+def test_maybe_downscale_uploaded_video_transcodes_and_replaces_original(monkeypatch, tmp_path):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    original = tmp_path / "upload.mov"
+    original.write_bytes(b"orig")
+    scaled = tmp_path / "scaled.mp4"
+    scaled.write_bytes(b"scaled")
+
+    monkeypatch.setattr(
+        ewa,
+        "probe_video_metadata",
+        lambda *_a, **_k: {"width": 1920, "height": 1080, "duration_sec": 10.0, "fps": 30.0, "frame_count": 300},
+    )
+    seen = {}
+
+    def _transcode(path, width, height):
+        seen["args"] = (path, width, height)
+        return str(scaled)
+
+    monkeypatch.setattr(ewa, "_transcode_video_for_upload", _transcode)
+    result = ewa._maybe_downscale_uploaded_video(str(original))
+    assert result == str(scaled)
+    assert seen["args"] == (str(original), 1280, 720)
+    assert not original.exists()
+
+
+def test_maybe_downscale_uploaded_video_can_preserve_original(monkeypatch, tmp_path):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    original = tmp_path / "upload.mov"
+    original.write_bytes(b"orig")
+    scaled = tmp_path / "scaled.mp4"
+    scaled.write_bytes(b"scaled")
+
+    monkeypatch.setattr(
+        ewa,
+        "probe_video_metadata",
+        lambda *_a, **_k: {"width": 1920, "height": 1080, "duration_sec": 10.0, "fps": 30.0, "frame_count": 300},
+    )
+    monkeypatch.setattr(ewa, "_transcode_video_for_upload", lambda *_a, **_k: str(scaled))
+    result = ewa._maybe_downscale_uploaded_video(str(original), preserve_original=True)
+    assert result == str(scaled)
+    assert original.exists()
+
+
+def test_maybe_downscale_uploaded_video_returns_original_when_not_needed(monkeypatch, tmp_path):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    original = tmp_path / "upload.mp4"
+    original.write_bytes(b"orig")
+    monkeypatch.setattr(
+        ewa,
+        "probe_video_metadata",
+        lambda *_a, **_k: {"width": 640, "height": 360, "duration_sec": 10.0, "fps": 30.0, "frame_count": 300},
+    )
+    result = ewa._maybe_downscale_uploaded_video(str(original))
+    assert result == str(original)
+    assert original.exists()
+
+
+def test_maybe_downscale_uploaded_video_falls_back_to_original_on_failure(monkeypatch, tmp_path):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    original = tmp_path / "upload.mp4"
+    original.write_bytes(b"orig")
+    monkeypatch.setattr(
+        ewa,
+        "probe_video_metadata",
+        lambda *_a, **_k: {"width": 1920, "height": 1080, "duration_sec": 10.0, "fps": 30.0, "frame_count": 300},
+    )
+    monkeypatch.setattr(
+        ewa,
+        "_transcode_video_for_upload",
+        lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("ffmpeg failed")),
+    )
+    result = ewa._maybe_downscale_uploaded_video(str(original))
+    assert result == str(original)
+    assert original.exists()
 
 
 def test_auto_align_swaps_and_clips_and_raises_when_shared_len_nonpositive(monkeypatch):
@@ -310,7 +447,7 @@ def _mock_pipeline_deps(monkeypatch, *, eight_beat=True, segs_nonempty=True, gen
     ewa = _import_ebs_web_adapter(monkeypatch)
     # Avoid touching real filesystem in finally blocks.
     monkeypatch.setattr(ewa, "save_upload", lambda *_a, **_k: "ref.mp4")
-    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p: f"{p}.wav")
+    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p, sr=None: f"{p}.wav")
     monkeypatch.setattr(ewa.librosa, "load", lambda *_a, **_k: ([0.0] * int(ewa.SAMPLE_RATE * 2), ewa.SAMPLE_RATE))
     monkeypatch.setattr(
         ewa,
@@ -394,7 +531,7 @@ def test_process_uploads_segmentation_try_except_swallows(monkeypatch):
 def test_process_videos_from_paths_does_not_delete_inputs_and_cleans_wavs(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
     # Keep real input paths (function promises not to delete them).
-    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p: f"{p}.wav")
+    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p, sr=None: f"{p}.wav")
     monkeypatch.setattr(ewa.librosa, "load", lambda *_a, **_k: ([0.0] * int(ewa.SAMPLE_RATE * 2), ewa.SAMPLE_RATE))
     monkeypatch.setattr(
         ewa,
@@ -413,6 +550,8 @@ def test_process_videos_from_paths_does_not_delete_inputs_and_cleans_wavs(monkey
         lambda *_a, **_k: ([0.0, 1.0], 120.0, {"coefficient_of_variation": 1.0}, [0.0], [0]),
     )
     monkeypatch.setattr(ewa, "probe_video_metadata", lambda *_a, **_k: {"fps": 30.0, "duration_sec": 10.0, "frame_count": 300})
+    monkeypatch.setattr(ewa.Path, "exists", lambda self: True, raising=False)
+    monkeypatch.setattr(ewa.Path, "stat", lambda self: SimpleNamespace(st_size=1), raising=False)
 
     unlinked = []
 
@@ -426,12 +565,53 @@ def test_process_videos_from_paths_does_not_delete_inputs_and_cleans_wavs(monkey
     assert unlinked == ["ref_in.mp4.wav", "usr_in.mp4.wav"]
 
 
+def test_process_videos_from_paths_uses_original_inputs_for_audio_extraction(monkeypatch):
+    ewa = _import_ebs_web_adapter(monkeypatch)
+    monkeypatch.setattr(ewa.Path, "exists", lambda self: True, raising=False)
+    monkeypatch.setattr(ewa.Path, "stat", lambda self: SimpleNamespace(st_size=1), raising=False)
+
+    seen = {}
+    monkeypatch.setattr(
+        ewa,
+        "probe_video_metadata",
+        lambda p, **_k: {"fps": 30.0, "duration_sec": 10.0, "frame_count": 300, "path": p},
+    )
+    monkeypatch.setattr(
+        ewa,
+        "extract_audio_pair",
+        lambda ref, user, sr: seen.update({"args": (ref, user, sr)}) or (f"{ref}.wav", f"{user}.wav"),
+    )
+    monkeypatch.setattr(ewa.librosa, "load", lambda *_a, **_k: ([0.0] * int(ewa.SAMPLE_RATE * 2), ewa.SAMPLE_RATE))
+    monkeypatch.setattr(
+        ewa,
+        "_auto_align",
+        lambda *_a, **_k: {
+            "clip_1_start_sec": 0.0,
+            "clip_1_end_sec": 6.0,
+            "clip_2_start_sec": 1.0,
+            "clip_2_end_sec": 7.0,
+            "auto_align_mode": "chroma_sw",
+        },
+    )
+    monkeypatch.setattr(
+        ewa,
+        "track_beats",
+        lambda *_a, **_k: ([0.0, 1.0], 120.0, {"coefficient_of_variation": 1.0}, [0.0], [0]),
+    )
+    monkeypatch.setattr(ewa.Path, "unlink", lambda *_a, **_k: None, raising=False)
+
+    artifact = ewa.process_videos_from_paths("ref_in.mp4", "usr_in.mp4")
+    assert seen["args"] == ("ref_in.mp4", "usr_in.mp4", ewa.SAMPLE_RATE)
+    assert artifact["video_meta"]["clip_1"]["path"] == "ref_in.mp4"
+
+
 def test_process_uploads_finally_skips_none_paths(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
 
     monkeypatch.setattr(ewa, "save_upload", lambda *_a, **_k: "ref.mp4")
+    monkeypatch.setattr(ewa, "probe_video_metadata", lambda *_a, **_k: {"fps": 30.0, "duration_sec": 10.0, "frame_count": 300})
 
-    def _boom(_p):
+    def _boom(_p, sr=None):
         raise RuntimeError("extract failed early")
 
     monkeypatch.setattr(ewa, "extract_audio_from_video", _boom)
@@ -454,7 +634,7 @@ def test_process_uploads_finally_skips_none_paths(monkeypatch):
 def test_process_videos_from_paths_eight_beat_and_swallow_segmentation_exception(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
 
-    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p: f"{p}.wav")
+    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p, sr=None: f"{p}.wav")
     monkeypatch.setattr(ewa.librosa, "load", lambda *_a, **_k: ([0.0] * int(ewa.SAMPLE_RATE * 2), ewa.SAMPLE_RATE))
     monkeypatch.setattr(
         ewa,
@@ -474,6 +654,8 @@ def test_process_videos_from_paths_eight_beat_and_swallow_segmentation_exception
     monkeypatch.setattr(ewa, "estimate_downbeat_phase", lambda *_a, **_k: 0)
     monkeypatch.setattr(ewa, "generate_segments", lambda *_a, **_k: (_ for _ in ()).throw(RuntimeError("seg boom")))
     monkeypatch.setattr(ewa, "probe_video_metadata", lambda *_a, **_k: {"fps": 30.0, "duration_sec": 10.0, "frame_count": 300})
+    monkeypatch.setattr(ewa.Path, "exists", lambda self: True, raising=False)
+    monkeypatch.setattr(ewa.Path, "stat", lambda self: SimpleNamespace(st_size=1), raising=False)
 
     out = ewa.process_videos_from_paths("ref_in.mp4", "usr_in.mp4")
     assert out["segmentation_mode"] == "fixed_time"
@@ -485,7 +667,11 @@ def test_process_videos_from_paths_finally_continue_and_oserror(monkeypatch):
     # Fail before user_wav assigned -> tests `if not p: continue`
     calls = {"n": 0}
 
-    def _extract(p):
+    monkeypatch.setattr(ewa.Path, "exists", lambda self: True, raising=False)
+    monkeypatch.setattr(ewa.Path, "stat", lambda self: SimpleNamespace(st_size=1), raising=False)
+    monkeypatch.setattr(ewa, "probe_video_metadata", lambda *_a, **_k: {"fps": 30.0, "duration_sec": 10.0, "frame_count": 300})
+
+    def _extract(p, sr=None):
         calls["n"] += 1
         if calls["n"] == 1:
             return f"{p}.wav"
@@ -501,7 +687,7 @@ def test_process_videos_from_paths_finally_continue_and_oserror(monkeypatch):
 def test_process_videos_from_paths_eight_beat_success(monkeypatch):
     ewa = _import_ebs_web_adapter(monkeypatch)
 
-    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p: f"{p}.wav")
+    monkeypatch.setattr(ewa, "extract_audio_from_video", lambda p, sr=None: f"{p}.wav")
     monkeypatch.setattr(ewa.librosa, "load", lambda *_a, **_k: ([0.0] * int(ewa.SAMPLE_RATE * 2), ewa.SAMPLE_RATE))
     monkeypatch.setattr(
         ewa,
@@ -526,8 +712,9 @@ def test_process_videos_from_paths_eight_beat_success(monkeypatch):
         lambda *_a, **_k: [{"seg_id": 0, "beat_idx_range": [0, 1], "shared_start_sec": 0.0, "shared_end_sec": 3.0}],
     )
     monkeypatch.setattr(ewa, "probe_video_metadata", lambda *_a, **_k: {"fps": 30.0, "duration_sec": 10.0, "frame_count": 300})
+    monkeypatch.setattr(ewa.Path, "exists", lambda self: True, raising=False)
+    monkeypatch.setattr(ewa.Path, "stat", lambda self: SimpleNamespace(st_size=1), raising=False)
 
     out = ewa.process_videos_from_paths("ref_in.mp4", "usr_in.mp4")
     assert out["segmentation_mode"] == "eight_beat"
     assert out["beats_shared_sec"]
-
